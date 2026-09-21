@@ -1305,7 +1305,7 @@ TlsStreamSettings.Cert = class extends XrayCommonClass {
 
 TlsStreamSettings.Settings = class extends XrayCommonClass {
     constructor(
-        fingerprint = UTLS_FINGERPRINT.UTLS_CHROME,
+        fingerprint = '',
         echConfigList = '',
     ) {
         super();

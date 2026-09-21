@@ -251,6 +251,7 @@
         data: {
             inModal: inModal,
             delayedStart: false,
+            externalTlsSettingsVisible: false,
             ikev2CertWarning: "",
             get inbound() {
                 return inModal.inbound;
@@ -616,7 +617,16 @@
         },
         watch: {
             "inModal.visible"(v) {
-                if (v) this.$nextTick(() => this.measureSections());
+                if (v) {
+                    const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
+                    const saved = window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`);
+                    this.externalTlsSettingsVisible = saved === "1";
+                    this.$nextTick(() => this.measureSections());
+                }
+            },
+            externalTlsSettingsVisible(v) {
+                const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
+                window.localStorage.setItem(`vpnui.externalTlsSettings.${id}`, v ? "1" : "0");
             },
             // A protocol change replaces the whole settings object, so last protocol's
             // measurements are meaningless. Clearing them shows every section for one

@@ -43,17 +43,27 @@
        emitted into the local Xray inbound when security is none; they are used
        when External Proxy forces TLS on generated client links. -->
   <template v-if="!inbound.stream.isTls && inbound.stream.security === 'none'">
+    <a-form-item :wrapper-col="{ md: { span: 14, offset: 8 } }">
+      <span style="display: inline-flex; align-items: center; gap: 10px;">
+        <span>Дополнительные настройки</span>
+        <a-switch v-model="externalTlsSettingsVisible"></a-switch>
+      </span>
+    </a-form-item>
+    <template v-if="externalTlsSettingsVisible">
     <a-form-item label="Внешний SNI">
-      <a-input v-model.trim="inbound.stream.tls.sni" placeholder="Введите SNI (необязательно)"></a-input>
+      <a-input v-model.trim="inbound.stream.tls.sni" placeholder="Введите SNI (необязательно)"
+        :disabled="!externalTlsSettingsVisible"></a-input>
     </a-form-item>
     <a-form-item label="Внешний отпечаток">
       <a-select v-model="inbound.stream.tls.settings.fingerprint"
+        :disabled="!externalTlsSettingsVisible"
         :dropdown-class-name="themeSwitcher.currentTheme">
         <a-select-option value>None</a-select-option>
         <a-select-option v-for="key in UTLS_FINGERPRINT" :value="key">[[ key
           ]]</a-select-option>
       </a-select>
     </a-form-item>
+    </template>
   </template>
 
   <!-- tls settings -->
