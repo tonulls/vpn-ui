@@ -44,7 +44,7 @@
        when External Proxy forces TLS on generated client links. -->
   <template v-if="!inbound.stream.isTls && inbound.stream.security === 'none'">
     <a-form-item label="Внешний SNI">
-      <a-input v-model.trim="inbound.stream.tls.sni" placeholder="sng1.domencom"></a-input>
+      <a-input v-model.trim="inbound.stream.tls.sni" placeholder="Введите SNI (необязательно)"></a-input>
     </a-form-item>
     <a-form-item label="Внешний отпечаток">
       <a-select v-model="inbound.stream.tls.settings.fingerprint"
