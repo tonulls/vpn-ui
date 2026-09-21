@@ -694,6 +694,17 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 
 	externalProxies, _ := stream["externalProxy"].([]any)
 
+	// The inbound may be plain because Nginx terminates TLS, while an external
+	// endpoint forces TLS. Populate SNI/fingerprint for subscription links too.
+	for _, raw := range externalProxies {
+		ep, _ := raw.(map[string]any)
+		forceTLS, _ := ep["forceTls"].(string)
+		if forceTLS == "tls" {
+			applyShareTLSParams(stream, params)
+			break
+		}
+	}
+
 	if len(externalProxies) > 0 {
 		return s.buildExternalProxyURLLinks(
 			externalProxies,
@@ -1310,13 +1321,17 @@ func applyShareTLSParams(stream map[string]any, params map[string]string) {
 		params["alpn"] = strings.Join(alpn, ",")
 	}
 	if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
-		params["sni"], _ = sniValue.(string)
+		if sni, _ := sniValue.(string); sni != "" {
+			params["sni"] = sni
+		}
 	}
 
 	tlsSettings, _ := searchKey(tlsSetting, "settings")
 	if tlsSetting != nil {
 		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
-			params["fp"], _ = fpValue.(string)
+			if fp, _ := fpValue.(string); fp != "" {
+				params["fp"] = fp
+			}
 		}
 	}
 }
