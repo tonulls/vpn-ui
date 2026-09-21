@@ -78,7 +78,7 @@ the core rather than by a daemon, and they work as **inbounds and outbounds**:
 ## Installing the Panel
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/deploy.sh | sudo bash
+curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/main/deploy.sh | sudo bash
 ```
 
 ## Uninstalling the Panel
