@@ -701,6 +701,11 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		forceTLS, _ := ep["forceTls"].(string)
 		if forceTLS == "tls" {
 			applyShareTLSParams(stream, params)
+			// For TLS offload through Nginx, publish only the explicitly
+			// configured SNI and fingerprint; do not copy server ALPN defaults.
+			if security == "none" {
+				delete(params, "alpn")
+			}
 			break
 		}
 	}

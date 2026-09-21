@@ -2595,6 +2595,8 @@ class Inbound extends XrayCommonClass {
                 const offloadFingerprint = this.stream.tls?.settings?.fingerprint || "";
                 if (offloadSni) params.set("sni", offloadSni);
                 if (offloadFingerprint) params.set("fp", offloadFingerprint);
+                const offloadAlpn = this.stream.tls?.alpn || [];
+                if (offloadAlpn.length) params.set("alpn", offloadAlpn.join(","));
             }
         }
 

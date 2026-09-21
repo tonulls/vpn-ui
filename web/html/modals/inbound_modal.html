@@ -621,6 +621,13 @@
                     const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
                     const saved = window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`);
                     this.externalTlsSettingsVisible = saved === "1";
+                    if (!this.externalTlsSettingsVisible && inModal.inbound.stream.security === "none") {
+                        inModal.inbound.stream.tls.sni = "";
+                        inModal.inbound.stream.tls.alpn = [];
+                        if (inModal.inbound.stream.tls.settings) {
+                            inModal.inbound.stream.tls.settings.fingerprint = "";
+                        }
+                    }
                     this.$nextTick(() => this.measureSections());
                 }
             },
@@ -632,6 +639,7 @@
                     if (inModal.inbound.stream.tls.settings) {
                         inModal.inbound.stream.tls.settings.fingerprint = "";
                     }
+                    inModal.inbound.stream.tls.alpn = [];
                 }
             },
             // A protocol change replaces the whole settings object, so last protocol's

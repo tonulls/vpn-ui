@@ -63,6 +63,14 @@
           ]]</a-select-option>
       </a-select>
     </a-form-item>
+    <a-form-item label="Внешний ALPN">
+      <a-input
+        :value="(inbound.stream.tls.alpn || []).join(',')"
+        :disabled="!externalTlsSettingsVisible"
+        placeholder="Введите значения через запятую"
+        @input="inbound.stream.tls.alpn = $event.target.value.split(',').map(v => v.trim()).filter(Boolean)">
+      </a-input>
+    </a-form-item>
     </template>
   </template>
 
