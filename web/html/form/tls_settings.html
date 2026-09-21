@@ -39,6 +39,23 @@
   -->
   <template v-else><a-divider :style="{ margin: '3px 0' }"></a-divider></template>
 
+  <!-- External TLS metadata for Nginx/offload deployments. These values are not
+       emitted into the local Xray inbound when security is none; they are used
+       when External Proxy forces TLS on generated client links. -->
+  <template v-if="!inbound.stream.isTls && inbound.stream.security === 'none'">
+    <a-form-item label="Внешний SNI">
+      <a-input v-model.trim="inbound.stream.tls.sni" placeholder="sng1.domencom"></a-input>
+    </a-form-item>
+    <a-form-item label="Внешний отпечаток">
+      <a-select v-model="inbound.stream.tls.settings.fingerprint"
+        :dropdown-class-name="themeSwitcher.currentTheme">
+        <a-select-option value>None</a-select-option>
+        <a-select-option v-for="key in UTLS_FINGERPRINT" :value="key">[[ key
+          ]]</a-select-option>
+      </a-select>
+    </a-form-item>
+  </template>
+
   <!-- tls settings -->
   <template v-if="inbound.stream.isTls">
     <a-form-item label="SNI" placeholder="Server Name Indication">

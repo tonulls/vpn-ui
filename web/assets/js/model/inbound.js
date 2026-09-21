@@ -2588,8 +2588,10 @@ class Inbound extends XrayCommonClass {
                 // External Proxy can force TLS while TLS is terminated by Nginx
                 // before the local, non-TLS Xray inbound. Still publish the
                 // endpoint SNI and a normal browser fingerprint in subscriptions.
-                params.set("sni", address);
-                params.set("fp", "firefox");
+                const offloadSni = this.stream.tls?.sni || address;
+                const offloadFingerprint = this.stream.tls?.settings?.fingerprint || "firefox";
+                params.set("sni", offloadSni);
+                params.set("fp", offloadFingerprint);
             }
         }
 
