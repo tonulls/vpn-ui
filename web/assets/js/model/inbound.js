@@ -1912,7 +1912,10 @@ class StreamSettings extends XrayCommonClass {
             network: network,
             security: this.security,
             externalProxy: this.externalProxy,
-            tlsSettings: this.isTls ? this.tls.toJson() : undefined,
+            // Keep TLS offload metadata when Nginx terminates TLS. Xray ignores
+            // tlsSettings while security is none, but the panel needs these values
+            // to survive save/reload and regenerate external links correctly.
+            tlsSettings: this.tls.toJson(),
             realitySettings: this.isReality ? this.reality.toJson() : undefined,
             tcpSettings: network === 'tcp' ? this.tcp.toJson() : undefined,
             kcpSettings: network === 'kcp' ? this.kcp.toJson() : undefined,

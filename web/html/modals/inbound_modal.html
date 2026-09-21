@@ -627,6 +627,12 @@
             externalTlsSettingsVisible(v) {
                 const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
                 window.localStorage.setItem(`vpnui.externalTlsSettings.${id}`, v ? "1" : "0");
+                if (!v && inModal.inbound && inModal.inbound.stream && inModal.inbound.stream.tls) {
+                    inModal.inbound.stream.tls.sni = "";
+                    if (inModal.inbound.stream.tls.settings) {
+                        inModal.inbound.stream.tls.settings.fingerprint = "";
+                    }
+                }
             },
             // A protocol change replaces the whole settings object, so last protocol's
             // measurements are meaningless. Clearing them shows every section for one
