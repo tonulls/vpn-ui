@@ -266,10 +266,10 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 	case "naive":
 		return s.genNaiveLink(inbound, email)
 	case "mtproto":
-		// tg:// is the link Telegram itself imports, but no proxy client can parse it,
-		// so the account would contribute nothing a subscription importer recognises.
-		// The card is what makes the account appear (with its usage) in those clients.
-		return joinLinks(s.genMtprotoLink(inbound, email), s.genConnectionCard(inbound, email))
+		// MTProto subscriptions must contain the native tg:// proxy link. Do not add
+		// a synthetic trojan:// connection card: it is not an MTProto connection and
+		// points clients at the wrong protocol.
+		return s.genMtprotoLink(inbound, email)
 	case "ssh":
 		// Same split: ssh:// here is the Shadowrocket/base64 form (service.sshShareLink),
 		// which subscription importers do not read either.

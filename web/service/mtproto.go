@@ -110,7 +110,9 @@ type mtprotoSettings struct {
 	// unknown_sni_action="accept" (the handshake HMAC, not the SNI, proves secret
 	// possession), so a client presenting another name is not refused, it just gets
 	// an emulation modelled on this domain.
-	TlsDomain string `json:"tlsDomain"`
+	TlsDomain       string `json:"tlsDomain"`
+	FallbackEnabled bool   `json:"fallbackEnabled"`
+	FallbackDest    string `json:"fallbackDest"`
 
 	// UserLimit is the PER-ACCOUNT device cap, the same shape l2tp/wgc/gre/openconnect
 	// use: nil=absent(legacy=>1); 0=no limit; else 1..64. Enforced by telemt counting
@@ -1072,6 +1074,14 @@ func (s *MtprotoService) buildServerConfig(inbound *model.Inbound, settings *mtp
 	b.WriteString(fmt.Sprintf("tls_domain = %q\n", tomlEscape(s.tlsDomain(settings))))
 	b.WriteString("unknown_sni_action = \"accept\"\n")
 	b.WriteString("mask = true\n")
+	if settings.FallbackEnabled {
+		if host, port, ok := strings.Cut(strings.TrimSpace(settings.FallbackDest), ":"); ok && host != "" && port != "" {
+			if portNumber, err := strconv.Atoi(port); err == nil && portNumber >= 1 && portNumber <= 65535 {
+				b.WriteString(fmt.Sprintf("mask_host = %q\n", tomlEscape(host)))
+				b.WriteString(fmt.Sprintf("mask_port = %d\n", portNumber))
+			}
+		}
+	}
 	b.WriteString("tls_emulation = true\n\n")
 
 	if s.usingRouting(settings) {

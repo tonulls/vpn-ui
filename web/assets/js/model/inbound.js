@@ -6245,6 +6245,8 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
     modeSecure = true,
     modeTls = true,
     tlsDomain = "www.google.com",
+    fallbackEnabled = false,
+    fallbackDest = "",
     userLimit = 10,
     mtprotoUsers = [new Inbound.MtprotoSettings.MtprotoUser()],
     externalProxy = [],
@@ -6254,6 +6256,8 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
     this.modeSecure = modeSecure;
     this.modeTls = modeTls;
     this.tlsDomain = tlsDomain;
+    this.fallbackEnabled = fallbackEnabled;
+    this.fallbackDest = fallbackDest;
     this.userLimit = userLimit;
     this.mtprotoUsers = mtprotoUsers;
     // The inbound-wide link endpoints, used by every account that names none of its
@@ -6359,6 +6363,8 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
       json.modeSecure ?? legacy.modeSecure,
       json.modeTls ?? legacy.modeTls,
       json.tlsDomain ?? legacy.tlsDomain,
+      json.fallbackEnabled ?? false,
+      json.fallbackDest ?? "",
       json.userLimit ?? legacy.userLimit,
       Inbound.MtprotoSettings.MtprotoUser.fromJson(json.clients),
       Array.isArray(json.externalProxy) ? json.externalProxy : [],
@@ -6371,6 +6377,8 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
       modeSecure: this.modeSecure,
       modeTls: this.modeTls,
       tlsDomain: this.tlsDomain,
+      fallbackEnabled: this.fallbackEnabled,
+      fallbackDest: this.fallbackDest,
       userLimit: this.userLimit,
       clients: Inbound.MtprotoSettings.MtprotoUser.toJsonArray(this.mtprotoUsers),
       externalProxy: this.externalProxy,

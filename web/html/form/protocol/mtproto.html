@@ -94,6 +94,17 @@
         ></a-input>
     </a-form-item>
 
+    <a-form-item label="Dest fallback">
+        <a-switch v-model="inbound.settings.fallbackEnabled"></a-switch>
+        <span v-if="inbound.settings.fallbackEnabled" style="margin-left: 12px">Dest:</span>
+        <a-input
+            v-if="inbound.settings.fallbackEnabled"
+            v-model.trim="inbound.settings.fallbackDest"
+            placeholder=""
+            style="margin-left: 12px; width: 220px"
+        ></a-input>
+    </a-form-item>
+
 </a-form>
 {{end}}
 {{define "form/mtproto/access"}}
