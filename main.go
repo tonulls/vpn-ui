@@ -782,8 +782,16 @@ func applyExplicitSetting(username, password string, port int, webBasePath strin
 // not display the URL should not call this at all (see collectPanelInfo).
 func panelAccessURL(settingService *service.SettingService, port int, normPath string) (ip, url string) {
 	ip = service.GetServerIPv4()
+	if listen, err := settingService.GetListen(); err == nil && listen != "" {
+		ip = listen
+	}
 	scheme := "http"
 	host := ip
+	if b, err := os.ReadFile("/etc/vpn-ui/panel-domain"); err == nil {
+		if configured := strings.TrimSpace(string(b)); configured != "" {
+			host = configured
+		}
+	}
 	if certFile, _ := settingService.GetCertFile(); certFile != "" {
 		scheme = "https"
 		// The panel serves a cert whose name is the DOMAIN (Let's Encrypt) or the

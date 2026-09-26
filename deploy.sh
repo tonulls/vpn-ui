@@ -496,6 +496,8 @@ if [[ "$MODE" == "install" ]]; then
         esac
         printf '  %spanel domain (optional)%s: ' "$BLUE" "$R" > /dev/tty
         read -r panel_domain < /dev/tty || panel_domain=""
+         install -d -m 0755 /etc/vpn-ui
+         printf '%s\n' "$panel_domain" > /etc/vpn-ui/panel-domain
     fi
     cred_mode="random"
     if [[ "$imported" == "1" ]]; then
