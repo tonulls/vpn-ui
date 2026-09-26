@@ -45,7 +45,9 @@ func (s *UserService) CheckUser(username string, password string, twoFactorCode 
 	user := &model.User{}
 
 	err := db.Model(model.User{}).
-		Where("username = ?", username).
+		// Legacy installs may still contain mixed-case usernames. Login normalizes
+		// input, so compare case-insensitively while migration catches up.
+		Where("LOWER(username) = ?", username).
 		First(user).
 		Error
 	if err == gorm.ErrRecordNotFound {
