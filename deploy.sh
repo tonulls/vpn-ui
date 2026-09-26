@@ -520,6 +520,10 @@ if [[ "$MODE" == "install" ]]; then
         msg "Enter panel login / access details (leave a field blank to keep the default)"
         printf '  %susername%s: ' "$BLUE" "$R" > /dev/tty; read -r  C_USER < /dev/tty || C_USER=""
         printf '  %spassword%s: ' "$BLUE" "$R" > /dev/tty; read -rs C_PASS < /dev/tty || C_PASS=""; printf '\n' > /dev/tty
+         if [[ "$MODE" == "install" && -z "$C_PASS" && "$imported" != "1" ]]; then
+             warn "A password is required for a fresh install. Please enter it again."
+             printf '  %spassword%s: ' "$BLUE" "$R" > /dev/tty; read -rs C_PASS < /dev/tty || C_PASS=""; printf '\n' > /dev/tty
+         fi
         printf '  %sport%s: '     "$BLUE" "$R" > /dev/tty; read -r  C_PORT < /dev/tty || C_PORT=""
         printf '  %sweb path%s: ' "$BLUE" "$R" > /dev/tty; read -r  C_PATH < /dev/tty || C_PATH=""
         
