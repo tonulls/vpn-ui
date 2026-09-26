@@ -522,15 +522,17 @@ if [[ "$MODE" == "install" ]]; then
         printf '  %spassword%s: ' "$BLUE" "$R" > /dev/tty; read -rs C_PASS < /dev/tty || C_PASS=""; printf '\n' > /dev/tty
         printf '  %sport%s: '     "$BLUE" "$R" > /dev/tty; read -r  C_PORT < /dev/tty || C_PORT=""
         printf '  %sweb path%s: ' "$BLUE" "$R" > /dev/tty; read -r  C_PATH < /dev/tty || C_PATH=""
-        msg "Applying custom login / access + installing systemd unit"
-        "$DEST" --user "$C_USER" --pass "$C_PASS" --port "$C_PORT" --path "$C_PATH" --systemd
-        "$DEST" setting --listenIP "$panel_listen_ip"
+        
+        "$DEST" --user "$C_USER" --pass "$C_PASS" --port "$C_PORT" --path "$C_PATH" --systemd >/dev/null
+        "$DEST" setting --listenIP "$panel_listen_ip" >/dev/null
         printf '  Applied panel settings:\n'
-        printf '    Listen IP: %s\n' "$panel_listen_ip"
-        printf '    Panel domain: %s\n' "${panel_domain:-not set}"
-        panel_url_host="${panel_domain:-$panel_listen_ip}"
+        printf '    Port:     %s\n' "${C_PORT:-10000}"
+         printf '    Username: %s\n' "${C_USER:-unchanged}"
+         printf '    WebPath:  /%s/\n' "${C_PATH#/}"
+         printf '    IP:       %s\n' "$panel_listen_ip"
+                panel_url_host="${panel_domain:-$panel_listen_ip}"
         panel_url_port="${C_PORT:-10000}"
-        if [[ "$panel_url_port" == "80" || "$panel_url_port" == "443" ]]; then
+        if [[ -n "$panel_domain" || "$panel_url_port" == "80" || "$panel_url_port" == "443" ]]; then
             panel_url_port=""
         else
             panel_url_port=":$panel_url_port"
@@ -540,7 +542,7 @@ if [[ "$MODE" == "install" ]]; then
         msg "Configuring credentials + installing systemd unit"
         warn "--random sets a fresh port, username, password and web path — note them below."
         "$DEST" --random --systemd
-        "$DEST" setting --listenIP "$panel_listen_ip"
+        "$DEST" setting --listenIP "$panel_listen_ip" >/dev/null
     fi
 else
     # Update: only touch TLS when explicitly requested (PANEL_TLS=letsencrypt, or a
