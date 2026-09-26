@@ -29,6 +29,23 @@ func TestSanitizeServiceName(t *testing.T) {
 	}
 }
 
+func TestValidateUnitRejectsRootCommandHooks(t *testing.T) {
+	for _, directive := range []string{"ExecStartPre", "ExecStartPost", "ExecReload", "ExecStop", "EnvironmentFile", "User"} {
+		if err := validateUnit("[Service]\\n" + directive + "=/bin/sh -c 'id'"); err == nil {
+			t.Errorf("validateUnit accepted dangerous directive %s", directive)
+		}
+	}
+	if err := validateUnit("[Service]\\nExecStart=/bin/sh -c 'id'"); err == nil {
+		t.Error("validateUnit accepted replacement ExecStart")
+	}
+}
+
+func TestValidateUnitAllowsSafeProperties(t *testing.T) {
+	if err := validateUnit("[Unit]\\nDescription=custom\\n[Service]\\nRestart=on-failure\\nRestartSec=5"); err != nil {
+		t.Fatalf("validateUnit rejected safe properties: %v", err)
+	}
+}
+
 func TestDefaultUnitShape(t *testing.T) {
 	u := DefaultUnit("vpn-ui")
 	for _, must := range []string{"[Unit]", "[Service]", "ExecStart=", "WantedBy=multi-user.target", "Description=vpn-ui"} {

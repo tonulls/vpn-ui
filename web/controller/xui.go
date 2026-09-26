@@ -35,7 +35,7 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 	// requireOverviewAccess reads both. A denial here goes to landingPath, never
 	// blindly back to this route, which is what used to make gating it impossible.
 	g.GET("/", requireOverviewAccess(), a.index)
-	g.GET("/inbounds", requirePerm(model.PermAccessInbounds), a.inbounds)
+	g.GET("/inbounds", requireAdminInboundPage(), a.inbounds)
 	// The account-centric view of the same data the Inbounds page shows, so it
 	// takes the same claim.
 	g.GET("/clients", requirePerm(model.PermAccessInbounds), a.clients)

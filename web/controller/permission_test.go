@@ -45,6 +45,8 @@ func runGuarded(t *testing.T, user *model.User, guard gin.HandlerFunc, ajax bool
 	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
 	if ajax {
 		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	} else {
+		req.Header.Set("Accept", "text/html")
 	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -107,8 +109,8 @@ func TestRequireSuperAdmin(t *testing.T) {
 // 403 would leave the browser on a blank screen.
 func TestDenyShapeMatchesRequestKind(t *testing.T) {
 	limited := &model.User{Id: 2, Enable: true}
-	if got, _ := runGuarded(t, limited, requirePerm(model.PermAccessInbounds), false); got != http.StatusTemporaryRedirect {
-		t.Errorf("page navigation denial = %d; want 307 redirect", got)
+	if got, _ := runGuarded(t, limited, requirePerm(model.PermAccessInbounds), false); got != http.StatusForbidden {
+		t.Errorf("page navigation denial = %d; want 403 when no landing page exists", got)
 	}
 	// XHR: 200 so axios resolves and the UI can render the reason. A real 403 makes
 	// axios reject, and the user sees "Request failed with status code 403".

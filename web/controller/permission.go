@@ -111,6 +111,9 @@ func landingPath(c *gin.Context) string {
 	if user == nil {
 		return ""
 	}
+	if user.IsReseller {
+		return c.GetString("base_path") + "panel/clients"
+	}
 	for _, p := range landingPages {
 		// The overview is asked through overviewAccess rather than Can, so a reseller
 		// whose profile opens it lands there and one whose profile does not never gets
@@ -255,6 +258,20 @@ func wantsHTML(c *gin.Context) bool {
 		return false
 	}
 	return strings.Contains(c.GetHeader("Accept"), "text/html")
+}
+
+// requireAdminInboundPage keeps the inbound administration page away from resellers.
+// Resellers use the account-centric Clients page; the inbound page exposes edits to
+// the transport itself and is intentionally an admin-only surface.
+func requireAdminInboundPage() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := session.GetLoginUser(c)
+		if user != nil && user.IsReseller {
+			deny(c, http.StatusForbidden, "pages.admins.forbidden", c.GetString("base_path")+"panel/clients")
+			return
+		}
+		requirePerm(model.PermAccessInbounds)(c)
+	}
 }
 
 // requirePerm gates a route on a single permission. Super admins always pass.

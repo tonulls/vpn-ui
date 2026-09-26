@@ -619,8 +619,13 @@
             "inModal.visible"(v) {
                 if (v) {
                     const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
-                    const saved = window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`);
-                    this.externalTlsSettingsVisible = saved === "1";
+                    const saved = window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`) ||
+                        window.localStorage.getItem("vpnui.externalTlsSettings");
+                    const tls = inModal.inbound.stream && inModal.inbound.stream.tls;
+                    const configured = !!(tls && ((tls.sni || "").trim() ||
+                        (tls.settings && (tls.settings.fingerprint || "").trim()) ||
+                        (Array.isArray(tls.alpn) && tls.alpn.length)));
+                    this.externalTlsSettingsVisible = saved === "1" || configured;
                     if (!this.externalTlsSettingsVisible && inModal.inbound.stream.security === "none") {
                         inModal.inbound.stream.tls.sni = "";
                         inModal.inbound.stream.tls.alpn = [];
@@ -634,6 +639,7 @@
             externalTlsSettingsVisible(v) {
                 const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
                 window.localStorage.setItem(`vpnui.externalTlsSettings.${id}`, v ? "1" : "0");
+                window.localStorage.setItem("vpnui.externalTlsSettings", v ? "1" : "0");
                 if (!v && inModal.inbound && inModal.inbound.stream && inModal.inbound.stream.tls) {
                     inModal.inbound.stream.tls.sni = "";
                     if (inModal.inbound.stream.tls.settings) {

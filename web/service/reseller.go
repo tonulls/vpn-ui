@@ -456,6 +456,9 @@ type ChargeTicket struct {
 	Create    bool
 	// PrevCharged is what to restore on rollback.
 	PrevCharged int64
+	// Bulk contains the individual reservations for one addClient request with
+	// multiple generated accounts. The outer ticket rolls them back together.
+	Bulk []ChargeTicket
 }
 
 // postedClient pulls the single client out of a client-mutating request body.
@@ -533,6 +536,46 @@ func (s *ResellerService) PrepareClientCreate(user *model.User, data *model.Inbo
 	profile, err := s.ProfileFor(user.Id)
 	if err != nil {
 		return ChargeTicket{}, err
+	}
+	settings := map[string]any{}
+	if err := json.Unmarshal([]byte(data.Settings), &settings); err != nil {
+		return ChargeTicket{}, err
+	}
+	clients, _ := settings["clients"].([]any)
+	if len(clients) > 1 {
+		// Price each generated account through the existing single-account path,
+		// then expose one aggregate ticket to the controller. Each recursive call
+		// also clamps its own settings before the account is written.
+		tickets := make([]ChargeTicket, 0, len(clients))
+		for i := range clients {
+			one, err := json.Marshal(map[string]any{"clients": []any{clients[i]}})
+			if err != nil {
+				return ChargeTicket{}, err
+			}
+			copyData := *data
+			copyData.Settings = string(one)
+			ticket, err := s.PrepareClientCreate(user, &copyData)
+			if err != nil {
+				for j := len(tickets) - 1; j >= 0; j-- {
+					_ = s.Rollback(tickets[j])
+				}
+				return ChargeTicket{}, err
+			}
+			var oneSettings map[string]any
+			_ = json.Unmarshal([]byte(copyData.Settings), &oneSettings)
+			oneClients, _ := oneSettings["clients"].([]any)
+			if len(oneClients) == 1 {
+				clients[i] = oneClients[0]
+			}
+			tickets = append(tickets, ticket)
+		}
+		settings["clients"] = clients
+		patched, err := json.Marshal(settings)
+		if err != nil {
+			return ChargeTicket{}, err
+		}
+		data.Settings = string(patched)
+		return ChargeTicket{Active: true, Bulk: tickets}, nil
 	}
 	cm, settings, clients, err := postedClient(data)
 	if err != nil {
@@ -829,6 +872,15 @@ func (s *ResellerService) reserve(t ChargeTicket) error {
 
 // Rollback undoes a reservation whose client write failed.
 func (s *ResellerService) Rollback(t ChargeTicket) error {
+	if len(t.Bulk) > 0 {
+		var first error
+		for i := len(t.Bulk) - 1; i >= 0; i-- {
+			if err := s.Rollback(t.Bulk[i]); err != nil && first == nil {
+				first = err
+			}
+		}
+		return first
+	}
 	if !t.Active {
 		return nil
 	}
@@ -994,10 +1046,13 @@ type ResellerView struct {
 	Enable          bool   `json:"enable"`
 	TwoFactorEnable bool   `json:"twoFactorEnable"`
 
-	AllowanceBytes int64 `json:"allowanceBytes"`
-	SpentBytes     int64 `json:"spentBytes"`
-	AvailableBytes int64 `json:"availableBytes"`
-	Unlimited      bool  `json:"unlimited"`
+	AllowanceBytes        int64 `json:"allowanceBytes"`
+	SpentBytes            int64 `json:"spentBytes"`
+	AvailableBytes        int64 `json:"availableBytes"`
+	Unlimited             bool  `json:"unlimited"`
+	BalanceResetDays      int   `json:"balanceResetDays"`
+	BalanceResetStart     int64 `json:"balanceResetStart"`
+	BalanceResetAllowance int64 `json:"balanceResetAllowance"`
 
 	DaysPerGB           int  `json:"daysPerGb"`
 	MinCreateGB         int  `json:"minCreateGb"`
@@ -1027,6 +1082,8 @@ type ResellerSpec struct {
 	Unlimited   bool
 
 	DaysPerGB           int
+	BalanceResetDays    int
+	BalanceResetStart   int64
 	MinCreateGB         int
 	MinAddGB            int
 	AllowExternalProxy  bool
@@ -1117,6 +1174,8 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 			AvailableBytes:      available,
 			Unlimited:           p.Unlimited,
 			DaysPerGB:           p.DaysPerGB,
+			BalanceResetDays:    p.BalanceResetDays,
+			BalanceResetStart:   p.BalanceResetStart,
 			MinCreateGB:         p.MinCreateGB,
 			MinAddGB:            p.MinAddGB,
 			AllowExternalProxy:  p.AllowExternalProxy,
@@ -1186,6 +1245,41 @@ func (s *ResellerService) AssignableInbounds(caller *model.User) ([]InboundBrief
 	return out, nil
 }
 
+func nextBalanceResetStart(start, now int64, days int) int64 {
+	if days <= 0 || start <= 0 || now < start {
+		return start
+	}
+	period := int64(days) * 24 * 60 * 60 * 1000
+	return start + ((now-start)/period+1)*period
+}
+
+// RenewDueBalances restores scheduled reseller balances using server time. It is
+// safe to call on every traffic tick: one transaction advances each profile by
+// whole calendar periods, so downtime does not pause or duplicate the schedule.
+func (s *ResellerService) RenewDueBalances(tx *gorm.DB, now time.Time) (int, error) {
+	var profiles []model.ResellerProfile
+	if err := tx.Find(&profiles).Error; err != nil {
+		return 0, err
+	}
+	updated := 0
+	for _, p := range profiles {
+		if p.BalanceResetDays <= 0 || p.BalanceResetStart <= 0 || p.BalanceResetAllowance <= 0 {
+			continue
+		}
+		start := p.BalanceResetStart
+		if now.UnixMilli() < start {
+			continue
+		}
+		newStart := nextBalanceResetStart(start, now.UnixMilli(), p.BalanceResetDays)
+		if err := tx.Model(&model.ResellerProfile{}).Where("id = ?", p.Id).
+			Updates(map[string]any{"allowance_bytes": p.BalanceResetAllowance, "spent_bytes": 0, "balance_reset_start": newStart}).Error; err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
+}
+
 // AddReseller creates a reseller and its profile.
 func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*model.User, error) {
 	spec.Username = normalizeUsername(spec.Username)
@@ -1239,16 +1333,19 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 			}
 		}
 		return tx.Create(&model.ResellerProfile{
-			UserId:              user.Id,
-			AllowanceBytes:      gbToBytes(spec.AllowanceGB),
-			Unlimited:           spec.Unlimited,
-			DaysPerGB:           spec.DaysPerGB,
-			MinCreateGB:         spec.MinCreateGB,
-			MinAddGB:            spec.MinAddGB,
-			AllowExternalProxy:  spec.AllowExternalProxy,
-			AllowOverview:       spec.AllowOverview,
-			AllowOverviewManage: spec.AllowOverviewManage,
-			CreatedBy:           caller.Id,
+			UserId:                user.Id,
+			AllowanceBytes:        gbToBytes(spec.AllowanceGB),
+			Unlimited:             spec.Unlimited,
+			DaysPerGB:             spec.DaysPerGB,
+			BalanceResetDays:      spec.BalanceResetDays,
+			BalanceResetStart:     spec.BalanceResetStart,
+			BalanceResetAllowance: int64(spec.AllowanceGB) * 1024 * 1024 * 1024,
+			MinCreateGB:           spec.MinCreateGB,
+			MinAddGB:              spec.MinAddGB,
+			AllowExternalProxy:    spec.AllowExternalProxy,
+			AllowOverview:         spec.AllowOverview,
+			AllowOverviewManage:   spec.AllowOverviewManage,
+			CreatedBy:             caller.Id,
 		}).Error
 	})
 	if err != nil {
@@ -1288,7 +1385,7 @@ func (s *ResellerService) manageable(caller *model.User, id int) (*model.User, *
 // UpdateReseller edits a reseller. An empty password leaves the existing one
 // alone. AllowanceGB is ignored here; see Recharge.
 func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec ResellerSpec) error {
-	user, _, err := s.manageable(caller, id)
+	user, profile, err := s.manageable(caller, id)
 	if err != nil {
 		return err
 	}
@@ -1333,7 +1430,15 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 		}
 		return tx.Model(&model.ResellerProfile{}).Where("user_id = ?", user.Id).
 			Updates(map[string]any{
-				"unlimited":             spec.Unlimited,
+				"unlimited":           spec.Unlimited,
+				"balance_reset_days":  spec.BalanceResetDays,
+				"balance_reset_start": spec.BalanceResetStart,
+				"balance_reset_allowance": func() int64 {
+					if profile.BalanceResetAllowance > 0 {
+						return profile.BalanceResetAllowance
+					}
+					return profile.AllowanceBytes
+				}(),
 				"days_per_gb":           spec.DaysPerGB,
 				"min_create_gb":         spec.MinCreateGB,
 				"min_add_gb":            spec.MinAddGB,

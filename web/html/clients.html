@@ -8,6 +8,8 @@
           <a-row :gutter="[16, 16]" :style="{ margin: 0 }">
             <a-col :span="24">
 
+              <div class="bo-tile" :style="{ padding: '0', overflow: 'hidden', marginBottom: '16px' }"><div class="bo-stat-grid bo-stat-grid--5"><div class="bo-stat-cell"><span class="bo-stat-cell-label">Отправлено / получено</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.up) ]] / [[ SizeFormatter.sizeFormat(clientStats.down) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Всего трафика</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.up + clientStats.down) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Общее использование за всё время</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.allTime) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Всего подключений</span><span class="bo-stat-cell-value num">[[ clientStats.connections ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Клиенты</span><span class="bo-stat-cell-value num">[[ clientStats.total ]]</span></div></div></div>
+
               <!-- The account-centric view, and the only place clients are managed.
                    The Inbounds page answers "what is serving traffic"; this one
                    answers "who exists", which stopped being the same question once
@@ -477,6 +479,7 @@
       // are needed: the rows carry the account-level totals the server computed,
       // the inbounds carry the per-protocol client objects every action works on.
       clients: [],
+      clientStats: { up: 0, down: 0, allTime: 0, connections: 0, total: 0 },
       dbInbounds: [],
       inbounds: [],
       assignable: [],
@@ -816,6 +819,8 @@
       },
 
       async loadClients() {
+        const statsMsg = await HttpUtil.get('/panel/api/server/userStats');
+        if (statsMsg && statsMsg.success && statsMsg.obj) this.clientStats = statsMsg.obj;
         const q = `?page=${this.pagination.current}&size=${this.pagination.pageSize}`
           + `&search=${encodeURIComponent(this.search || '')}`
           + `&sort=${encodeURIComponent(this.sortKey)}`;

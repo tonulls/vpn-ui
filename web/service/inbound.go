@@ -3276,6 +3276,10 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 			tx.Commit()
 		}
 	}()
+	var resellerService ResellerService
+	if _, renewErr := resellerService.RenewDueBalances(tx, time.Now()); renewErr != nil {
+		logger.Warning("Error renewing reseller balances:", renewErr)
+	}
 	err = s.addInboundTraffic(tx, inboundTraffics)
 	if err != nil {
 		return err, false, nil, nil, nil
@@ -3598,6 +3602,17 @@ func (s *InboundService) adjustTraffics(tx *gorm.DB, dbClientTraffics []*xray.Cl
 			newExpiry := now - dbClientTraffics[traffic_index].ExpiryTime
 			newExpiryByEmail[accountKey(dbClientTraffics[traffic_index].Email)] = newExpiry
 			dbClientTraffics[traffic_index].ExpiryTime = newExpiry
+		}
+
+		// Keep the account-wide subscription view in sync with the converted
+		// deadline. Otherwise the subscription layer still sees the negative
+		// sentinel and reports `expire=0` (No expiry) after first use.
+		for emailKey, newExpiry := range newExpiryByEmail {
+			if err := tx.Model(&model.Account{}).
+				Where("LOWER(TRIM(email)) = ?", emailKey).
+				Update("expiry_time", newExpiry).Error; err != nil {
+				return nil, err
+			}
 		}
 
 		for inbound_index := range inbounds {
@@ -5518,10 +5533,14 @@ func (s *InboundService) MigrationSubIds() {
 // caller owns, how many are connected right now, how many have run out of traffic
 // or time, and how many are close to it.
 type ClientStatsSummary struct {
-	Total    int `json:"total"`
-	Online   int `json:"online"`
-	Depleted int `json:"depleted"`
-	Expiring int `json:"expiring"`
+	Up          int64 `json:"up"`
+	Down        int64 `json:"down"`
+	AllTime     int64 `json:"allTime"`
+	Connections int   `json:"connections"`
+	Total       int   `json:"total"`
+	Online      int   `json:"online"`
+	Depleted    int   `json:"depleted"`
+	Expiring    int   `json:"expiring"`
 }
 
 // GetClientStatsFor counts the caller's accounts by state. It is the server-side
@@ -5560,8 +5579,9 @@ func (s *InboundService) GetClientStatsFor(user *model.User) (*ClientStatsSummar
 		online[email] = true
 	}
 
-	summary := &ClientStatsSummary{}
+	summary := &ClientStatsSummary{Connections: len(inbounds)}
 	now := time.Now().UnixMilli()
+	countedTraffic := make(map[string]bool)
 	// An ACCOUNT is depleted once, however many inbounds serve it. ClientStats now
 	// lists it under every one of them (it used to appear only under its home
 	// inbound), so without this an account on three inbounds would be counted as
@@ -5585,7 +5605,14 @@ func (s *InboundService) GetClientStatsFor(user *model.User) (*ClientStatsSummar
 			}
 		}
 		for _, stat := range inbound.ClientStats {
-			if countedDepletion[accountKey(stat.Email)] {
+			key := accountKey(stat.Email)
+			if !countedTraffic[key] {
+				summary.Up += stat.Up
+				summary.Down += stat.Down
+				summary.AllTime += stat.AllTime
+				countedTraffic[key] = true
+			}
+			if countedDepletion[key] {
 				continue
 			}
 			countedDepletion[accountKey(stat.Email)] = true

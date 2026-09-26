@@ -57,7 +57,7 @@
                         title: '{{ i18n "menu.dashboard"}}'
                     },
                     {{ end }}
-                    {{ if .perms.accessInbounds }}
+                    {{ if and .perms.accessInbounds (not .reseller.isReseller) }}
                     {
                         key: '{{ .base_path }}panel/inbounds',
                         icon: 'user',

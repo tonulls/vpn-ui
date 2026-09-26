@@ -114,6 +114,9 @@ func TestAdjustTrafficsConvertsExpiryOnEveryMembership(t *testing.T) {
 	b := seedInboundWithClients(t, model.Trojan, 44402, []map[string]any{
 		{"password": "pw", "email": "bob@example.com", "enable": true, "expiryTime": float64(-86400000)},
 	})
+	if err := database.GetDB().Create(&model.Account{Email: "bob@example.com", ExpiryTime: -86400000, Enable: true}).Error; err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
 
 	traffics := []*xray.ClientTraffic{
 		{InboundId: a.Id, Email: "bob@example.com", ExpiryTime: -86400000, Enable: true},
@@ -142,6 +145,13 @@ func TestAdjustTrafficsConvertsExpiryOnEveryMembership(t *testing.T) {
 	}
 	if traffics[0].ExpiryTime <= 0 {
 		t.Errorf("the traffic row kept its negative expiry (%d)", traffics[0].ExpiryTime)
+	}
+	var account model.Account
+	if err := database.GetDB().Where("email = ?", "bob@example.com").First(&account).Error; err != nil {
+		t.Fatalf("load account expiry: %v", err)
+	}
+	if account.ExpiryTime <= 0 || account.ExpiryTime != traffics[0].ExpiryTime {
+		t.Errorf("account expiry = %d, want converted deadline %d", account.ExpiryTime, traffics[0].ExpiryTime)
 	}
 }
 

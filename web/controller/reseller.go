@@ -38,10 +38,12 @@ type resellerForm struct {
 	// one modal can post one shape.
 	AllowanceGB int `json:"allowanceGb" form:"allowanceGb"`
 
-	DaysPerGB          int  `json:"daysPerGb" form:"daysPerGb"`
-	MinCreateGB        int  `json:"minCreateGb" form:"minCreateGb"`
-	MinAddGB           int  `json:"minAddGb" form:"minAddGb"`
-	AllowExternalProxy bool `json:"allowExternalProxy" form:"allowExternalProxy"`
+	DaysPerGB          int   `json:"daysPerGb" form:"daysPerGb"`
+	BalanceResetDays   int   `json:"balanceResetDays" form:"balanceResetDays"`
+	BalanceResetStart  int64 `json:"balanceResetStart" form:"balanceResetStart"`
+	MinCreateGB        int   `json:"minCreateGb" form:"minCreateGb"`
+	MinAddGB           int   `json:"minAddGb" form:"minAddGb"`
+	AllowExternalProxy bool  `json:"allowExternalProxy" form:"allowExternalProxy"`
 	// AllowOverview hands this reseller the panel overview, which is off by
 	// default because it is a host dashboard and none of it is theirs to act on.
 	AllowOverview bool `json:"allowOverview" form:"allowOverview"`
@@ -80,6 +82,8 @@ func (f *resellerForm) spec() service.ResellerSpec {
 		AllowanceGB:         f.AllowanceGB,
 		Unlimited:           f.Unlimited,
 		DaysPerGB:           f.DaysPerGB,
+		BalanceResetDays:    f.BalanceResetDays,
+		BalanceResetStart:   f.BalanceResetStart,
 		MinCreateGB:         f.MinCreateGB,
 		MinAddGB:            f.MinAddGB,
 		AllowExternalProxy:  f.AllowExternalProxy,

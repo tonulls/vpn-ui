@@ -111,6 +111,26 @@
     <a-form-item>
       <template slot="label">
         <a-tooltip>
+          <template slot="title">Обновление баланса трафика через указанное количество дней</template>
+          Обновление баланса трафика (дни)
+        </a-tooltip>
+      </template>
+      <a-input-number v-model.number="resellerModal.reseller.balanceResetDays" :min="0"></a-input-number>
+    </a-form-item>
+
+    <a-form-item>
+      <template slot="label">
+        <a-tooltip>
+          <template slot="title">Дата, с которой начинается календарический цикл</template>
+          Дата начала обновления
+        </a-tooltip>
+      </template>
+      <a-date-picker v-model="resellerModal.resetStartDate" value-format="YYYY-MM-DD"></a-date-picker>
+    </a-form-item>
+
+    <a-form-item>
+      <template slot="label">
+        <a-tooltip>
           <template slot="title">{{ i18n "pages.resellers.daysPerGbDesc" }}</template>
           {{ i18n "pages.resellers.daysPerGb" }}
           <a-icon type="question-circle"></a-icon>
@@ -189,9 +209,10 @@
     isEdit: false,
     confirm: null,
     allInbounds: [],
+    resetStartDate: '',
     reseller: {
       id: 0, username: '', password: '', nickname: '', enable: true,
-      unlimited: false, allowanceGb: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
+      unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
       allowExternalProxy: false, allowOverview: false, allowOverviewManage: false,
       inboundIds: [],
     },
@@ -225,6 +246,8 @@
       this.confirm = confirm;
       this.isEdit = isEdit;
       this.allInbounds = allInbounds || [];
+      this.resetStartDate = isEdit && reseller && reseller.balanceResetStart
+        ? moment(Number(reseller.balanceResetStart)).format('YYYY-MM-DD') : '';
       if (isEdit && reseller) {
         this.reseller = {
           id: reseller.id,
@@ -236,6 +259,7 @@
           // Every balance movement is a whole number of GB (create, recharge), so the
           // round is exact and only exists to keep a float out of the form.
           allowanceGb: Math.round((Number(reseller.allowanceBytes) || 0) / ONE_GB_BYTES),
+          balanceResetDays: Number(reseller.balanceResetDays) || 0,
           daysPerGb: Number(reseller.daysPerGb) || 0,
           minCreateGb: Number(reseller.minCreateGb) || 0,
           minAddGb: Number(reseller.minAddGb) || 0,
@@ -268,6 +292,8 @@
         // On edit this is the unchanged current balance: the field is disabled, so posting
         // it back is a no-op whichever way the server reads it. Recharge moves the balance.
         allowanceGb: Number(reseller.allowanceGb) || 0,
+        balanceResetDays: Number(reseller.balanceResetDays) || 0,
+        balanceResetStart: resellerModal.resetStartDate ? moment(resellerModal.resetStartDate, 'YYYY-MM-DD').valueOf() : 0,
         daysPerGb: Number(reseller.daysPerGb) || 0,
         minCreateGb: Number(reseller.minCreateGb) || 0,
         minAddGb: Number(reseller.minAddGb) || 0,

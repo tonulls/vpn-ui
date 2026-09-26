@@ -238,6 +238,20 @@ func TestPrepareBulkDropsUnknownTargets(t *testing.T) {
 	}
 }
 
+func TestNextBalanceResetStartSkipsDowntime(t *testing.T) {
+	day := int64(24 * 60 * 60 * 1000)
+	start := int64(10) * day
+	if got := nextBalanceResetStart(start, start+day-1, 1); got != start+day {
+		t.Fatalf("next reset before first boundary = %d, want %d", got, start+day)
+	}
+	if got := nextBalanceResetStart(start, start+5*day+1, 1); got != start+6*day {
+		t.Fatalf("next reset after downtime = %d, want %d", got, start+6*day)
+	}
+	if got := nextBalanceResetStart(start, start-1, 30); got != start {
+		t.Fatalf("future start changed: %d", got)
+	}
+}
+
 // --- addTraffic -----------------------------------------------------------------
 
 func TestPrepareBulkAddTrafficDebitsEveryTarget(t *testing.T) {

@@ -36,6 +36,10 @@ func (s *UserService) GetFirstUser() (*model.User, error) {
 }
 
 func (s *UserService) CheckUser(username string, password string, twoFactorCode string) (*model.User, error) {
+	// Admin and reseller creation normalizes usernames to lowercase. Apply the
+	// same normalization at login so the credentials work regardless of the
+	// capitalization entered in the login form.
+	username = normalizeUsername(username)
 	db := database.GetDB()
 
 	user := &model.User{}
