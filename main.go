@@ -684,6 +684,9 @@ func randomizeSetting() error {
 	fmt.Printf("  WebPath:  %s\n", normPath)
 	fmt.Printf("  IP:       %s\n", ip)
 	fmt.Printf("  URL:      %s\n", url)
+	if domain := configuredPanelDomain(); domain != "" {
+		fmt.Printf("  URL_domen: https://%s%s\n", domain, normPath)
+	}
 	if ip == "N/A" {
 		fmt.Println("  (could not detect public IP, substitute the server's address in the URL)")
 	}
@@ -760,6 +763,9 @@ func applyExplicitSetting(username, password string, port int, webBasePath strin
 	fmt.Printf("  WebPath:  %s\n", normPath)
 	fmt.Printf("  IP:       %s\n", ip)
 	fmt.Printf("  URL:      %s\n", url)
+	if domain := configuredPanelDomain(); domain != "" {
+		fmt.Printf("  URL_domen: https://%s%s\n", domain, normPath)
+	}
 	if ip == "N/A" {
 		fmt.Println("  (could not detect public IP, substitute the server's address in the URL)")
 	}
@@ -780,6 +786,14 @@ func applyExplicitSetting(username, password string, port int, webBasePath strin
 //
 // The public-IP lookup is an HTTP call to an external service, so callers that do
 // not display the URL should not call this at all (see collectPanelInfo).
+func configuredPanelDomain() string {
+	b, err := os.ReadFile("/etc/vpn-ui/panel-domain")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
 func panelAccessURL(settingService *service.SettingService, port int, normPath string) (ip, url string) {
 	ip = service.GetServerIPv4()
 	if listen, err := settingService.GetListen(); err == nil && listen != "" {
@@ -787,10 +801,8 @@ func panelAccessURL(settingService *service.SettingService, port int, normPath s
 	}
 	scheme := "http"
 	host := ip
-	if b, err := os.ReadFile("/etc/vpn-ui/panel-domain"); err == nil {
-		if configured := strings.TrimSpace(string(b)); configured != "" {
-			host = configured
-		}
+	if configured := configuredPanelDomain(); configured != "" {
+		host = configured
 	}
 	if certFile, _ := settingService.GetCertFile(); certFile != "" {
 		scheme = "https"
