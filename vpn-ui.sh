@@ -766,6 +766,18 @@ item_webpath() {
     "$BIN" --path "$v" || warn "changing the web path failed."
 }
 
+# 18) Change the panel listen IP. A domain is a URL host, not a listen address;
+#     DNS should point the domain to this server while the listener uses an IP.
+item_listen_ip() {
+    local v; printf '  %snew listen IP%s (127.0.0.1, 0.0.0.0 or server IP): ' "$BLUE" "$R"; read -r v || return 0
+    [[ -n "$v" ]] || { warn "no listen IP entered, nothing changed."; return 0; }
+    if ! [[ "$v" == "0.0.0.0" || "$v" == "127.0.0.1" || "$v" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        warn "'$v' is not a valid IPv4 listen address, nothing changed."
+        return 0
+    fi
+    "$BIN" setting --listenIP "$v" || warn "changing the listen IP failed."
+}
+
 # 7) Reset Login. Randomizes port, username, password AND web path, so the old
 #    URL stops working too. Worth a confirmation.
 item_random() {
@@ -902,7 +914,8 @@ show_menu() {
     printf '    %s6)%s  Change Web-Path        %s15)%s Xray Logs\n'             "$GREEN" "$R" "$GREEN" "$R"
     printf '    %s7)%s  Reset Login (random)   %s16)%s Restart All Cores\n'     "$GREEN" "$R" "$GREEN" "$R"
     printf '    %s8)%s  View login info        %s17)%s Get SSL (domain / server IP)\n' "$GREEN" "$R" "$GREEN" "$R"
-    printf '    %s9)%s  Start     (systemd)    %s0)%s  Exit\n'                  "$GREEN" "$R" "$GREEN" "$R"
+    printf '    %s9)%s  Start     (systemd)    %s18)%s Change Listen IP\n'      "$GREEN" "$R" "$GREEN" "$R"
+    printf '                         %s0)%s  Exit\n' "$GREEN" "$R"
     hr
 }
 
@@ -937,6 +950,7 @@ menu_loop() {
             15) item_xray_logs ;;
             16) item_cores_restart ;;
             17) item_ssl ;;
+            18) item_listen_ip ;;
             0)  return 0 ;;
             "") continue ;;
             *)  warn "invalid choice: '${choice}'" ;;

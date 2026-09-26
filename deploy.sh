@@ -478,6 +478,25 @@ if [[ "$MODE" == "install" ]]; then
     # sudo bash) has no tty and falls back to --random, so it never hangs on the
     # prompt nor installs empty credentials. The binary applies either choice with
     # the same work-safe stop/apply/restart envelope (--random / --user...--path).
+    panel_listen_ip="0.0.0.0"
+    panel_domain=""
+    if [[ -r /dev/tty ]]; then
+        {
+            printf '%s::%s %sPanel management IP%s\n' "$B$BLUE" "$R" "$WHITE" "$R"
+            printf '    %s1)%s 127.0.0.1\n' "$GREEN" "$R"
+            printf '    %s2)%s this server public IP\n' "$GREEN" "$R"
+            printf '    %s3)%s 0.0.0.0 (all interfaces) %s[default]%s\n' "$GREEN" "$R" "$D" "$R"
+            printf '  choose [1/2/3]: '
+        } > /dev/tty
+        read -r _listen_choice < /dev/tty || _listen_choice=""
+        case "$_listen_choice" in
+            1) panel_listen_ip="127.0.0.1" ;;
+            2) panel_listen_ip="$(curl -4fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)" ;;
+            3|*) panel_listen_ip="0.0.0.0" ;;
+        esac
+        printf '  %spanel domain (optional)%s: ' "$BLUE" "$R" > /dev/tty
+        read -r panel_domain < /dev/tty || panel_domain=""
+    fi
     cred_mode="random"
     if [[ "$imported" == "1" ]]; then
         # The import brought its own admin login; randomizing now would throw it
@@ -505,10 +524,23 @@ if [[ "$MODE" == "install" ]]; then
         printf '  %sweb path%s: ' "$BLUE" "$R" > /dev/tty; read -r  C_PATH < /dev/tty || C_PATH=""
         msg "Applying custom login / access + installing systemd unit"
         "$DEST" --user "$C_USER" --pass "$C_PASS" --port "$C_PORT" --path "$C_PATH" --systemd
+        "$DEST" setting --listenIP "$panel_listen_ip"
+        printf '  Applied panel settings:\n'
+        printf '    Listen IP: %s\n' "$panel_listen_ip"
+        printf '    Panel domain: %s\n' "${panel_domain:-not set}"
+        panel_url_host="${panel_domain:-$panel_listen_ip}"
+        panel_url_port="${C_PORT:-10000}"
+        if [[ "$panel_url_port" == "80" || "$panel_url_port" == "443" ]]; then
+            panel_url_port=""
+        else
+            panel_url_port=":$panel_url_port"
+        fi
+        printf '    Panel URL: http%s://%s%s/%s/\n' "$([[ "$tls_choice" == "http" ]] && printf '' || printf 's')" "$panel_url_host" "$panel_url_port" "${C_PATH#/}"
     else
         msg "Configuring credentials + installing systemd unit"
         warn "--random sets a fresh port, username, password and web path — note them below."
         "$DEST" --random --systemd
+        "$DEST" setting --listenIP "$panel_listen_ip"
     fi
 else
     # Update: only touch TLS when explicitly requested (PANEL_TLS=letsencrypt, or a
