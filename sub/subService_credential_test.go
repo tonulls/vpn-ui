@@ -167,19 +167,18 @@ func TestGreYieldsNoLink(t *testing.T) {
 	}
 }
 
-// mtproto and ssh keep their own protocol-native link AND get a card, so Telegram (or
-// Shadowrocket) still works while a subscription importer has something to keep.
-func TestMtprotoAndSshCarryNativeLinkPlusCard(t *testing.T) {
+// MTProto keeps only its Telegram-native link: a synthetic Trojan card would mislabel
+// it as a proxy endpoint and make subscription clients advertise an unusable server.
+func TestMtprotoHasOnlyItsNativeLink(t *testing.T) {
 	s := cardService()
 	// modeClassic is the INBOUND's: telemt's listener modes are process-wide.
 	mt := credInbound(model.MTPROTO, 8443,
 		`{"modeClassic":true,"clients":[{"email":"h","secret":"0123456789abcdef0123456789abcdef"}]}`)
 	lines := strings.Split(s.getLink(mt, "h"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want tg:// + card, got %d line(s): %q", len(lines), lines)
+	if len(lines) != 1 {
+		t.Fatalf("want exactly one Telegram link and no synthetic card, got %d line(s): %q", len(lines), lines)
 	}
 	if !strings.HasPrefix(lines[0], "tg://proxy?") {
-		t.Fatalf("first line should be the Telegram link: %q", lines[0])
+		t.Fatalf("the subscription should contain the Telegram-native link: %q", lines[0])
 	}
-	parseCard(t, lines[1])
 }
