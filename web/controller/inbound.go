@@ -682,7 +682,7 @@ func (a *InboundController) addInbound(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	a.syncInboundAccounts(inbound.Id)
+	a.syncInboundAccounts(inbound.Id, service.AccountCreatorFromUser(user))
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), inbound, nil)
 	if inbound.Protocol == model.L2TP {
 		a.onL2tpChanged()
@@ -867,7 +867,7 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	a.syncInboundAccounts(inbound.Id)
+	a.syncInboundAccounts(inbound.Id, service.AccountCreatorFromUser(session.GetLoginUser(c)))
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), inbound, nil)
 	if inbound.Protocol == model.L2TP {
 		a.onL2tpChanged()
@@ -995,6 +995,7 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 		return
 	}
 	caller := session.GetLoginUser(c)
+	creator := service.AccountCreatorFromUser(caller)
 	if caller != nil && !caller.IsReseller && caller.SubscriptionLimit > 0 {
 		count, countErr := accountService.CountAccounts(caller)
 		if countErr != nil {
@@ -1056,10 +1057,10 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 	// those too or a daemon keeps serving the settings JSON it no longer matches.
 	var projected []int
 	if emails := postedClientEmails(data); len(emails) > 1 {
-		a.syncInboundAccounts(data.Id)
+		a.syncInboundAccounts(data.Id, creator)
 		if membershipsExplicit {
 			for _, email := range emails {
-				touched, merr := a.applyClientMemberships(c, email, data.Id, membershipIds, membershipsExplicit)
+				touched, merr := a.applyClientMemberships(c, email, data.Id, membershipIds, membershipsExplicit, creator)
 				if merr != nil {
 					logger.Warning("applying client memberships for ", email, ": ", merr)
 				}
@@ -1067,7 +1068,7 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 			}
 		}
 	} else {
-		touched, merr := a.applyClientMemberships(c, postedClientEmail(data), data.Id, membershipIds, membershipsExplicit)
+		touched, merr := a.applyClientMemberships(c, postedClientEmail(data), data.Id, membershipIds, membershipsExplicit, creator)
 		if merr != nil {
 			logger.Warning("applying client memberships: ", merr)
 		}
@@ -1150,7 +1151,8 @@ func (a *InboundController) saveAccountClient(c *gin.Context) {
 		}
 	}
 
-	if _, err := accountService.SaveAccountWithoutInbound(entry); err != nil {
+	creator := service.AccountCreatorFromUser(session.GetLoginUser(c))
+	if _, err := accountService.SaveAccountWithoutInbound(entry, creator); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
@@ -2949,8 +2951,8 @@ func distinctInboundIds(targets []service.BulkClientTarget) []int {
 // no membership, so one call is correct for all of them, including the removal of
 // the inbound itself (where it drops every membership pointing at an id that is
 // gone).
-func (a *InboundController) syncInboundAccounts(inboundId int) {
-	if err := accountService.SyncInboundAccounts(database.GetDB(), inboundId); err != nil {
+func (a *InboundController) syncInboundAccounts(inboundId int, creator ...service.AccountCreator) {
+	if err := accountService.SyncInboundAccounts(database.GetDB(), inboundId, creator...); err != nil {
 		logger.Warning("syncing the accounts layer for inbound ", inboundId, ": ", err)
 	}
 }
@@ -2968,7 +2970,7 @@ func (a *InboundController) syncInboundAccounts(inboundId int) {
 // an empty set, and the account-wide fields the same request changed (quota, expiry,
 // comment) would never reach the account row if the mirror had no blob to read them
 // from.
-func (a *InboundController) applyClientMemberships(c *gin.Context, email string, anchorInboundId int, inboundIds []int, explicit bool) ([]int, error) {
+func (a *InboundController) applyClientMemberships(c *gin.Context, email string, anchorInboundId int, inboundIds []int, explicit bool, creator ...service.AccountCreator) ([]int, error) {
 	if email == "" {
 		return nil, nil
 	}
@@ -2995,7 +2997,7 @@ func (a *InboundController) applyClientMemberships(c *gin.Context, email string,
 			}
 		}
 	}
-	return accountService.ApplyMembershipsFrom(email, anchorInboundId, inboundIds, removable, explicit)
+	return accountService.ApplyMembershipsFrom(email, anchorInboundId, inboundIds, removable, explicit, creator...)
 }
 
 // reconcileForInbounds fires each protocol's reconcile hook once for the set of

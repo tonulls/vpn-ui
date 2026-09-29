@@ -414,7 +414,7 @@ func removeAccountFromInbound(inbound *model.Inbound, email string) (string, boo
 // is deliberate: an account row that disagrees with settings.clients is repaired on
 // the next start anyway (MigrationAccounts re-checks the counts on every boot), so a
 // missed call degrades to a delay rather than to a wrong data plane.
-func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int) error {
+func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int, creator ...AccountCreator) error {
 	var inbound model.Inbound
 	if err := tx.Model(&model.Inbound{}).Where("id = ?", inboundId).First(&inbound).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -451,7 +451,7 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int) error {
 		if accountKey(email) == "" {
 			continue
 		}
-		account, err := s.upsertAccountFromEntry(tx, entry, &inbound)
+		account, err := s.upsertAccountFromEntry(tx, entry, &inbound, creator...)
 		if err != nil {
 			return err
 		}
@@ -503,7 +503,7 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int) error {
 // rather than leaving the addressed protocol's own to the switch that follows it.
 // That is exactly right for an account whose credentials are not yet keyed to
 // anything.
-func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]any, inbound *model.Inbound) (*model.Account, error) {
+func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]any, inbound *model.Inbound, creator ...AccountCreator) (*model.Account, error) {
 	protocol := model.Protocol("")
 	inboundId := 0
 	if inbound != nil {
@@ -524,6 +524,11 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 	switch {
 	case err == gorm.ErrRecordNotFound:
 		fresh := newAccountFromEntry(entry)
+		if len(creator) > 0 && creator[0].UserID > 0 &&
+			(creator[0].Role == "admin" || creator[0].Role == "reseller") {
+			fresh.CreatorUserId = creator[0].UserID
+			fresh.CreatorRole = creator[0].Role
+		}
 		extractAccountCredential(fresh, entry, protocol, 0, &scratch, scratchConflicts)
 		// The columns the entry carries for OTHER protocols. extractAccountCredential
 		// reads only the addressed protocol's own fields - it is the migration's
@@ -572,6 +577,8 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 	updated.Secret = account.Secret
 	updated.NaiveUser = account.NaiveUser
 	updated.CreatedAt = account.CreatedAt
+	updated.CreatorUserId = account.CreatorUserId
+	updated.CreatorRole = account.CreatorRole
 	// subId is not a credential, but it is carried forward for the same reason and
 	// only when the entry does not mention it AT ALL. A caller that omits the key
 	// (any script posting a partial client) was blanking the account's subId, and
@@ -1065,7 +1072,7 @@ func (s *AccountService) ApplyMemberships(email string, wanted []int, removable 
 // mentioned memberships. So the guard survives, narrowed to exactly that case:
 // explicit=false with nothing wanted is still a no-op, and only a caller that
 // SPOKE about memberships can empty an account.
-func (s *AccountService) ApplyMembershipsFrom(email string, anchorInboundId int, wanted []int, removable []int, explicit bool) ([]int, error) {
+func (s *AccountService) ApplyMembershipsFrom(email string, anchorInboundId int, wanted []int, removable []int, explicit bool, creator ...AccountCreator) ([]int, error) {
 	if email == "" {
 		return nil, nil
 	}
@@ -1077,7 +1084,7 @@ func (s *AccountService) ApplyMembershipsFrom(email string, anchorInboundId int,
 		// Mirror the inbound the legacy write just touched, so the account row and
 		// its first membership exist before memberships are set.
 		if anchorInboundId > 0 {
-			if err := s.SyncInboundAccounts(tx, anchorInboundId); err != nil {
+			if err := s.SyncInboundAccounts(tx, anchorInboundId, creator...); err != nil {
 				return err
 			}
 		}
@@ -1148,7 +1155,7 @@ func (s *AccountService) ApplyMembershipsFrom(email string, anchorInboundId int,
 // The membership set is the CALLER's next call (ApplyMembershipsFrom): this writes
 // the account, that decides what serves it, and keeping them apart is what lets the
 // same handler create an account on nothing and re-attach one to three inbounds.
-func (s *AccountService) SaveAccountWithoutInbound(entry map[string]any) (*model.Account, error) {
+func (s *AccountService) SaveAccountWithoutInbound(entry map[string]any, creator ...AccountCreator) (*model.Account, error) {
 	email, _ := entry["email"].(string)
 	key := accountKey(email)
 	if key == "" {
@@ -1174,7 +1181,7 @@ func (s *AccountService) SaveAccountWithoutInbound(entry map[string]any) (*model
 			return common.NewErrorf("the email %q is already in use", email)
 		}
 
-		account, err := s.upsertAccountFromEntry(tx, entry, nil)
+		account, err := s.upsertAccountFromEntry(tx, entry, nil, creator...)
 		if err != nil {
 			return err
 		}

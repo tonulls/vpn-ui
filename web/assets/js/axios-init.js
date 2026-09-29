@@ -22,7 +22,8 @@ axios.interceptors.response.use(
             const statusCode = error.response.status;
             // Check the status code
             if (statusCode === 401) { // Unauthorized
-                return window.location.reload();
+                window.location.reload();
+                return Promise.reject(error);
             }
         }
         return Promise.reject(error);

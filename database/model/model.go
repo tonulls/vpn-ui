@@ -646,6 +646,12 @@ type ClientGrePeer struct {
 type Account struct {
 	Id int `json:"id" gorm:"primaryKey;autoIncrement"`
 
+	// Creator is written only on account creation from an authenticated admin or
+	// reseller action. Empty/zero deliberately means legacy or super-admin-created,
+	// neither of which should display an attribution line in the client list.
+	CreatorUserId int    `json:"-" gorm:"column:creator_user_id;index"`
+	CreatorRole   string `json:"-" gorm:"column:creator_role"`
+
 	// Email is the identity, and is matched case-insensitively after trimming (see
 	// AccountKey). uniqueIndex here mirrors xray.ClientTraffic.Email's own unique
 	// constraint; relaxing either was rejected twice before (see

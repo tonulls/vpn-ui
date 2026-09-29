@@ -112,6 +112,16 @@
           <div class="bo-cf-hint">{{ i18n "pages.clients.bulkCommentHint" }}</div>
         </div>
 
+        <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '8px 0 12px' }">
+          <strong>{{ i18n "pages.resellers.additionalSettings" }}</strong>
+          <a-button type="link" size="small"
+            @click="clientsBulkModal.additionalOpen = !clientsBulkModal.additionalOpen">
+            <span v-if="clientsBulkModal.additionalOpen">{{ i18n "pages.resellers.collapseAdditional" }}</span>
+            <span v-else>{{ i18n "pages.resellers.expandAdditional" }}</span>
+            <a-icon :type="clientsBulkModal.additionalOpen ? 'up' : 'down'"></a-icon>
+          </a-button>
+        </div>
+        <div v-show="clientsBulkModal.additionalOpen">
         <!-- No subscription field. Every account in a batch gets its own
              subscription id, minted per account, and there is nothing here for an
              operator to decide. A field that only ever OVERRODE that (to put the
@@ -197,6 +207,7 @@
           </div>
           <a-input-number v-model="clientsBulkModal.reset" :min="0"
             :style="{ width: '96px' }"></a-input-number>
+        </div>
         </div>
       </template>
 
@@ -286,6 +297,7 @@
     title: '',
     okText: '',
     tab: 'identity',
+    additionalOpen: false,
     // Identity first because it is the whole point of a bulk add; inbounds second
     // because the answer decides what each generated account is built from;
     // preview last because it is the check you run before committing.
@@ -611,6 +623,7 @@
       this.existing = existing || {};
       this.onDone = onDone;
       this.tab = 'identity';
+      this.additionalOpen = false;
       this.quantity = 1;
       this.emailMethod = 0;
       this.firstNum = 1;
@@ -624,7 +637,10 @@
       this.delayedStart = false;
       this.pickDate = false;
       this.reset = 0;
-      this.selected = [];
+      const granted = new Set((RESELLER.inboundIds || []).map(Number));
+      this.selected = RESELLER.isReseller
+        ? this.assignable.filter(ib => granted.has(Number(ib.inboundId))).map(ib => ib.inboundId)
+        : [];
       this.visible = true;
     },
 

@@ -165,6 +165,9 @@
                       </a-tooltip>
                       <div class="bo-lg-names">
                         <div class="bo-lg-name">[[ row.email ]]</div>
+                        <div class="bo-lg-note" v-if="row.creatorRole && row.creatorName">
+                          [[ row.creatorRole === 'reseller' ? 'Р:' : 'А:' ]] [[ row.creatorName ]]
+                        </div>
                         <div class="bo-lg-note" v-if="row.comment" :title="row.comment">[[ row.comment ]]</div>
                       </div>
                     </div>
@@ -329,13 +332,18 @@
                           <a-icon type="link"></a-icon>
                           <span class="bo-mb-name">Подписка</span>
                         </div>
-                       <span class="bo-mb-cred-one bo-mb-sub-link" @click="copyText(subscriptionValue(row))">
-                         [[ subscriptionValue(row) ]] <a-icon type="copy"></a-icon>
+                       <div class="bo-mb-cred bo-mb-sub-cred">
+                          <span class="bo-mb-cred-one bo-mb-sub-link" @click="copyText(subscriptionValue(row))">
+                         <span class="bo-mb-sub-url" :title="subscriptionValue(row)">[[ subscriptionValue(row) ]]</span> <a-icon type="copy"></a-icon>
                        </span>
                      </div>
-                      <template v-for="record in accountInbounds(row)">
+                      </div>
+                       <template v-for="record in accountInbounds(row)">
                         <div class="bo-mb" :key="record.id"
-                          :class="{ off: !membershipEnabled(row, record) }"
+                          :class="{
+                             off: !membershipEnabled(row, record),
+                             'bo-mb--cred-aligned': membershipCredentials(record, client).length > 0
+                           }"
                           v-for="client in accountClientIn(row, record)">
                           <div class="bo-mb-id">
                             <!-- Live ON THIS INBOUND, not "this account is live

@@ -60,13 +60,13 @@ type Status struct {
 	// moves on every poll. CpuSpeedMhz above is the rated speed and does not: the
 	// two are both wanted, by different readouts (the spec tile states what the
 	// chip is, the vitals row states what it is doing). 0 means unknown.
-	CpuSpeedCurMhz float64 `json:"cpuSpeedCurMhz"`
-	CpuModel    string    `json:"cpuModel"`
-	OsName      string    `json:"osName"`
-	OsVersion   string    `json:"osVersion"`
-	Kernel      string    `json:"kernel"`
-	Hostname    string    `json:"hostname"`
-	Virt        VirtInfo  `json:"virt"`
+	CpuSpeedCurMhz float64  `json:"cpuSpeedCurMhz"`
+	CpuModel       string   `json:"cpuModel"`
+	OsName         string   `json:"osName"`
+	OsVersion      string   `json:"osVersion"`
+	Kernel         string   `json:"kernel"`
+	Hostname       string   `json:"hostname"`
+	Virt           VirtInfo `json:"virt"`
 	// MemHW is the memory FITTED to the machine (capacity, DDR generation,
 	// clock), read once from SMBIOS. Mem below is the live usage and moves every
 	// poll; these are two different numbers on purpose and the overview labels

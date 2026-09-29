@@ -42,6 +42,9 @@ class AllSetting {
         this.subEnable = true;
         this.subJsonEnable = false;
         this.subTitle = "";
+        this.subPageTitle = "";
+        this.subFaviconUrl = "";
+        this.subShowSupport = false;
         this.subSupportUrl = "";
         this.subProfileUrl = "";
         this.subAnnounce = "";

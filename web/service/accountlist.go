@@ -75,6 +75,25 @@ type AccountCredentials struct {
 	Security    string `json:"security,omitempty"`
 }
 
+// AccountCreator is the authenticated actor recorded only when a new account is
+// created through an admin/reseller action. Super admins intentionally map to the
+// zero value so their accounts have no attribution line.
+type AccountCreator struct {
+	UserID int
+	Role   string
+}
+
+func AccountCreatorFromUser(user *model.User) AccountCreator {
+	if user == nil || user.IsSuperAdmin {
+		return AccountCreator{}
+	}
+	role := "admin"
+	if user.IsReseller {
+		role = "reseller"
+	}
+	return AccountCreator{UserID: user.Id, Role: role}
+}
+
 // AccountRow is one line of the Clients table.
 type AccountRow struct {
 	Id         int    `json:"id"`
@@ -112,7 +131,9 @@ type AccountRow struct {
 	Credentials *AccountCredentials `json:"credentials,omitempty"`
 	// OwnedByReseller is the reseller's user id, or 0 for a house account. Shown
 	// only to whoever may already see resellers.
-	OwnedByReseller int `json:"ownedByReseller"`
+	OwnedByReseller int    `json:"ownedByReseller"`
+	CreatorRole     string `json:"creatorRole,omitempty"`
+	CreatorName     string `json:"creatorName,omitempty"`
 }
 
 // AccountListResult is one page of the Clients table.
@@ -207,6 +228,28 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 		owner[accountKey(rc.Email)] = rc.UserId
 	}
 
+	creatorIDsSet := map[int]bool{}
+	for i := range accounts {
+		if accounts[i].CreatorUserId > 0 &&
+			(accounts[i].CreatorRole == "admin" || accounts[i].CreatorRole == "reseller") {
+			creatorIDsSet[accounts[i].CreatorUserId] = true
+		}
+	}
+	creatorNames := map[int]string{}
+	if len(creatorIDsSet) > 0 {
+		creatorIDs := make([]int, 0, len(creatorIDsSet))
+		for id := range creatorIDsSet {
+			creatorIDs = append(creatorIDs, id)
+		}
+		var creators []model.User
+		if err := db.Where("id IN ?", creatorIDs).Find(&creators).Error; err != nil {
+			return nil, err
+		}
+		for i := range creators {
+			creatorNames[creators[i].Id] = creators[i].DisplayUsername()
+		}
+	}
+
 	visible, err := s.visibilityFilter(user)
 	if err != nil {
 		return nil, err
@@ -237,6 +280,11 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 			SpeedLimitDown: account.SpeedLimitDown, SpeedLimitUp: account.SpeedLimitUp,
 			UserLimitOverride: account.UserLimitOverride,
 			Memberships:       mine, OwnedByReseller: owner[key],
+		}
+		if (account.CreatorRole == "admin" || account.CreatorRole == "reseller") &&
+			creatorNames[account.CreatorUserId] != "" {
+			row.CreatorRole = account.CreatorRole
+			row.CreatorName = creatorNames[account.CreatorUserId]
 		}
 		if len(mine) == 0 {
 			// Nothing serves it, so no settings blob carries its credentials and this
