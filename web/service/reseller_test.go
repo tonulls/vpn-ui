@@ -34,6 +34,64 @@ func unlimitedReseller() model.ResellerProfile {
 	return model.ResellerProfile{Unlimited: true}
 }
 
+func TestResellerUsernamePreservesDisplayAndCanonicalizesLogin(t *testing.T) {
+	newInboundDB(t)
+	db := database.GetDB()
+	caller := &model.User{}
+	if err := db.Where("is_super_admin = ?", true).First(caller).Error; err != nil {
+		t.Fatalf("load super admin: %v", err)
+	}
+
+	service := &ResellerService{}
+	created, err := service.AddReseller(caller, ResellerSpec{
+		Username: "ReSellErOne", Password: "secure-password", Enable: true,
+	})
+	if err != nil {
+		t.Fatalf("AddReseller: %v", err)
+	}
+	if created.Username != "resellerone" || created.DisplayUsername() != "ReSellErOne" {
+		t.Fatalf("stored username = (%q, %q); want canonical and preserved spellings", created.Username, created.DisplayUsername())
+	}
+	loginUser, err := (&UserService{}).CheckUser("rEsElLeRoNe", "secure-password", "")
+	if err != nil {
+		t.Fatalf("case-insensitive reseller login: %v", err)
+	}
+	if loginUser.Username != "resellerone" {
+		t.Errorf("login key = %q; want canonical lowercase", loginUser.Username)
+	}
+
+	views, err := service.GetResellers(caller)
+	if err != nil {
+		t.Fatalf("GetResellers: %v", err)
+	}
+	if len(views) != 1 || views[0].Username != "ReSellErOne" {
+		t.Fatalf("reseller view = %+v; want original display casing", views)
+	}
+	if _, err := service.AddReseller(caller, ResellerSpec{
+		Username: "RESELLERONE", Password: "another-password", Enable: true,
+	}); !errors.Is(err, ErrResellerNameTaken) {
+		t.Errorf("case-folded duplicate reseller error = %v; want ErrResellerNameTaken", err)
+	}
+	if _, err := (&AdminService{}).AddAdmin(AdminSpec{
+		Username: "RESELLERONE", Password: "another-password", Enable: true,
+	}); !errors.Is(err, ErrAdminUsernameTaken) {
+		t.Errorf("admin/reseller alias error = %v; want ErrAdminUsernameTaken", err)
+	}
+
+	if err := service.UpdateReseller(caller, created.Id, ResellerSpec{
+		Username: "rEsElLeRoNe", Enable: true,
+	}); err != nil {
+		t.Fatalf("UpdateReseller: %v", err)
+	}
+	views, err = service.GetResellers(caller)
+	if err != nil {
+		t.Fatalf("GetResellers after update: %v", err)
+	}
+	if len(views) != 1 || views[0].Username != "rEsElLeRoNe" {
+		t.Fatalf("reseller view after update = %+v; want newly entered display casing", views)
+	}
+}
+
 func TestApplyClientLimitDefaults(t *testing.T) {
 	cm := map[string]any{
 		"limitIp": 9, "userLimitOverride": float64(8),

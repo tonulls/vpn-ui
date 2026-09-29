@@ -71,8 +71,11 @@ type ClientExternalProxy struct {
 // stores only Id for the same reason (see web/session).
 type User struct {
 	Id       int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	Username string `json:"username" gorm:"uniqueIndex"`
-	Password string `json:"-"`
+	Username string `json:"username" gorm:"uniqueIndex"` // canonical lowercase login key
+	// UsernameDisplay preserves the spelling supplied by the operator for admin
+	// lists and reseller cards. Authentication and uniqueness use Username.
+	UsernameDisplay string `json:"-" gorm:"column:username_display;not null;default:''"`
+	Password        string `json:"-"`
 
 	// Nickname is a human label for the Admins list; it carries no privilege.
 	Nickname string `json:"nickname" form:"nickname"`
@@ -105,6 +108,18 @@ type User struct {
 	// through GetAllSetting.
 	TwoFactorEnable bool   `json:"twoFactorEnable" gorm:"default:0"`
 	TwoFactorToken  string `json:"-"`
+}
+
+// DisplayUsername returns the operator-chosen spelling, falling back to the
+// canonical login for rows created before username_display was added.
+func (u *User) DisplayUsername() string {
+	if u == nil {
+		return ""
+	}
+	if u.UsernameDisplay != "" {
+		return u.UsernameDisplay
+	}
+	return u.Username
 }
 
 // InboundAccess grants one admin access to one inbound.

@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="{{ .base_path }}assets/css/components.css?{{ .asset_ver }}">
   <link rel="stylesheet" href="{{ .base_path }}assets/css/ant-bridge.css?{{ .asset_ver }}">
   <link rel="stylesheet" href="{{ .base_path }}assets/css/terminal.css?{{ .asset_ver }}">
+  {{ if .favicon_url }}<link rel="icon" href="{{ .favicon_url }}">{{ end }}
   <style>
     [v-cloak] {
       display: none;
@@ -63,7 +64,7 @@
       }
     }
   </style>
-  <title>{{ .host }} – {{ i18n .title}}</title>
+  {{ if .page_title }}<title>{{ .page_title }}</title>{{ else if .subscription_page }}<title>{{ i18n .title }}</title>{{ else }}<title>{{ .host }} – {{ i18n .title}}</title>{{ end }}
 {{ end }}
 
 {{ define "page/head_end" }}

@@ -175,5 +175,28 @@
             </template>
         </a-setting-list-item>
     </a-collapse-panel>
+    <a-collapse-panel key="5" header='{{ i18n "pages.settings.subSiteData" }}'>
+        <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.subPageTitle" }}</template>
+            <template #control>
+                <a-input type="text" v-model="allSetting.subPageTitle"
+                    placeholder='{{ i18n "subscription.title" }}'></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.subFaviconUrl" }}</template>
+            <template #control>
+                <a-input type="url" v-model="allSetting.subFaviconUrl"
+                    placeholder="https://example.com/favicon.ico"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.subShowSupport" }}</template>
+            <template #description>{{ i18n "pages.settings.subShowSupportDesc" }}</template>
+            <template #control>
+                <a-switch v-model="allSetting.subShowSupport"></a-switch>
+            </template>
+        </a-setting-list-item>
+    </a-collapse-panel>
 </a-collapse>
 {{end}}

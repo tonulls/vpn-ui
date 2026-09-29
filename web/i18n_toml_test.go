@@ -76,6 +76,8 @@ var knownMissing = keySet(
 	"pages.core.enabled", "pages.core.hideLog", "pages.core.inbounds",
 	"pages.core.initSetup", "pages.core.ipForward", "pages.core.iproute",
 	"pages.core.kernelModules", "pages.core.loaded", "pages.core.logs",
+	"pages.settings.subSiteData", "pages.settings.subPageTitle", "pages.settings.subFaviconUrl",
+	"pages.settings.subShowSupport", "pages.settings.subShowSupportDesc",
 	"pages.core.missing", "pages.core.nftables", "pages.core.noLogs",
 	"pages.core.present", "pages.core.provisionDesc", "pages.core.reRunSetup",
 	"pages.core.rebootConfirm", "pages.core.rebootDetails", "pages.core.rebootImpact",

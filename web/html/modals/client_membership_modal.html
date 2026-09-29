@@ -6,7 +6,9 @@
 <a-modal id="client-membership-modal" v-model="clientMembershipModal.visible"
   :title="clientMembershipModal.title" @ok="() => clientMembershipModal.ok()"
   @cancel="() => clientMembershipModal.close()"
-  :confirm-loading="clientMembershipModal.confirmLoading" :closable="true" :mask-closable="false"
+  :confirm-loading="clientMembershipModal.confirmLoading"
+  :ok-button-props="{ props: { disabled: !clientMembershipModal.isEdit && !clientMembershipModal.selected.length } }"
+  :closable="true" :mask-closable="false"
   :ok-text="clientMembershipModal.okText" cancel-text='{{ i18n "close" }}'
   :width="820" :class="themeSwitcher.currentTheme" wrap-class-name="bo-client-modal">
 
@@ -56,17 +58,23 @@
           @click="clientMembershipModal.tab = t.key">
           <a-icon :type="t.icon"></a-icon>
           <span>[[ t.label ]]</span>
+          <a-icon v-if="clientMembershipModal.tabHasError(t.key)"
+            type="exclamation-circle" class="bo-cf-tab-error"></a-icon>
         </button>
       </div>
     </div>
 
     <div class="bo-cf-pane">
-      <!-- Identity: who the account is AND what it is allowed. The two were
-           split across two tabs and did not need to be: an operator setting up a
-           customer sets the quota in the same breath as the name. -->
+      <!-- Identity keeps the everyday account fields visible; the optional identity
+           and quota controls live in the collapsed Additional settings section. -->
       <template v-if="clientMembershipModal.tab === 'identity'">
-        <div class="bo-cf-field">
-          <label>{{ i18n "pages.inbounds.email" }}</label>
+        <div class="bo-cf-field"
+          :class="{ 'bo-cf-field--error': clientMembershipModal.showNameError }">
+          <label>
+            {{ i18n "pages.clients.email" }}
+            <a-icon v-if="clientMembershipModal.showNameError" type="exclamation-circle"
+              class="bo-cf-error-icon"></a-icon>
+          </label>
           <a-input v-model.trim="clientMembershipModal.client.email"
                    :disabled="clientMembershipModal.isEdit">
             <a-tooltip slot="addonAfter" v-if="!clientMembershipModal.isEdit">
@@ -76,31 +84,49 @@
           </a-input>
           <div class="bo-cf-hint" v-if="clientMembershipModal.isEdit">{{ i18n "pages.clients.emailLocked" }}</div>
         </div>
-        <a-row :gutter="12">
-          <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.clients.telegramId" }}</label>
-              <a-input-number v-model="clientMembershipModal.client.tgId" :min="0"
-                placeholder='{{ i18n "pages.clients.telegramNotLinked" }}'
-                :style="{ width: '100%' }"></a-input-number>
-            </div>
-          </a-col>
-          <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "subscription.subId" }}</label>
-              <a-input v-model.trim="clientMembershipModal.client.subId">
-                <a-tooltip slot="addonAfter">
-                  <template slot="title">{{ i18n "pages.clients.regenerate" }}</template>
-                  <a-icon type="reload" @click="clientMembershipModal.regenerate('subId')"></a-icon>
-                </a-tooltip>
-              </a-input>
-            </div>
-          </a-col>
-        </a-row>
         <div class="bo-cf-field">
           <label>{{ i18n "comment" }}</label>
           <a-input v-model="clientMembershipModal.client.comment"></a-input>
         </div>
+        <div class="bo-cf-switch">
+          <div>
+            <div class="bo-cf-t">{{ i18n "pages.inbounds.enable" }}</div>
+            <div class="bo-cf-d">{{ i18n "pages.clients.enabledDesc" }}</div>
+          </div>
+          <a-switch v-model="clientMembershipModal.client.enable"></a-switch>
+        </div>
+
+        <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '8px 0 12px' }">
+          <strong>{{ i18n "pages.resellers.additionalSettings" }}</strong>
+          <a-button type="link" size="small"
+            @click="clientMembershipModal.additionalOpen = !clientMembershipModal.additionalOpen">
+            <span v-if="clientMembershipModal.additionalOpen">{{ i18n "pages.resellers.collapseAdditional" }}</span>
+            <span v-else>{{ i18n "pages.resellers.expandAdditional" }}</span>
+            <a-icon :type="clientMembershipModal.additionalOpen ? 'up' : 'down'"></a-icon>
+          </a-button>
+        </div>
+        <div v-show="clientMembershipModal.additionalOpen">
+          <a-row :gutter="12">
+            <a-col :span="12">
+              <div class="bo-cf-field">
+                <label>{{ i18n "pages.clients.telegramId" }}</label>
+                <a-input-number v-model="clientMembershipModal.client.tgId" :min="0"
+                  placeholder='{{ i18n "pages.clients.telegramNotLinked" }}'
+                  :style="{ width: '100%' }"></a-input-number>
+              </div>
+            </a-col>
+            <a-col :span="12">
+              <div class="bo-cf-field">
+                <label>{{ i18n "subscription.subId" }}</label>
+                <a-input v-model.trim="clientMembershipModal.client.subId">
+                  <a-tooltip slot="addonAfter">
+                    <template slot="title">{{ i18n "pages.clients.regenerate" }}</template>
+                    <a-icon type="reload" @click="clientMembershipModal.regenerate('subId')"></a-icon>
+                  </a-tooltip>
+                </a-input>
+              </div>
+            </a-col>
+          </a-row>
 
         <a-row :gutter="12">
           <a-col :span="12">
@@ -201,12 +227,6 @@
           <a-input-number v-model="clientMembershipModal.client.reset" :min="0"
             :style="{ width: '96px' }"></a-input-number>
         </div>
-        <div class="bo-cf-switch">
-          <div>
-            <div class="bo-cf-t">{{ i18n "pages.inbounds.enable" }}</div>
-            <div class="bo-cf-d">{{ i18n "pages.clients.enabledDesc" }}</div>
-          </div>
-          <a-switch v-model="clientMembershipModal.client.enable"></a-switch>
         </div>
       </template>
 
@@ -237,13 +257,15 @@
         <a-alert v-if="clientMembershipModal.protocolClash" type="error" show-icon
           :style="{ marginTop: '12px' }"
           message='{{ i18n "pages.clients.sameProtocolRefused" }}'></a-alert>
-        <!-- Ticking nothing is allowed and saves. It is stated here because an empty
-             checklist otherwise reads as a form that is not finished yet, and this
-             one is a decision: the account keeps everything and serves nobody. -->
-        <a-alert v-if="!clientMembershipModal.selected.length" type="warning" show-icon
-          :style="{ marginTop: '12px' }"
+        <!-- A new account needs at least one inbound. Existing accounts may remain
+             unserved, so only edits keep the explanatory no-inbounds description. -->
+        <a-alert v-if="!clientMembershipModal.selected.length && clientMembershipModal.isEdit"
+          type="warning" show-icon :style="{ marginTop: '12px' }"
           message='{{ i18n "pages.clients.noInbounds" }}'
           description='{{ i18n "pages.clients.noInboundsHint" }}'></a-alert>
+        <a-alert v-else-if="!clientMembershipModal.selected.length"
+          type="warning" show-icon :style="{ marginTop: '12px' }"
+          message='{{ i18n "pages.clients.noInbounds" }}'></a-alert>
       </template>
       <!-- Credentials: field-first, because the account stores ONE of each and
            several protocols share them. -->
@@ -251,9 +273,14 @@
         <a-alert type="info" show-icon :style="{ marginBottom: '14px' }"
           message='{{ i18n "pages.clients.credentialsHint" }}'></a-alert>
         <div class="bo-cf-field" v-for="f in clientMembershipModal.credentialFields" :key="f.key"
-          :class="{ 'bo-cf-unused': !clientMembershipModal.fieldUsed(f) }">
+          :class="{
+            'bo-cf-unused': !clientMembershipModal.fieldUsed(f),
+            'bo-cf-field--error': clientMembershipModal.credentialFieldInvalid(f)
+          }">
           <label>
             [[ f.label ]]
+            <a-icon v-if="clientMembershipModal.credentialFieldInvalid(f)"
+              type="exclamation-circle" class="bo-cf-error-icon"></a-icon>
             <a-tag v-if="clientMembershipModal.fieldUsed(f)" color="green">
               [[ clientMembershipModal.usersOf(f).join(' \u00b7 ') ]]
             </a-tag>
@@ -271,10 +298,10 @@
                an account that also holds a uuid or a password it read as a setting of
                the form rather than as part of the one credential it rides on.
 
-               Gate unchanged: adtagUsed is fieldUsed(adtagField), the same predicate
-               each row above is dimmed by, so it still comes and goes with mtproto. No
-               chip in here - the Secret label a line up already carries the same one. -->
-          <div class="bo-cf-nest" v-if="f.key === 'secret' && clientMembershipModal.adtagUsed">
+               adtagUsed ties the field to MTProto; PERMS.superAdmin limits it to superadmins.
+               It appears only on the MTProto secret row. No
+               chip is needed; the Secret label above already names its credential. -->
+          <div class="bo-cf-nest" v-if="f.key === 'secret' && clientMembershipModal.adtagUsed && PERMS.superAdmin">
             <div class="bo-cf-switch">
               <div>
                 <div class="bo-cf-t">{{ i18n "pages.xray.mtproto.adtag" }}</div>
@@ -327,16 +354,26 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.clients.limitDown" }}</label>
+            <div class="bo-cf-field"
+              :class="{ 'bo-cf-field--error': clientMembershipModal.invalidLimit(clientMembershipModal.limitDown) }">
+              <label>
+                {{ i18n "pages.clients.limitDown" }}
+                <a-icon v-if="clientMembershipModal.invalidLimit(clientMembershipModal.limitDown)"
+                  type="exclamation-circle" class="bo-cf-error-icon"></a-icon>
+              </label>
               <a-input v-model.trim="clientMembershipModal.limitDown"
                 placeholder='{{ i18n "pages.clients.limitInherit" }}'
                 addon-after="KB/s"></a-input>
             </div>
           </a-col>
           <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.clients.limitUp" }}</label>
+            <div class="bo-cf-field"
+              :class="{ 'bo-cf-field--error': clientMembershipModal.invalidLimit(clientMembershipModal.limitUp) }">
+              <label>
+                {{ i18n "pages.clients.limitUp" }}
+                <a-icon v-if="clientMembershipModal.invalidLimit(clientMembershipModal.limitUp)"
+                  type="exclamation-circle" class="bo-cf-error-icon"></a-icon>
+              </label>
               <a-input v-model.trim="clientMembershipModal.limitUp"
                 placeholder='{{ i18n "pages.clients.limitInherit" }}'
                 addon-after="KB/s"></a-input>
@@ -347,8 +384,13 @@
 
         <a-row :gutter="12" :style="{ marginTop: '14px' }">
           <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.clients.limitIp" }}</label>
+            <div class="bo-cf-field"
+              :class="{ 'bo-cf-field--error': clientMembershipModal.invalidLimit(clientMembershipModal.client.limitIp) }">
+              <label>
+                {{ i18n "pages.clients.limitIp" }}
+                <a-icon v-if="clientMembershipModal.invalidLimit(clientMembershipModal.client.limitIp)"
+                  type="exclamation-circle" class="bo-cf-error-icon"></a-icon>
+              </label>
               <!-- The one field of the three that is NOT nullable. limitIp is a plain
                    int column that predates the others, so 0 there already means
                    inherit and there is no third state to express. -->
@@ -358,8 +400,13 @@
             </div>
           </a-col>
           <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.clients.limitDevices" }}</label>
+            <div class="bo-cf-field"
+              :class="{ 'bo-cf-field--error': clientMembershipModal.invalidLimit(clientMembershipModal.limitDevices) }">
+              <label>
+                {{ i18n "pages.clients.limitDevices" }}
+                <a-icon v-if="clientMembershipModal.invalidLimit(clientMembershipModal.limitDevices)"
+                  type="exclamation-circle" class="bo-cf-error-icon"></a-icon>
+              </label>
               <a-input v-model.trim="clientMembershipModal.limitDevices"
                 placeholder='{{ i18n "pages.clients.limitInherit" }}'></a-input>
               <div class="bo-cf-hint">{{ i18n "pages.clients.limitDevicesDesc" }}</div>
@@ -393,6 +440,8 @@
     client: {},
     row: null,
     tab: 'identity',
+    additionalOpen: false,
+    nameInvalid: false,
     // The three nullable overrides, held as STRINGS while the form is open.
     //
     // A string is what lets an empty box mean "inherit" and a typed 0 mean
@@ -423,6 +472,35 @@
       return RESELLER.isReseller && RESELLER.clientLimitsEnabled
         ? this.tabs.filter(t => t.key !== 'limits')
         : this.tabs;
+    },
+    get showNameError() {
+      return this.nameInvalid && !String((this.client && this.client.email) || '').trim();
+    },
+    get missingRequiredInbound() {
+      return !this.isEdit && this.selected.length === 0;
+    },
+    get credentialsInvalid() {
+      const bytes = this.strictSsBytes;
+      return bytes > 0 && !this.validSsKey(this.client.password, bytes);
+    },
+    get limitsInvalid() {
+      return this.invalidLimit(this.client.limitIp)
+        || this.invalidLimit(this.limitDown)
+        || this.invalidLimit(this.limitUp)
+        || this.invalidLimit(this.limitDevices);
+    },
+    tabHasError(key) {
+      if (key === 'identity') return this.showNameError;
+      if (key === 'inbounds') return this.missingRequiredInbound || this.protocolClash;
+      if (key === 'credentials') return this.credentialsInvalid;
+      if (key === 'limits') return this.limitsInvalid;
+      return false;
+    },
+    invalidLimit(value) {
+      const raw = String(value === null || value === undefined ? '' : value).trim();
+      if (!raw) return false;
+      const number = Number(raw);
+      return !Number.isFinite(number) || number < 0;
     },
     // Entering the deadline as a date rather than a day count.
     pickDate: false,
@@ -516,6 +594,8 @@
       this.title = row ? '{{ i18n "pages.clients.editTitle" }}' : '{{ i18n "pages.clients.addTitle" }}';
       this.okText = row ? '{{ i18n "sure" }}' : '{{ i18n "pages.clients.add" }}';
       this.tab = 'identity';
+      this.additionalOpen = false;
+      this.nameInvalid = false;
       this.pickDate = false;
       this.daysTouched = false;
       this.storedExpiry = row ? (Number(row.expiryTime) || 0) : 0;
@@ -547,9 +627,9 @@
         this.limitUp = this.storedLimit(row.speedLimitUp);
         this.limitDevices = this.storedLimit(row.userLimitOverride);
       } else {
-        this.client = Object.assign(this.blankClient(), {
-          email: this.mint('email'), enable: true,
-        });
+        // Start with no account name; the operator can type one or explicitly
+        // request a generated value with the addon button.
+        this.client = this.blankClient();
         this.totalGb = 0;
         this.days = 0;
         this.delayedStart = false;
@@ -761,6 +841,9 @@
     fieldMintedOnSubmit(field) {
       return this.fieldRequired(field) || (field.mintIfBlank === true && this.fieldUsed(field));
     },
+    credentialFieldInvalid(field) {
+      return field.key === 'password' && this.credentialsInvalid;
+    },
     // The key length a ticked shadowsocks-2022 inbound demands, or 0.
     //
     // Only this family constrains the shared password: it must be base64 of
@@ -938,13 +1021,17 @@
     },
 
     async ok() {
+      // New accounts need a destination inbound before they can be created. The
+      // disabled modal button enforces this in the UI; keep the guard here too so
+      // keyboard or programmatic submission cannot bypass it.
+      if (!this.isEdit && !this.selected.length) return;
+
       const email = (this.client.email || '').trim();
-      if (!email) return;
-      // NOT a check on the inbound count. An account is allowed to be on none: it
-      // keeps its credentials, its quota and its usage row and simply serves no
-      // traffic until an inbound is ticked, which is what the Inbounds tab says in
-      // place of this refusal. The server enforces who may leave one that way.
-      if (this.protocolClash) return;
+      if (!email) {
+        if (!this.isEdit) this.nameInvalid = true;
+        return;
+      }
+      if (this.protocolClash || this.limitsInvalid) return;
 
       const ids = this.selected.slice().sort((a, b) => a - b);
       // Ticking a protocol whose identity field the account does not hold yet - a

@@ -125,16 +125,39 @@ func TestAddAdminHashesPasswordAndRejectsDuplicates(t *testing.T) {
 		t.Error("stored password does not verify")
 	}
 	if user.Username != "reza" {
-		t.Errorf("username = %q; want it normalized to %q", user.Username, "reza")
+		t.Errorf("canonical username = %q; want %q", user.Username, "reza")
+	}
+	if user.UsernameDisplay != "Reza" {
+		t.Errorf("display username = %q; want original casing %q", user.UsernameDisplay, "Reza")
+	}
+	if got := toAdminView(user, 0, nil).Username; got != "Reza" {
+		t.Errorf("admin view username = %q; want preserved casing %q", got, "Reza")
 	}
 	if user.IsSuperAdmin {
 		t.Error("AddAdmin must never mint a super admin")
 	}
+	loginUser, err := (&UserService{}).CheckUser("rEzA", "hunter2", "")
+	if err != nil {
+		t.Fatalf("mixed-case login should work: %v", err)
+	}
+	if loginUser.Username != "reza" || loginUser.DisplayUsername() != "Reza" {
+		t.Errorf("login user = (%q, %q); want canonical login and original display casing", loginUser.Username, loginUser.DisplayUsername())
+	}
 
-	// Case-folded duplicates must be refused: login matches exactly, and First()
-	// would silently resolve to the lower id, making the second account dead.
+	// Case-folded duplicates must be refused because login is case-insensitive; the
+	// canonical username key and its unique index stop alias accounts.
 	if _, err := s.AddAdmin(AdminSpec{Username: "REZA", Password: "other", Nickname: "", Permissions: 0, Enable: true}); !errors.Is(err, ErrAdminUsernameTaken) {
 		t.Errorf("duplicate username error = %v; want ErrAdminUsernameTaken", err)
+	}
+	if err := s.UpdateAdmin(user.Id, AdminSpec{Username: "rEzA", Enable: true}); err != nil {
+		t.Fatalf("UpdateAdmin with case-only username edit: %v", err)
+	}
+	updated := &model.User{}
+	if err := database.GetDB().First(updated, user.Id).Error; err != nil {
+		t.Fatalf("reload updated admin: %v", err)
+	}
+	if updated.Username != "reza" || updated.DisplayUsername() != "rEzA" {
+		t.Errorf("updated admin username = (%q, %q); want canonical key and latest display spelling", updated.Username, updated.DisplayUsername())
 	}
 	if _, err := s.AddAdmin(AdminSpec{Username: "nopass", Password: "", Nickname: "", Permissions: 0, Enable: true}); err == nil {
 		t.Error("an admin with no password must be refused")
@@ -142,6 +165,17 @@ func TestAddAdminHashesPasswordAndRejectsDuplicates(t *testing.T) {
 }
 
 // The panel must never be left with nobody who can administer it.
+func TestCaseFoldedAliasesOfLegacyUsernamesAreRefused(t *testing.T) {
+	s := newAdminDB(t)
+	legacy := &model.User{Username: "LegacyMix", Password: "already-hashed", Enable: true}
+	if err := database.GetDB().Create(legacy).Error; err != nil {
+		t.Fatalf("insert pre-normalization username: %v", err)
+	}
+	if _, err := s.AddAdmin(AdminSpec{Username: "legacymix", Password: "new-password", Enable: true}); !errors.Is(err, ErrAdminUsernameTaken) {
+		t.Fatalf("case-folded alias error = %v; want ErrAdminUsernameTaken", err)
+	}
+}
+
 func TestCannotStrandPanelWithoutSuperAdmin(t *testing.T) {
 	s := newAdminDB(t)
 	db := database.GetDB()
@@ -395,13 +429,17 @@ func TestUpdateUserClearsOnlyOwnTwoFactor(t *testing.T) {
 		t.Fatalf("SetTwoFactor other: %v", err)
 	}
 
-	// The super admin changes their own credentials.
-	if err := us.UpdateUser(super.Id, "renamed", "newpw"); err != nil {
+	// The super admin changes their own credentials. Login remains canonical while
+	// the exact entered casing remains visible in account lists.
+	if err := us.UpdateUser(super.Id, "ReNamed", "newpw"); err != nil {
 		t.Fatalf("UpdateUser: %v", err)
 	}
 
 	reloaded := &model.User{}
 	db.Model(model.User{}).Where("id = ?", super.Id).First(reloaded)
+	if reloaded.Username != "renamed" || reloaded.DisplayUsername() != "ReNamed" {
+		t.Errorf("renamed username = (%q, %q); want canonical login and preserved display casing", reloaded.Username, reloaded.DisplayUsername())
+	}
 	if reloaded.TwoFactorEnable || reloaded.TwoFactorToken != "" {
 		t.Error("a credential change must clear that admin's own 2FA")
 	}

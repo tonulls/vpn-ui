@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
@@ -183,7 +184,7 @@ func (a *SettingController) updateUser(c *gin.Context) {
 		return
 	}
 	user := session.GetLoginUser(c)
-	if user.Username != form.OldUsername || !crypto.CheckPasswordHash(user.Password, form.OldPassword) {
+	if !strings.EqualFold(strings.TrimSpace(user.Username), strings.TrimSpace(form.OldUsername)) || !crypto.CheckPasswordHash(user.Password, form.OldPassword) {
 		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUserError"), errors.New(I18nWeb(c, "pages.settings.toasts.originalUserPassIncorrect")))
 		return
 	}
@@ -193,7 +194,8 @@ func (a *SettingController) updateUser(c *gin.Context) {
 	}
 	err = a.userService.UpdateUser(user.Id, form.NewUsername, form.NewPassword)
 	if err == nil {
-		user.Username = form.NewUsername
+		user.Username = strings.ToLower(strings.TrimSpace(form.NewUsername))
+		user.UsernameDisplay = strings.TrimSpace(form.NewUsername)
 		user.Password, _ = crypto.HashPasswordAsBcrypt(form.NewPassword)
 		session.SetLoginUser(c, user)
 	}

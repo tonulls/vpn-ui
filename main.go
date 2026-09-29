@@ -754,7 +754,7 @@ func applyExplicitSetting(username, password string, port int, webBasePath strin
 	curPort, _ := settingService.GetPort()
 	curUser := ""
 	if u, err := userService.GetFirstUser(); err == nil && u != nil {
-		curUser = u.Username
+		curUser = u.DisplayUsername()
 	}
 	ip, url := panelAccessURL(&settingService, curPort, normPath)
 	fmt.Println("Applied panel settings:")
@@ -937,7 +937,7 @@ func collectPanelInfo(resolvePublicIP bool) panelInfo {
 	info.SSL = info.CertFile != "" && info.KeyFile != ""
 
 	if u, err := userService.GetFirstUser(); err == nil && u != nil {
-		info.Username = u.Username
+		info.Username = u.DisplayUsername()
 		info.HasDefaultCredential = u.Username == "admin" && crypto.CheckPasswordHash(u.Password, "admin")
 	}
 

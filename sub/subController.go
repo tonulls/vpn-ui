@@ -15,6 +15,9 @@ import (
 type SUBController struct {
 	subTitle         string
 	subSupportUrl    string
+	subPageTitle     string
+	subFaviconUrl    string
+	subShowSupport   bool
 	subProfileUrl    string
 	subAnnounce      string
 	subEnableRouting bool
@@ -50,6 +53,9 @@ func NewSUBController(
 	jsonRules string,
 	subTitle string,
 	subSupportUrl string,
+	subPageTitle string,
+	subFaviconUrl string,
+	subShowSupport bool,
 	subProfileUrl string,
 	subAnnounce string,
 	subEnableRouting bool,
@@ -59,6 +65,9 @@ func NewSUBController(
 	a := &SUBController{
 		subTitle:         subTitle,
 		subSupportUrl:    subSupportUrl,
+		subPageTitle:     subPageTitle,
+		subFaviconUrl:    subFaviconUrl,
+		subShowSupport:   subShowSupport,
 		subProfileUrl:    subProfileUrl,
 		subAnnounce:      subAnnounce,
 		subEnableRouting: subEnableRouting,
@@ -145,28 +154,33 @@ func (a *SUBController) subs(c *gin.Context) {
 			// subscription client has no use for them.
 			page.Configs = a.subService.ConfigLinks(subId, host, scheme, hostWithPort, a.subPath)
 			c.HTML(200, "subpage.html", gin.H{
-				"title":        "subscription.title",
-				"cur_ver":      config.GetVersion(),
-				"asset_ver":    config.GetAssetVersion(),
-				"host":         page.Host,
-				"base_path":    page.BasePath,
-				"sId":          page.SId,
-				"download":     page.Download,
-				"upload":       page.Upload,
-				"total":        page.Total,
-				"used":         page.Used,
-				"remained":     page.Remained,
-				"expire":       page.Expire,
-				"lastOnline":   page.LastOnline,
-				"datepicker":   page.Datepicker,
-				"downloadByte": page.DownloadByte,
-				"uploadByte":   page.UploadByte,
-				"totalByte":    page.TotalByte,
-				"subUrl":       page.SubUrl,
-				"subJsonUrl":   page.SubJsonUrl,
-				"subClashUrl":  page.SubClashUrl,
-				"result":       page.Result,
-				"configs":      page.Configs,
+				"title":             "subscription.title",
+				"page_title":        a.subPageTitle,
+				"subscription_page": true,
+				"favicon_url":       a.subFaviconUrl,
+				"support_url":       a.subSupportUrl,
+				"show_support":      a.subShowSupport,
+				"cur_ver":           config.GetVersion(),
+				"asset_ver":         config.GetAssetVersion(),
+				"host":              page.Host,
+				"base_path":         page.BasePath,
+				"sId":               page.SId,
+				"download":          page.Download,
+				"upload":            page.Upload,
+				"total":             page.Total,
+				"used":              page.Used,
+				"remained":          page.Remained,
+				"expire":            page.Expire,
+				"lastOnline":        page.LastOnline,
+				"datepicker":        page.Datepicker,
+				"downloadByte":      page.DownloadByte,
+				"uploadByte":        page.UploadByte,
+				"totalByte":         page.TotalByte,
+				"subUrl":            page.SubUrl,
+				"subJsonUrl":        page.SubJsonUrl,
+				"subClashUrl":       page.SubClashUrl,
+				"result":            page.Result,
+				"configs":           page.Configs,
 			})
 			return
 		}

@@ -3,6 +3,7 @@ package service
 import (
 	"crypto/subtle"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database"
@@ -36,17 +37,16 @@ func (s *UserService) GetFirstUser() (*model.User, error) {
 }
 
 func (s *UserService) CheckUser(username string, password string, twoFactorCode string) (*model.User, error) {
-	// Admin and reseller creation normalizes usernames to lowercase. Apply the
-	// same normalization at login so the credentials work regardless of the
-	// capitalization entered in the login form.
+	// Usernames are stored under a lowercase canonical login key while their
+	// original spelling is kept separately for display. Normalize login input too.
 	username = normalizeUsername(username)
 	db := database.GetDB()
 
 	user := &model.User{}
 
 	err := db.Model(model.User{}).
-		// Legacy installs may still contain mixed-case usernames. Login normalizes
-		// input, so compare case-insensitively while migration catches up.
+		// Legacy databases may still contain a mixed-case canonical field; keep
+		// those existing accounts able to sign in.
 		Where("LOWER(username) = ?", username).
 		First(user).
 		Error
@@ -141,7 +141,19 @@ func verifyTOTP(secret, code string) bool {
 }
 
 func (s *UserService) UpdateUser(id int, username string, password string) error {
+	usernameDisplay := strings.TrimSpace(username)
+	if usernameDisplay == "" {
+		return errors.New("username can not be empty")
+	}
 	db := database.GetDB()
+	var adminService AdminService
+	taken, err := adminService.usernameTaken(db, normalizeUsername(usernameDisplay), id)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return ErrAdminUsernameTaken
+	}
 	hashedPassword, err := crypto.HashPasswordAsBcrypt(password)
 
 	if err != nil {
@@ -154,7 +166,8 @@ func (s *UserService) UpdateUser(id int, username string, password string) error
 	return db.Model(model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"username":          username,
+			"username":          normalizeUsername(usernameDisplay),
+			"username_display":  usernameDisplay,
 			"password":          hashedPassword,
 			"two_factor_enable": false,
 			"two_factor_token":  "",
@@ -163,7 +176,8 @@ func (s *UserService) UpdateUser(id int, username string, password string) error
 }
 
 func (s *UserService) UpdateFirstUser(username string, password string) error {
-	if username == "" {
+	usernameDisplay := strings.TrimSpace(username)
+	if usernameDisplay == "" {
 		return errors.New("username can not be empty")
 	} else if password == "" {
 		return errors.New("password can not be empty")
@@ -178,7 +192,8 @@ func (s *UserService) UpdateFirstUser(username string, password string) error {
 	user := &model.User{}
 	err := db.Model(model.User{}).First(user).Error
 	if database.IsNotFound(err) {
-		user.Username = username
+		user.Username = normalizeUsername(usernameDisplay)
+		user.UsernameDisplay = usernameDisplay
 		user.Password = hashedPassword
 		// Seeding from scratch (CLI recovery): must be a usable super admin, or the
 		// panel comes up with an account that cannot manage anything.
@@ -188,7 +203,16 @@ func (s *UserService) UpdateFirstUser(username string, password string) error {
 	} else if err != nil {
 		return err
 	}
-	user.Username = username
+	var adminService AdminService
+	taken, err := adminService.usernameTaken(db, normalizeUsername(usernameDisplay), user.Id)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return ErrAdminUsernameTaken
+	}
+	user.Username = normalizeUsername(usernameDisplay)
+	user.UsernameDisplay = usernameDisplay
 	user.Password = hashedPassword
 	return db.Save(user).Error
 }
@@ -198,7 +222,8 @@ func (s *UserService) UpdateFirstUser(username string, password string) error {
 // --pass is given, so an operator can rename the admin without re-supplying the
 // password.
 func (s *UserService) SetFirstUsername(username string) error {
-	if username == "" {
+	usernameDisplay := strings.TrimSpace(username)
+	if usernameDisplay == "" {
 		return errors.New("username can not be empty")
 	}
 	db := database.GetDB()
@@ -206,7 +231,16 @@ func (s *UserService) SetFirstUsername(username string) error {
 	if err := db.Model(model.User{}).First(user).Error; err != nil {
 		return err
 	}
-	user.Username = username
+	var adminService AdminService
+	taken, err := adminService.usernameTaken(db, normalizeUsername(usernameDisplay), user.Id)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return ErrAdminUsernameTaken
+	}
+	user.Username = normalizeUsername(usernameDisplay)
+	user.UsernameDisplay = usernameDisplay
 	return db.Save(user).Error
 }
 

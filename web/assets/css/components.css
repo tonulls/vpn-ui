@@ -1274,8 +1274,16 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   font-weight:600; box-shadow:0 1px 2px rgba(16,24,40,.07);
 }
 .bo-cf-tab:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.bo-cf-tab-error { color:var(--error); font-size:14px; }
 
 .bo-cf-field { margin-bottom:14px; }
+.bo-cf-field.bo-cf-field--error > label { color:var(--error); }
+.bo-cf-error-icon { color:var(--error); font-size:14px; }
+.bo-cf-field--error .ant-input,
+.bo-cf-field--error .ant-input-group-addon {
+  border-color:var(--error) !important;
+  box-shadow:0 0 0 2px var(--error-weak) !important;
+}
 .bo-cf-field > label {
   display:flex; align-items:center; gap:6px; flex-wrap:wrap;
   font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:5px;
@@ -1692,7 +1700,8 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
    were pure empty space in a panel that is short of vertical room. They belong
    to one account, so they are one list. */
 .bo-mb-list {
-  display:flex; flex-direction:column;
+  display:flex; flex-direction:column; width:100%; max-width:100%; min-width:0;
+  box-sizing:border-box;
   border:1px solid var(--border); border-radius:9px;
   background:var(--surface); overflow:hidden;
 }
@@ -1755,6 +1764,11 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);
 }
 .bo-mb-cred-v { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bo-mb-sub-link {
+  flex:1 1 260px; min-width:0; white-space:normal; overflow-wrap:anywhere;
+  font-family:var(--font-mono, ui-monospace, monospace); font-size:12px; color:var(--text-2);
+}
+.bo-mb-sub-link .anticon { flex:0 0 auto; font-size:12px; }
 .bo-mb-cred .anticon { flex:0 0 auto; font-size:12px; }
 /* A share link is far too long for the cell, so the tooltip carries the whole of it
    and wraps rather than running off the edge of the screen. */

@@ -96,6 +96,39 @@
         background: rgba(0, 0, 0, 0.05);
         border-color: rgba(0, 0, 0, 0.14);
     }
+
+    .subscription-page .subscription-card .ant-card-extra {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .subscription-page .subscription-settings-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        line-height: 1;
+    }
+
+    .subscription-page .subscription-settings-button .anticon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        vertical-align: middle;
+    }
+
+    .subscription-page .subscription-support-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 8px;
+        line-height: 1;
+    }
 </style>
 {{ template "page/head_end" .}}
 
@@ -112,6 +145,10 @@
                         </a-space>
                     </template>
                     <template #extra>
+                        <a href="{{ .support_url }}" target="_blank" rel="noopener noreferrer"
+                            class="ant-btn subscription-support-button" v-if="{{ if and .show_support .support_url }}true{{ else }}false{{ end }}">
+                            <span aria-hidden="true">📟</span><span>Support</span>
+                        </a>
                         <a-popover :overlay-class-name="themeSwitcher.currentTheme" title='{{ i18n "menu.settings" }}'
                             placement="bottomRight" trigger="click">
                             <template #content>
@@ -130,7 +167,8 @@
                                     </a-select>
                                 </a-space>
                             </template>
-                            <a-button shape="circle" icon="setting"></a-button>
+                            <a-button shape="circle" icon="setting"
+                                class="subscription-settings-button"></a-button>
                         </a-popover>
                     </template>
 

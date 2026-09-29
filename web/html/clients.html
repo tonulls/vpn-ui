@@ -147,6 +147,7 @@
                   :pagination="pagination"
                   :scroll="{ x: 1100 }"
                   :expanded-row-keys="expandedRowKeys"
+                  :expand-row-by-click="true"
                   v-on="{ expandedRowsChange: keys => { expandedRowKeys = keys; } }"
                   @change="onTableChange"
                   size="middle">
@@ -245,7 +246,7 @@
                        HOVER by default, which inside a table means a menu opening
                        every time the pointer crosses a row. -->
                   <template slot="rowCol" slot-scope="text, row">
-                    <div class="bo-lg-acts">
+                    <div class="bo-lg-acts" @click.stop>
                       <a-tooltip>
                         <template slot="title">{{ i18n "pages.inbounds.enable" }}</template>
                         <a-switch size="small" :checked="!!row.enable"
@@ -322,13 +323,16 @@
                        The v-for alias is called `record` because clientActionIcons
                        reads `record` as the inbound its client belongs to. -->
                   <template slot="expandedRowRender" slot-scope="row">
-                    <div v-if="row.subId" class="bo-mb" :style="{ marginBottom: '10px' }">
-                       <span class="bo-mb-name">Подписка</span>
-                       <span class="bo-mb-cred-one" @click="copyText(subscriptionValue(row))">
+                     <div class="bo-mb-list" @click.stop>
+                      <div v-if="row.subId" class="bo-mb bo-mb-sub">
+                       <div class="bo-mb-id">
+                          <a-icon type="link"></a-icon>
+                          <span class="bo-mb-name">Подписка</span>
+                        </div>
+                       <span class="bo-mb-cred-one bo-mb-sub-link" @click="copyText(subscriptionValue(row))">
                          [[ subscriptionValue(row) ]] <a-icon type="copy"></a-icon>
                        </span>
                      </div>
-                     <div class="bo-mb-list">
                       <template v-for="record in accountInbounds(row)">
                         <div class="bo-mb" :key="record.id"
                           :class="{ off: !membershipEnabled(row, record) }"
@@ -551,12 +555,9 @@
       ],
     },
     computed: {
-      // Fixed widths on everything except Serving, which is the one column whose
-      // content genuinely varies and so is the one that should absorb the slack.
-      // The four fixed ones are deliberately tight: three protocol chips need
-      // about 330px, and at the widths this started with Serving fell just under
-      // that, so a three-inbound account wrapped onto two lines and stood a head
-      // taller than every row around it.
+      // Fixed widths keep the account list predictable: the account identity gets
+      // 150px, expiry 125px, and the protocol chips 192px. Serving is capped in the
+      // cell itself, so the table does not let many memberships stretch the layout.
       //
       // No column carries a sorter. The orderings this page offers are not columns:
       // three of the five are about state, and "newest" has no column at all. Header
@@ -567,10 +568,10 @@
           title, key, scopedSlots: { customRender: slot },
         }, extra || {});
         return [
-          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 200 }),
+          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 150 }),
           col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 140 }),
-          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 150 }),
-          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol'),
+          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 125 }),
+          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 192 }),
           col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol', { width: 100 }),
           // 104 fitted a switch and a menu button. The Account Info button made three
           // controls, which overflowed the cell and gave the whole table a horizontal
@@ -976,7 +977,13 @@
         const xrayNative = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http', 'dokodemo-door', 'wireguard'];
         return xrayNative.includes(k) ? 'xray' : 'vpn';
       },
-      subscriptionValue(row) { return row.subId || ''; },
+      subscriptionValue(row) {
+        const subId = row && row.subId ? String(row.subId) : '';
+        if (!subId) return '';
+        const subURI = this.subSettings && this.subSettings.subURI
+          ? String(this.subSettings.subURI) : '';
+        return subURI + subId;
+      },
        async copyText(value) {
         if (!value) return;
         const ok = await ClipboardManager.copyText(value);

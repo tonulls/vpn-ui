@@ -46,7 +46,7 @@ type AdminView struct {
 func toAdminView(u *model.User, inbounds int64, inboundIds []int) AdminView {
 	return AdminView{
 		Id:                u.Id,
-		Username:          u.Username,
+		Username:          u.DisplayUsername(),
 		Nickname:          u.Nickname,
 		IsSuperAdmin:      u.IsSuperAdmin,
 		Enable:            u.Enable,
@@ -108,23 +108,24 @@ func (s *AdminService) GetAdmins() ([]AdminView, error) {
 	return out, nil
 }
 
-// normalizeUsername trims and lowercases. Usernames are matched exactly at login
-// against a unique index, so folding case here stops "Admin" and "admin" from
-// being two accounts that look identical in the list.
+// normalizeUsername returns the canonical login key. The original trimmed spelling
+// is stored separately for display; this key keeps login and uniqueness case-insensitive.
 func normalizeUsername(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func (s *AdminService) usernameTaken(db *gorm.DB, username string, exceptId int) (bool, error) {
-	var n int64
-	q := db.Model(model.User{}).Where("username = ?", username)
-	if exceptId > 0 {
-		q = q.Where("id != ?", exceptId)
-	}
-	if err := q.Count(&n).Error; err != nil {
+	username = normalizeUsername(username)
+	var users []model.User
+	if err := db.Model(&model.User{}).Select("id", "username").Find(&users).Error; err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	for _, user := range users {
+		if user.Id != exceptId && normalizeUsername(user.Username) == username {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // AdminSpec is the mutable shape of an admin as the Admins UI submits it. A struct
@@ -156,14 +157,15 @@ func (spec *AdminSpec) validate() error {
 // AddAdmin creates an admin. Password is required and always bcrypt-hashed here:
 // nothing downstream will retro-hash it.
 func (s *AdminService) AddAdmin(spec AdminSpec) (*model.User, error) {
-	spec.Username = normalizeUsername(spec.Username)
+	spec.Username = strings.TrimSpace(spec.Username)
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
 	if spec.Password == "" {
 		return nil, errors.New("password is required")
 	}
-	username := spec.Username
+	usernameDisplay := spec.Username
+	username := normalizeUsername(usernameDisplay)
 	db := database.GetDB()
 	taken, err := s.usernameTaken(db, username, 0)
 	if err != nil {
@@ -178,6 +180,7 @@ func (s *AdminService) AddAdmin(spec AdminSpec) (*model.User, error) {
 	}
 	user := &model.User{
 		Username:          username,
+		UsernameDisplay:   usernameDisplay,
 		Password:          hash,
 		Nickname:          strings.TrimSpace(spec.Nickname),
 		Permissions:       spec.Permissions,
@@ -230,11 +233,12 @@ func (s *AdminService) UpdateAdmin(id int, spec AdminSpec) error {
 		return ErrAdminNotFound
 	}
 
-	spec.Username = normalizeUsername(spec.Username)
+	spec.Username = strings.TrimSpace(spec.Username)
 	if err := spec.validate(); err != nil {
 		return err
 	}
-	username := spec.Username
+	usernameDisplay := spec.Username
+	username := normalizeUsername(usernameDisplay)
 	taken, err := s.usernameTaken(db, username, id)
 	if err != nil {
 		return err
@@ -257,6 +261,7 @@ func (s *AdminService) UpdateAdmin(id int, spec AdminSpec) error {
 
 	updates := map[string]any{
 		"username":           username,
+		"username_display":   usernameDisplay,
 		"nickname":           strings.TrimSpace(spec.Nickname),
 		"permissions":        spec.Permissions,
 		"enable":             spec.Enable,

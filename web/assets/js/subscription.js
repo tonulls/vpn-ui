@@ -50,12 +50,36 @@
     window.location.href = url;
   }
 
-  function drawQR(value) {
+  function drawQR(elementId, value) {
+    const canvas = document.getElementById(elementId);
+    if (!canvas || !value || typeof QRious !== 'function') return false;
     try {
-      new QRious({ element: document.getElementById('qrcode'), value, size: 220 });
+      new QRious({ element: canvas, value, size: 220 });
+      return true;
     } catch (e) {
-      console.warn(e);
+      // Keep the page usable when a browser canvas implementation cannot draw yet;
+      // the scheduled redraw below gets another chance after layout/paint settles.
+      console.warn('Subscription QR render failed:', e);
+      return false;
     }
+  }
+
+  function renderSubscriptionQRs(vm) {
+    drawQR('qrcode', vm.app.subUrl);
+    if (vm.app.subJsonUrl) drawQR('qrcode-subjson', vm.app.subJsonUrl);
+    if (vm.app.subClashUrl) drawQR('qrcode-subclash', vm.app.subClashUrl);
+  }
+
+  function scheduleSubscriptionQRRender(vm) {
+    vm.$nextTick(() => {
+      // The QR canvases live inside Ant Design Vue components. Wait until Vue has
+      // completed its DOM patch and the browser has had a paint opportunity before
+      // drawing; then retry once in case the first paint/layout was deferred.
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => renderSubscriptionQRs(vm));
+      });
+      window.setTimeout(() => renderSubscriptionQRs(vm), 300);
+    });
   }
 
   // Try to extract a human label (email/ps) from different link types
@@ -123,22 +147,19 @@
       const sc = tpl ? tpl.getAttribute('data-subclash-url') : '';
       if (sj) this.app.subJsonUrl = sj;
       if (sc) this.app.subClashUrl = sc;
-      drawQR(this.app.subUrl);
-      try {
-        const elJson = document.getElementById('qrcode-subjson');
-        if (elJson && this.app.subJsonUrl) {
-          new QRious({ element: elJson, value: this.app.subJsonUrl, size: 220 });
-        }
-        const elClash = document.getElementById('qrcode-subclash');
-        if (elClash && this.app.subClashUrl) {
-          new QRious({ element: elClash, value: this.app.subClashUrl, size: 220 });
-        }
-      } catch (e) { /* ignore */ }
+      scheduleSubscriptionQRRender(this);
+      this._onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') scheduleSubscriptionQRRender(this);
+      };
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
       this._onResize = () => { this.viewportWidth = window.innerWidth; };
       window.addEventListener('resize', this._onResize);
     },
     beforeDestroy() {
       if (this._onResize) window.removeEventListener('resize', this._onResize);
+      if (this._onVisibilityChange) {
+        document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      }
     },
     computed: {
       isMobile() {

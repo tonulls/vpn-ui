@@ -56,6 +56,9 @@ var defaultValueMap = map[string]string{
 	"subEnable":                   "false",
 	"subJsonEnable":               "false",
 	"subTitle":                    "",
+	"subPageTitle":                "",
+	"subFaviconUrl":               "",
+	"subShowSupport":              "false",
 	"subSupportUrl":               "",
 	"subProfileUrl":               "",
 	"subAnnounce":                 "",
@@ -677,6 +680,18 @@ func (s *SettingService) GetSubJsonEnable() (bool, error) {
 
 func (s *SettingService) GetSubTitle() (string, error) {
 	return s.getString("subTitle")
+}
+
+func (s *SettingService) GetSubPageTitle() (string, error) {
+	return s.getString("subPageTitle")
+}
+
+func (s *SettingService) GetSubFaviconUrl() (string, error) {
+	return s.getString("subFaviconUrl")
+}
+
+func (s *SettingService) GetSubShowSupport() (bool, error) {
+	return s.getBool("subShowSupport")
 }
 
 func (s *SettingService) GetSubSupportUrl() (string, error) {

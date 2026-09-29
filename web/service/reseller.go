@@ -1227,7 +1227,7 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 		}
 		out = append(out, ResellerView{
 			Id:                  u.Id,
-			Username:            u.Username,
+			Username:            u.DisplayUsername(),
 			Nickname:            u.Nickname,
 			Enable:              u.Enable,
 			TwoFactorEnable:     u.TwoFactorEnable,
@@ -1363,10 +1363,12 @@ func validateClientLimitDefaults(spec ResellerSpec) error {
 
 // AddReseller creates a reseller and its profile.
 func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*model.User, error) {
-	spec.Username = normalizeUsername(spec.Username)
+	spec.Username = strings.TrimSpace(spec.Username)
 	if spec.Username == "" {
 		return nil, errors.New("username is required")
 	}
+	usernameDisplay := spec.Username
+	username := normalizeUsername(usernameDisplay)
 	if spec.Password == "" {
 		return nil, errors.New("password is required")
 	}
@@ -1379,7 +1381,7 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 
 	db := database.GetDB()
 	var adminService AdminService
-	taken, err := adminService.usernameTaken(db, spec.Username, 0)
+	taken, err := adminService.usernameTaken(db, username, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1392,10 +1394,11 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 	}
 
 	user := &model.User{
-		Username: spec.Username,
-		Password: hash,
-		Nickname: strings.TrimSpace(spec.Nickname),
-		Enable:   spec.Enable,
+		Username:        username,
+		UsernameDisplay: usernameDisplay,
+		Password:        hash,
+		Nickname:        strings.TrimSpace(spec.Nickname),
+		Enable:          spec.Enable,
 		// Never a super admin, and the stored mask stays 0: the role derives it
 		// (see model.Can), so a future demotion lands them with nothing rather
 		// than with a stale grant.
@@ -1479,10 +1482,12 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 	if err != nil {
 		return err
 	}
-	spec.Username = normalizeUsername(spec.Username)
+	spec.Username = strings.TrimSpace(spec.Username)
 	if spec.Username == "" {
 		return errors.New("username is required")
 	}
+	usernameDisplay := spec.Username
+	username := normalizeUsername(usernameDisplay)
 	if err := s.assertAssignable(caller, spec.InboundIds); err != nil {
 		return err
 	}
@@ -1492,7 +1497,7 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 
 	db := database.GetDB()
 	var adminService AdminService
-	taken, err := adminService.usernameTaken(db, spec.Username, id)
+	taken, err := adminService.usernameTaken(db, username, id)
 	if err != nil {
 		return err
 	}
@@ -1501,9 +1506,10 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 	}
 
 	updates := map[string]any{
-		"username": spec.Username,
-		"nickname": strings.TrimSpace(spec.Nickname),
-		"enable":   spec.Enable,
+		"username":         username,
+		"username_display": usernameDisplay,
+		"nickname":         strings.TrimSpace(spec.Nickname),
+		"enable":           spec.Enable,
 		// Re-asserted on every save so a row that acquired a mask some other way
 		// cannot keep it.
 		"permissions":    model.Permission(0),

@@ -34,7 +34,7 @@ func TestCliSettingMutations(t *testing.T) {
 	}
 
 	// Create the first admin, verify the password hashes and checks out.
-	if err := userService.UpdateFirstUser("alice", "secret-pw"); err != nil {
+	if err := userService.UpdateFirstUser("Alice", "secret-pw"); err != nil {
 		t.Fatalf("UpdateFirstUser: %v", err)
 	}
 	u, err := userService.GetFirstUser()
@@ -42,7 +42,10 @@ func TestCliSettingMutations(t *testing.T) {
 		t.Fatalf("GetFirstUser: %v", err)
 	}
 	if u.Username != "alice" {
-		t.Errorf("username = %q, want alice", u.Username)
+		t.Errorf("canonical username = %q, want alice", u.Username)
+	}
+	if u.DisplayUsername() != "Alice" {
+		t.Errorf("display username = %q, want Alice", u.DisplayUsername())
 	}
 	if !crypto.CheckPasswordHash(u.Password, "secret-pw") {
 		t.Fatal("password hash does not verify against secret-pw")
@@ -50,12 +53,15 @@ func TestCliSettingMutations(t *testing.T) {
 	oldHash := u.Password
 
 	// --user WITHOUT --pass path: rename only; the password hash must be UNTOUCHED.
-	if err := userService.SetFirstUsername("bob"); err != nil {
+	if err := userService.SetFirstUsername("BoB"); err != nil {
 		t.Fatalf("SetFirstUsername: %v", err)
 	}
 	u2, _ := userService.GetFirstUser()
 	if u2.Username != "bob" {
-		t.Errorf("username after rename = %q, want bob", u2.Username)
+		t.Errorf("canonical username after rename = %q, want bob", u2.Username)
+	}
+	if u2.DisplayUsername() != "BoB" {
+		t.Errorf("display username after rename = %q, want BoB", u2.DisplayUsername())
 	}
 	if u2.Password != oldHash {
 		t.Error("SetFirstUsername changed the password hash — it must preserve it")

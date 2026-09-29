@@ -167,6 +167,21 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		SubSupportUrl = ""
 	}
 
+	SubPageTitle, err := s.settingService.GetSubPageTitle()
+	if err != nil {
+		SubPageTitle = ""
+	}
+
+	SubFaviconUrl, err := s.settingService.GetSubFaviconUrl()
+	if err != nil {
+		SubFaviconUrl = ""
+	}
+
+	SubShowSupport, err := s.settingService.GetSubShowSupport()
+	if err != nil {
+		SubShowSupport = false
+	}
+
 	SubProfileUrl, err := s.settingService.GetSubProfileUrl()
 	if err != nil {
 		SubProfileUrl = ""
@@ -266,6 +281,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	s.sub = NewSUBController(
 		g, LinksPath, JsonPath, ClashPath, subJsonEnable, subClashEnable, Encrypt, ShowInfo, RemarkModel, SubUpdates,
 		SubJsonFragment, SubJsonNoises, SubJsonMux, SubJsonRules, SubTitle, SubSupportUrl,
+		SubPageTitle, SubFaviconUrl, SubShowSupport,
 		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules)
 
 	return engine, nil

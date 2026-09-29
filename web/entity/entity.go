@@ -56,7 +56,10 @@ type AllSetting struct {
 	// Subscription server settings
 	SubEnable                   bool   `json:"subEnable" form:"subEnable"`                                     // Enable subscription server
 	SubJsonEnable               bool   `json:"subJsonEnable" form:"subJsonEnable"`                             // Enable JSON subscription endpoint
-	SubTitle                    string `json:"subTitle" form:"subTitle"`                                       // Subscription title
+	SubTitle                    string `json:"subTitle" form:"subTitle"`                                       // Subscription title for client configuration
+	SubPageTitle                string `json:"subPageTitle" form:"subPageTitle"`                               // Browser title for the subscription page
+	SubFaviconUrl               string `json:"subFaviconUrl" form:"subFaviconUrl"`                             // Favicon URL for the subscription page
+	SubShowSupport              bool   `json:"subShowSupport" form:"subShowSupport"`                           // Show support link on the subscription page
 	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Subscription support URL
 	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Subscription profile URL
 	SubAnnounce                 string `json:"subAnnounce" form:"subAnnounce"`                                 // Subscription announce
