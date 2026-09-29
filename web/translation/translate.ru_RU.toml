@@ -110,6 +110,13 @@
 "link" = "Управление"
 
 [pages.core]
+"subtitle" = "Состояние и управление всеми серверными ядрами"
+"availableCoresTitle" = "More cores available"
+"availableCoresDesc" = "Эти ядра ещё не установлены на этом сервере:"
+"pickerSetupDesc" = "Выберите VPN-ядра, которые должны работать на этом сервере. Устанавливаются только выбранные ядра; позже их можно добавлять и удалять. Xray, RADIUS и SSH встроены в панель и доступны всегда."
+"pickerAddDesc" = "Установить дополнительные ядра на этот сервер. Уже установленные ядра продолжат работать без изменений."
+"pickerUninstallDesc" = "Удалить ядра с этого сервера. Общие зависимости оставляем, если они нужны сохраняемому ядру (например, IPsec требуется L2TP и IKEv2). Ядро с входящими подключениями нельзя удалить, пока вы не удалите эти подключения."
+"provisionDesc" = "Загрузить необходимые модули ядра и включить IP forwarding. Операцию можно безопасно запускать повторно."
 "configTitle" = "Расширенный редактор конфигурации"
 "configIntro" = "Панель формирует этот файл из настроек входящих подключений. Сохранение правки замораживает файл: входящие подключения и клиенты, добавленные позже, в него не попадут, а в ядрах, которые читают из него список клиентов, они не смогут подключиться, пока вы не вернёте файл к значению по умолчанию. Панель проверяет что может и возвращает прежний текст, если ядро не запускается, но конфигурацию, которая запустилась и работает неправильно, она распознать не в состоянии."
 "configDanger" = "Этот файл генерируется. Неверная правка остановит ядро, и все его клиенты потеряют связь."
@@ -266,6 +273,7 @@
 "getConfigError" = "Произошла ошибка при получении конфигурационного файла"
 
 [pages.inbounds]
+
 "inboundMembership" = "Inbounds"
 "inboundMembershipDesc" = "The inbounds this one account is served on. It keeps the same email, the same traffic allowance and the same expiry on every one of them. Unticking an inbound removes the account from it. The inbound this form was opened from stays ticked."
 "selectAllInbounds" = "Select all"
@@ -446,7 +454,7 @@
 "previewMore" = "more"
 "previewEmpty" = "This batch would create nothing. Check the count, or the first and last numbers."
 "bulkInboundHint" = "Every account in this batch is created on this inbound. Pick another from the Add Bulk menu to target a different one."
-"bulkCredentialsHint" = "The server mints each account its own credentials. Change them one at a time from the client list."
+"bulkCredentialsHint" = "Сервер создаёт отдельные учётные данные для каждой учётной записи. Изменять их можно по одной записи в списке клиентов."
 "bulkCommentHint" = "Added to every account in the batch."
 "usePickDate" = "Pick a date"
 "useDuration" = "Use a duration"
@@ -467,7 +475,7 @@
 "limitDevicesClamp" = "Лимит устройств может быть только меньше, чем у подключения. Большее число уменьшается до значения подключения, потому что адреса каждой учетной записи выделяются блоком такого размера."
 "telegramId" = "Telegram chat ID"
 "telegramNotLinked" = "Not linked"
-"enabledDesc" = "Off suspends the account on every inbound at once."
+"enabledDesc" = "При отключении учётная запись сразу приостанавливается на всех входящих подключениях."
 "summaryUsed" = "Used"
 "summaryLeft" = "Left"
 "summaryExpires" = "Expires"
@@ -481,12 +489,13 @@
 "nothingToHandOver" = "Для этого протокола нечего передавать."
 "subGap" = "GRE не входит в подписку."
 "renewEvery" = "Renew every"
-"renewDesc" = "Traffic resets on this cycle. 0 turns it off."
-"delayedStartDesc" = "The clock begins when they first connect, not when you save."
+"renewDesc" = "Трафик сбрасывается согласно этому циклу. Значение 0 отключает сброс."
+"delayedStartDesc" = "Отсчёт начнётся при первом подключении клиента, а не после сохранения."
 "emailLocked" = "Locked while editing: it is the account's identity."
 "credentialWarn" = "Changing one of these logs the account out of every inbound that uses it, until the subscriber updates their config."
 "credentials" = "Credentials"
-"credentialsHint" = "One set per account, shared by every inbound serving it. A field is only used by the protocols listed beside it."
+"credentialsHint" = "Один набор учётных данных на аккаунт, общий для всех обслуживающих его входящих подключений. Каждое поле используется только протоколами, указанными рядом."
+"nothingBlocking" = "Ничто не препятствует сохранению."
 "uuid" = "UUID"
 "vpnUsername" = "VPN username"
 "auth" = "Auth"
@@ -541,6 +550,18 @@
 "sharedUsage" = "общий"
 "sharedUsageHint" = "Xray считает трафик по аккаунту, а не по входящему подключению, поэтому это оставшийся расход аккаунта, общий для всех обслуживающих его входящих Xray."
 "onlineShared" = "В сети, на одном из Xray-входов этой учётной записи. Xray не сообщает, на каком именно."
+
+[pages.inbounds.form]
+"identityDesc" = "Название входящего подключения и адрес, на котором оно ожидает соединения."
+"protocolDesc" = "Параметры, доступные только для протокола"
+"accessLimitsDesc" = "Сколько устройств или адресов может использовать одна учётная запись и что произойдёт при достижении лимита."
+"quotaDesc" = "Значения сохраняются в настройках входящего подключения и одинаковы для всех его протоколов."
+"externalProxyDesc" = "Укажите для клиентов другой адрес или порт вместо тех, на которых слушает это подключение."
+"sniffingDesc" = "Какие данные о соединении ядро анализирует для выбора маршрута."
+"transportDesc" = "Как передаются данные, а также параметры сокета и заключительная маскировка."
+"securityTlsDesc" = "Настройки TLS, REALITY и сертификата, который предъявляет это входящее подключение."
+"securityOtherDesc" = "Сертификат и секреты, используемые этим протоколом для аутентификации."
+"nothingBlocking" = "Ничто не препятствует сохранению."
 
 [pages.inbounds.periodicTrafficReset]
 "never" = "Никогда"
@@ -608,6 +629,7 @@
 "serverMaxHeaderBytesNegative" = "Значение не может быть отрицательным. Оставьте 0, чтобы решало ядро."
 
 [pages.settings]
+
 "title" = "Настройки"
 "save" = "Сохранить"
 "infoDesc" = "Сохраните изменения и перезапустите панель для их применения."
@@ -933,6 +955,22 @@
 "ipPool" = "Подсеть пула IP"
 "poolSize" = "Размер пула"
 
+
+[pages.settings.ldap]
+"genericFlagDesc" = "Если задано, переопределяет флаг VLESS; например, shadowInactive."
+"truthyValuesDesc" = "Значения через запятую. По умолчанию: true,1,yes,on."
+"invertFlagDesc" = "Включить, если атрибут означает отключение (например, shadowInactive)."
+"syncScheduleDesc" = "Строка расписания в формате cron, например @every 1m."
+"inboundTagsDesc" = "Выберите подключения для управления (автоматическое создание и удаление)."
+"noInbounds" = "Подключения не найдены. Создайте подключение в разделе Inbounds."
+
+[pages.settings.service]
+"nameDesc" = "Имя systemd-службы панели без суффикса .service. По умолчанию: vpn-ui."
+"enableDesc" = "Включите службу, чтобы панель автоматически запускалась после перезагрузки."
+"startDesc" = "Запустить службу сейчас. Если панель уже запущена вручную на том же порту, сначала остановите тот экземпляр (или перезагрузите сервер), чтобы служба могла занять порт."
+"statusDesc" = "Текущее состояние службы."
+"unitDesc" = "Файл systemd-службы, сохранённый в /etc/systemd/system/<name>.service. При необходимости измените параметры и нажмите «Применить»."
+"liveLogDesc" = "Текущий вывод systemctl status и журнала службы."
 
 [pages.settings.ssl]
 "noneTitle" = "Сертификата пока нет"
@@ -1266,6 +1304,11 @@
 "manageResellers" = "Управление реселлерами"
 
 [pages.resellers]
+"clientLimits" = "Лимиты"
+"clientLimitsDesc" = "Если включено, эти значения применяются к новым клиентам реселлера, а вкладка «Лимиты» в форме создания клиента скрывается. Пустое поле наследует лимит подключения."
+"additionalSettings" = "Дополнения"
+"collapseAdditional" = "Свернуть"
+"expandAdditional" = "Развернуть"
 "title" = "Реселлеры"
 "forbidden" = "У вас нет прав на это действие. Обратитесь к суперадминистратору, если вам нужен доступ."
 "add" = "Добавить реселлера"
@@ -1295,6 +1338,7 @@
 "allowExternalProxyDesc" = "Могут ли конфигурации и ссылки, которые создаёт этот реселлер, содержать адреса внешнего прокси этого подключения."
 "allowOverview" = "Разрешить дашборд"
 "allowOverviewDesc" = "Дашборд описывает саму машину: ядро, процессор, диск, публичный IP, обновления панели. К реселлеру всё это отношения не имеет, поэтому по умолчанию страница ему недоступна. Включите, чтобы этот реселлер мог открывать дашборд и чтобы страница появилась у него в боковой панели."
+"allowOverviewManageDesc" = "Определяет, сможет ли реселлер только просматривать дашборд или также выполнять действия. Для этого нужно разрешение «Разрешить дашборд». Каждое действие (переименование панели, кнопки Xray, файлы геоданных) требует отдельного права, которого у роли реселлера сейчас нет. Поэтому само по себе это разрешение пока не открывает ему доступных действий. Настройка предусмотрена заранее, чтобы разрешение уже было на месте, когда такие действия станут доступны."
 "inboundAccess" = "Подключения"
 "inboundAccessDesc" = "Отметьте подключения, на которых этот реселлер может продавать. Ему видны только созданные им самим аккаунты и никогда аккаунты администратора, даже на общем подключении."
 "selectAllInbounds" = "Выбрать все"

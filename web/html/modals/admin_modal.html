@@ -21,6 +21,11 @@
         :placeholder="adminModal.isEdit ? '{{ i18n "pages.admins.passwordUnchangedHint" }}' : ''"></a-input-password>
     </a-form-item>
 
+    <a-form-item label='Подписки'>
+      <a-input-number v-model.number="adminModal.admin.subscriptionLimit" :min="0"></a-input-number>
+      <span style="margin-left:8px;color:#888">0 — без ограничения</span>
+    </a-form-item>
+
     <a-form-item label='{{ i18n "pages.admins.nickname" }}'>
       <a-input v-model.trim="adminModal.admin.nickname"></a-input>
     </a-form-item>
@@ -125,7 +130,7 @@
     confirm: null,
     allPermissions: [],
     allInbounds: [],
-    admin: { id: 0, username: '', password: '', nickname: '', enable: true, isSuperAdmin: false, permissions: [], inboundIds: [] },
+    admin: { id: 0, username: '', password: '', nickname: '', enable: true, isSuperAdmin: false, permissions: [], subscriptionLimit: 0, inboundIds: [] },
 
     permLabel(slug) {
       return PERMISSION_LABELS[slug] || slug;
@@ -162,10 +167,11 @@
           enable: admin.enable,
           isSuperAdmin: admin.isSuperAdmin,
           permissions: (admin.permissions || []).slice(),
+          subscriptionLimit: Number(admin.subscriptionLimit) || 0,
           inboundIds: (admin.inboundIds || []).slice(),
         };
       } else {
-        this.admin = { id: 0, username: '', password: '', nickname: '', enable: true, isSuperAdmin: false, permissions: [], inboundIds: [] };
+        this.admin = { id: 0, username: '', password: '', nickname: '', enable: true, isSuperAdmin: false, permissions: [], subscriptionLimit: 0, inboundIds: [] };
       }
       this.isSelf = isEdit && admin && admin.id === app.currentAdminId;
       this.visible = true;

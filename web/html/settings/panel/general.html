@@ -209,40 +209,40 @@
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>Generic flag attribute (optional)</template>
-            <template #description>If set, overrides VLESS flag; e.g. shadowInactive</template>
+            <template #description>{{ i18n "pages.settings.ldap.genericFlagDesc" }}</template>
             <template #control>
                 <a-input type="text" v-model="allSetting.ldapFlagField"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>Truthy values</template>
-            <template #description>Comma-separated; default: true,1,yes,on</template>
+            <template #description>{{ i18n "pages.settings.ldap.truthyValuesDesc" }}</template>
             <template #control>
                 <a-input type="text" v-model="allSetting.ldapTruthyValues"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>Invert flag</template>
-            <template #description>Enable when attribute means disabled (e.g., shadowInactive)</template>
+            <template #description>{{ i18n "pages.settings.ldap.invertFlagDesc" }}</template>
             <template #control>
                 <a-switch v-model="allSetting.ldapInvertFlag"></a-switch>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>Sync schedule</template>
-            <template #description>cron-like string, e.g. @every 1m</template>
+            <template #description>{{ i18n "pages.settings.ldap.syncScheduleDesc" }}</template>
             <template #control>
                 <a-input type="text" v-model="allSetting.ldapSyncCron"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>Inbound tags</template>
-            <template #description>Select inbounds to manage (auto create/delete)</template>
+            <template #description>{{ i18n "pages.settings.ldap.inboundTagsDesc" }}</template>
             <template #control>
                 <a-select mode="multiple" :dropdown-class-name="themeSwitcher.currentTheme" :style="{ width: '100%' }" v-model="ldapInboundTagList">
                     <a-select-option v-for="opt in inboundOptions" :key="opt.value" :value="opt.value">[[ opt.label ]]</a-select-option>
                 </a-select>
-                <div v-if="inboundOptions.length==0" style="margin-top:6px;color:#999">No inbounds found. Please create one in Inbounds.</div>
+                <div v-if="inboundOptions.length==0" style="margin-top:6px;color:#999">{{ i18n "pages.settings.ldap.noInbounds" }}</div>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">

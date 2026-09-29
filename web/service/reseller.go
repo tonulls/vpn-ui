@@ -481,6 +481,30 @@ func postedClient(data *model.Inbound) (map[string]any, map[string]any, []any, e
 	return cm, settings, clients, nil
 }
 
+// applyClientLimitDefaults replaces the submitted limits with the profile's defaults.
+// It is called only on create; nil nullable limits deliberately remove a forged or
+// accidental override so the new account inherits the inbound setting.
+func applyClientLimitDefaults(cm map[string]any, profile *model.ResellerProfile) {
+	if profile == nil || !profile.ClientLimitsEnabled {
+		return
+	}
+	cm["limitIp"] = float64(profile.ClientLimitIP)
+	for _, field := range []struct {
+		key   string
+		value *int
+	}{
+		{"userLimitOverride", profile.ClientLimitDevices},
+		{"speedLimitDown", profile.ClientLimitDown},
+		{"speedLimitUp", profile.ClientLimitUp},
+	} {
+		if field.value == nil {
+			delete(cm, field.key)
+		} else {
+			cm[field.key] = float64(*field.value)
+		}
+	}
+}
+
 // applyToSettings writes the priced decisions back into the request body.
 //
 // The blob has to be patched before InboundService parses it, and doing the
@@ -542,6 +566,15 @@ func (s *ResellerService) PrepareClientCreate(user *model.User, data *model.Inbo
 		return ChargeTicket{}, err
 	}
 	clients, _ := settings["clients"].([]any)
+	if profile.SubscriptionLimit > 0 {
+		owned, err := s.OwnedEmails(user.Id)
+		if err != nil {
+			return ChargeTicket{}, err
+		}
+		if len(owned)+len(clients) > profile.SubscriptionLimit {
+			return ChargeTicket{}, fmt.Errorf("лимит подписок достигнут: доступно максимум %d", profile.SubscriptionLimit)
+		}
+	}
 	if len(clients) > 1 {
 		// Price each generated account through the existing single-account path,
 		// then expose one aggregate ticket to the controller. Each recursive call
@@ -613,6 +646,7 @@ func (s *ResellerService) PrepareClientCreate(user *model.User, data *model.Inbo
 	if err != nil {
 		return ChargeTicket{}, err
 	}
+	applyClientLimitDefaults(cm, profile)
 	if err := applyToSettings(data, profile, q, cm, settings, clients); err != nil {
 		return ChargeTicket{}, err
 	}
@@ -836,6 +870,22 @@ func (s *ResellerService) reserve(t ChargeTicket) error {
 		return nil
 	}
 	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+		if t.Create {
+			var limit int
+			if err := tx.Model(&model.ResellerProfile{}).Where("user_id = ?", t.UserId).
+				Select("subscription_limit").Scan(&limit).Error; err != nil {
+				return err
+			}
+			if limit > 0 {
+				var count int64
+				if err := tx.Model(&model.ResellerClient{}).Where("user_id = ?", t.UserId).Count(&count).Error; err != nil {
+					return err
+				}
+				if count >= int64(limit) {
+					return fmt.Errorf("лимит подписок достигнут: доступно максимум %d", limit)
+				}
+			}
+		}
 		if err := addSpent(tx, t.UserId, t.Quote.DeltaSpent); err != nil {
 			return err
 		}
@@ -1056,8 +1106,14 @@ type ResellerView struct {
 
 	DaysPerGB           int  `json:"daysPerGb"`
 	MinCreateGB         int  `json:"minCreateGb"`
+	SubscriptionLimit   int  `json:"subscriptionLimit"`
 	MinAddGB            int  `json:"minAddGb"`
 	AllowExternalProxy  bool `json:"allowExternalProxy"`
+	ClientLimitsEnabled bool `json:"clientLimitsEnabled"`
+	ClientLimitIP       int  `json:"clientLimitIp"`
+	ClientLimitDevices  *int `json:"clientLimitDevices"`
+	ClientLimitDown     *int `json:"clientLimitDown"`
+	ClientLimitUp       *int `json:"clientLimitUp"`
 	AllowOverview       bool `json:"allowOverview"`
 	AllowOverviewManage bool `json:"allowOverviewManage"`
 
@@ -1085,8 +1141,14 @@ type ResellerSpec struct {
 	BalanceResetDays    int
 	BalanceResetStart   int64
 	MinCreateGB         int
+	SubscriptionLimit   int
 	MinAddGB            int
 	AllowExternalProxy  bool
+	ClientLimitsEnabled bool
+	ClientLimitIP       int
+	ClientLimitDevices  *int
+	ClientLimitDown     *int
+	ClientLimitUp       *int
 	AllowOverview       bool
 	AllowOverviewManage bool
 
@@ -1177,8 +1239,14 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 			BalanceResetDays:    p.BalanceResetDays,
 			BalanceResetStart:   p.BalanceResetStart,
 			MinCreateGB:         p.MinCreateGB,
+			SubscriptionLimit:   p.SubscriptionLimit,
 			MinAddGB:            p.MinAddGB,
 			AllowExternalProxy:  p.AllowExternalProxy,
+			ClientLimitsEnabled: p.ClientLimitsEnabled,
+			ClientLimitIP:       p.ClientLimitIP,
+			ClientLimitDevices:  p.ClientLimitDevices,
+			ClientLimitDown:     p.ClientLimitDown,
+			ClientLimitUp:       p.ClientLimitUp,
 			AllowOverview:       p.AllowOverview,
 			AllowOverviewManage: p.AllowOverviewManage,
 			InboundIds:          gs,
@@ -1280,6 +1348,19 @@ func (s *ResellerService) RenewDueBalances(tx *gorm.DB, now time.Time) (int, err
 	return updated, nil
 }
 
+// validateClientLimitDefaults rejects values the account-level validators cannot accept.
+func validateClientLimitDefaults(spec ResellerSpec) error {
+	if spec.ClientLimitIP < 0 {
+		return errors.New("client IP limit cannot be negative")
+	}
+	for _, value := range []*int{spec.ClientLimitDevices, spec.ClientLimitDown, spec.ClientLimitUp} {
+		if value != nil && *value < 0 {
+			return errors.New("client limits cannot be negative")
+		}
+	}
+	return nil
+}
+
 // AddReseller creates a reseller and its profile.
 func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*model.User, error) {
 	spec.Username = normalizeUsername(spec.Username)
@@ -1290,6 +1371,9 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 		return nil, errors.New("password is required")
 	}
 	if err := s.assertAssignable(caller, spec.InboundIds); err != nil {
+		return nil, err
+	}
+	if err := validateClientLimitDefaults(spec); err != nil {
 		return nil, err
 	}
 
@@ -1341,8 +1425,14 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 			BalanceResetStart:     spec.BalanceResetStart,
 			BalanceResetAllowance: int64(spec.AllowanceGB) * 1024 * 1024 * 1024,
 			MinCreateGB:           spec.MinCreateGB,
+			SubscriptionLimit:     spec.SubscriptionLimit,
 			MinAddGB:              spec.MinAddGB,
 			AllowExternalProxy:    spec.AllowExternalProxy,
+			ClientLimitsEnabled:   spec.ClientLimitsEnabled,
+			ClientLimitIP:         spec.ClientLimitIP,
+			ClientLimitDevices:    spec.ClientLimitDevices,
+			ClientLimitDown:       spec.ClientLimitDown,
+			ClientLimitUp:         spec.ClientLimitUp,
 			AllowOverview:         spec.AllowOverview,
 			AllowOverviewManage:   spec.AllowOverviewManage,
 			CreatedBy:             caller.Id,
@@ -1396,6 +1486,9 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 	if err := s.assertAssignable(caller, spec.InboundIds); err != nil {
 		return err
 	}
+	if err := validateClientLimitDefaults(spec); err != nil {
+		return err
+	}
 
 	db := database.GetDB()
 	var adminService AdminService
@@ -1441,8 +1534,14 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 				}(),
 				"days_per_gb":           spec.DaysPerGB,
 				"min_create_gb":         spec.MinCreateGB,
+				"subscription_limit":    spec.SubscriptionLimit,
 				"min_add_gb":            spec.MinAddGB,
 				"allow_external_proxy":  spec.AllowExternalProxy,
+				"client_limits_enabled": spec.ClientLimitsEnabled,
+				"client_limit_ip":       spec.ClientLimitIP,
+				"client_limit_devices":  spec.ClientLimitDevices,
+				"client_limit_down":     spec.ClientLimitDown,
+				"client_limit_up":       spec.ClientLimitUp,
 				"allow_overview":        spec.AllowOverview,
 				"allow_overview_manage": spec.AllowOverviewManage,
 			}).Error

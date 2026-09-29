@@ -86,7 +86,7 @@
     const RESELLER = Object.assign(
       { isReseller: false, unlimited: false, allowanceBytes: 0, spentBytes: 0,
         availableBytes: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
-        allowExternalProxy: false },
+        allowExternalProxy: false, clientLimitsEnabled: false, inboundIds: [] },
       {{ .reseller }}
     );
 

@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
@@ -38,12 +39,18 @@ type resellerForm struct {
 	// one modal can post one shape.
 	AllowanceGB int `json:"allowanceGb" form:"allowanceGb"`
 
-	DaysPerGB          int   `json:"daysPerGb" form:"daysPerGb"`
-	BalanceResetDays   int   `json:"balanceResetDays" form:"balanceResetDays"`
-	BalanceResetStart  int64 `json:"balanceResetStart" form:"balanceResetStart"`
-	MinCreateGB        int   `json:"minCreateGb" form:"minCreateGb"`
-	MinAddGB           int   `json:"minAddGb" form:"minAddGb"`
-	AllowExternalProxy bool  `json:"allowExternalProxy" form:"allowExternalProxy"`
+	DaysPerGB           int    `json:"daysPerGb" form:"daysPerGb"`
+	BalanceResetDays    int    `json:"balanceResetDays" form:"balanceResetDays"`
+	BalanceResetStart   int64  `json:"balanceResetStart" form:"balanceResetStart"`
+	MinCreateGB         int    `json:"minCreateGb" form:"minCreateGb"`
+	SubscriptionLimit   int    `json:"subscriptionLimit" form:"subscriptionLimit"`
+	MinAddGB            int    `json:"minAddGb" form:"minAddGb"`
+	AllowExternalProxy  bool   `json:"allowExternalProxy" form:"allowExternalProxy"`
+	ClientLimitsEnabled bool   `json:"clientLimitsEnabled" form:"clientLimitsEnabled"`
+	ClientLimitIP       int    `json:"clientLimitIp" form:"clientLimitIp"`
+	ClientLimitDevices  string `json:"clientLimitDevices" form:"clientLimitDevices"`
+	ClientLimitDown     string `json:"clientLimitDown" form:"clientLimitDown"`
+	ClientLimitUp       string `json:"clientLimitUp" form:"clientLimitUp"`
 	// AllowOverview hands this reseller the panel overview, which is off by
 	// default because it is a host dashboard and none of it is theirs to act on.
 	AllowOverview bool `json:"allowOverview" form:"allowOverview"`
@@ -72,8 +79,33 @@ func (f *resellerForm) inboundIds() []int {
 	return out
 }
 
+// optionalLimit parses a nullable, non-negative account limit. Empty means inherit.
+func optionalLimit(raw string) (*int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return nil, errors.New("client limits must be non-negative whole numbers")
+	}
+	return &value, nil
+}
+
 // spec maps the wire form onto the service's shape.
-func (f *resellerForm) spec() service.ResellerSpec {
+func (f *resellerForm) spec() (service.ResellerSpec, error) {
+	devices, err := optionalLimit(f.ClientLimitDevices)
+	if err != nil {
+		return service.ResellerSpec{}, err
+	}
+	down, err := optionalLimit(f.ClientLimitDown)
+	if err != nil {
+		return service.ResellerSpec{}, err
+	}
+	up, err := optionalLimit(f.ClientLimitUp)
+	if err != nil {
+		return service.ResellerSpec{}, err
+	}
 	return service.ResellerSpec{
 		Username:            f.Username,
 		Password:            f.Password,
@@ -85,12 +117,18 @@ func (f *resellerForm) spec() service.ResellerSpec {
 		BalanceResetDays:    f.BalanceResetDays,
 		BalanceResetStart:   f.BalanceResetStart,
 		MinCreateGB:         f.MinCreateGB,
+		SubscriptionLimit:   f.SubscriptionLimit,
 		MinAddGB:            f.MinAddGB,
 		AllowExternalProxy:  f.AllowExternalProxy,
+		ClientLimitsEnabled: f.ClientLimitsEnabled,
+		ClientLimitIP:       f.ClientLimitIP,
+		ClientLimitDevices:  devices,
+		ClientLimitDown:     down,
+		ClientLimitUp:       up,
 		AllowOverview:       f.AllowOverview,
 		AllowOverviewManage: f.AllowOverviewManage,
 		InboundIds:          f.inboundIds(),
-	}
+	}, nil
 }
 
 // rechargeForm moves a reseller's allowance by whole GB. Signed on purpose: an
@@ -174,7 +212,12 @@ func (a *ResellerController) add(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.resellers.add"), err)
 		return
 	}
-	_, err := a.resellerService.AddReseller(session.GetLoginUser(c), form.spec())
+	spec, err := form.spec()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.resellers.add"), err)
+		return
+	}
+	_, err = a.resellerService.AddReseller(session.GetLoginUser(c), spec)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.resellers.add"), err)
 		return
@@ -193,7 +236,12 @@ func (a *ResellerController) update(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), err)
 		return
 	}
-	err = a.resellerService.UpdateReseller(session.GetLoginUser(c), id, form.spec())
+	spec, err := form.spec()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), err)
+		return
+	}
+	err = a.resellerService.UpdateReseller(session.GetLoginUser(c), id, spec)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), err)
 		return

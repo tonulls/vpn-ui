@@ -5582,6 +5582,7 @@ func (s *InboundService) GetClientStatsFor(user *model.User) (*ClientStatsSummar
 	summary := &ClientStatsSummary{Connections: len(inbounds)}
 	now := time.Now().UnixMilli()
 	countedTraffic := make(map[string]bool)
+	countedTotal := make(map[string]bool)
 	// An ACCOUNT is depleted once, however many inbounds serve it. ClientStats now
 	// lists it under every one of them (it used to appear only under its home
 	// inbound), so without this an account on three inbounds would be counted as
@@ -5595,7 +5596,13 @@ func (s *InboundService) GetClientStatsFor(user *model.User) (*ClientStatsSummar
 			logger.Warning("get clients for stats failed on inbound", inbound.Id, ":", err)
 			continue
 		}
-		summary.Total += len(clients)
+		for _, client := range clients {
+			key := accountKey(client.Email)
+			if !countedTotal[key] {
+				countedTotal[key] = true
+				summary.Total++
+			}
+		}
 		if !inbound.Enable {
 			continue
 		}

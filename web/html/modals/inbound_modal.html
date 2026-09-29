@@ -29,10 +29,8 @@
             <span class="bo-if-why" v-if="blockingReason">
                 <b>[[ blockingReason.where ]]</b>: [[ blockingReason.why ]]
             </span>
-            <!-- Hardcoded English, like the section names and the per-protocol forms:
-                 an en_US-only i18n key blanks the label in the other 12 locales
-                 (web/i18n_toml_test.go enforces that with a parity ratchet). -->
-            <span class="bo-if-why ok" v-else-if="isEdit">Nothing is blocking this.</span>
+            <!-- Localized helper text; section heading remains in English by design. -->
+            <span class="bo-if-why ok" v-else-if="isEdit">{{ i18n "pages.inbounds.form.nothingBlocking" }}</span>
             <span class="bo-if-btns">
                 <a-button @click="inModal.close()">{{ i18n "close" }}</a-button>
                 <a-button

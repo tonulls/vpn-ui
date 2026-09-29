@@ -994,6 +994,22 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
+	caller := session.GetLoginUser(c)
+	if caller != nil && !caller.IsReseller && caller.SubscriptionLimit > 0 {
+		count, countErr := accountService.CountAccounts(caller)
+		if countErr != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), countErr)
+			return
+		}
+		requested := len(postedClientEmails(data))
+		if requested < 1 {
+			requested = 1
+		}
+		if count+requested > caller.SubscriptionLimit {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("лимит подписок достигнут: доступно максимум %d", caller.SubscriptionLimit))
+			return
+		}
+	}
 	// Prices the account against the reseller's balance, clamps the posted client to
 	// their limits, and RESERVES the bytes before the account exists. Inactive for an
 	// admin, who has no balance to reserve against.

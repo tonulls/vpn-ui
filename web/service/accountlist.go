@@ -143,6 +143,15 @@ const (
 	AccountSortDisabled = "disable"
 )
 
+// CountAccounts returns the unique account count visible to a caller.
+func (s *AccountService) CountAccounts(user *model.User) (int, error) {
+	result, err := s.ListAccounts(user, 1, 1, "", "newest")
+	if err != nil {
+		return 0, err
+	}
+	return result.Total, nil
+}
+
 // ListAccounts returns the accounts the caller may see, filtered and paged.
 //
 // SCOPING IS THE WHOLE SECURITY SURFACE OF THIS ENDPOINT, and it fails closed.

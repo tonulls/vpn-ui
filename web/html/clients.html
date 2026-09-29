@@ -322,7 +322,13 @@
                        The v-for alias is called `record` because clientActionIcons
                        reads `record` as the inbound its client belongs to. -->
                   <template slot="expandedRowRender" slot-scope="row">
-                    <div class="bo-mb-list">
+                    <div v-if="row.subId" class="bo-mb" :style="{ marginBottom: '10px' }">
+                       <span class="bo-mb-name">Подписка</span>
+                       <span class="bo-mb-cred-one" @click="copyText(subscriptionValue(row))">
+                         [[ subscriptionValue(row) ]] <a-icon type="copy"></a-icon>
+                       </span>
+                     </div>
+                     <div class="bo-mb-list">
                       <template v-for="record in accountInbounds(row)">
                         <div class="bo-mb" :key="record.id"
                           :class="{ off: !membershipEnabled(row, record) }"
@@ -561,8 +567,8 @@
           title, key, scopedSlots: { customRender: slot },
         }, extra || {});
         return [
-          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 230 }),
-          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 170 }),
+          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 200 }),
+          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 140 }),
           col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 150 }),
           col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol'),
           col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol', { width: 100 }),
@@ -970,7 +976,8 @@
         const xrayNative = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http', 'dokodemo-door', 'wireguard'];
         return xrayNative.includes(k) ? 'xray' : 'vpn';
       },
-      async copyText(value) {
+      subscriptionValue(row) { return row.subId || ''; },
+       async copyText(value) {
         if (!value) return;
         const ok = await ClipboardManager.copyText(value);
         if (ok) this.$message.success('{{ i18n "copied" }}');

@@ -97,7 +97,8 @@ type User struct {
 	IsReseller bool `json:"isReseller" gorm:"default:0"`
 
 	// Enable gates login without deleting the account (and its owned inbounds).
-	Enable bool `json:"enable" form:"enable" gorm:"default:1"`
+	Enable            bool `json:"enable" form:"enable" gorm:"default:1"`
+	SubscriptionLimit int  `json:"subscriptionLimit" gorm:"default:0"`
 
 	// Per-admin TOTP. Replaces the panel-global twoFactorEnable/twoFactorToken
 	// settings pair, which leaked the shared secret to every logged-in user
@@ -155,8 +156,18 @@ type ResellerProfile struct {
 	DaysPerGB int `json:"daysPerGb" gorm:"default:0"`
 	// MinCreateGB is the smallest account they may create, MinAddGB the smallest
 	// top-up in one edit. Whole GB, as an operator sets them; 0 means no floor.
-	MinCreateGB int `json:"minCreateGb" gorm:"default:0"`
-	MinAddGB    int `json:"minAddGb" gorm:"default:0"`
+	MinCreateGB       int `json:"minCreateGb" gorm:"default:0"`
+	SubscriptionLimit int `json:"subscriptionLimit" gorm:"default:0"`
+	MinAddGB          int `json:"minAddGb" gorm:"default:0"`
+
+	// ClientLimitsEnabled applies these per-client overrides to accounts a reseller
+	// creates. A zero IP limit and nil override mean inherit the inbound value;
+	// nullable rate/device fields preserve the distinction between inherit and 0.
+	ClientLimitsEnabled bool `json:"clientLimitsEnabled" gorm:"default:0"`
+	ClientLimitIP       int  `json:"clientLimitIp" gorm:"default:0"`
+	ClientLimitDevices  *int `json:"clientLimitDevices" gorm:"column:client_limit_devices"`
+	ClientLimitDown     *int `json:"clientLimitDown" gorm:"column:client_limit_down"`
+	ClientLimitUp       *int `json:"clientLimitUp" gorm:"column:client_limit_up"`
 
 	// AllowExternalProxy lets the configs and links this reseller generates carry
 	// the inbound's external-proxy endpoints. Off strips them.

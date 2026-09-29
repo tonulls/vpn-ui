@@ -34,6 +34,47 @@
       <a-switch v-model="resellerModal.reseller.enable"></a-switch>
     </a-form-item>
 
+    <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '8px 0' }">
+      <strong>{{ i18n "pages.resellers.additionalSettings" }}</strong>
+      <a-button type="link" size="small" @click="resellerModal.additionalOpen = !resellerModal.additionalOpen">
+        <span v-if="resellerModal.additionalOpen">{{ i18n "pages.resellers.collapseAdditional" }}</span>
+        <span v-else>{{ i18n "pages.resellers.expandAdditional" }}</span>
+        <a-icon :type="resellerModal.additionalOpen ? 'up' : 'down'"></a-icon>
+      </a-button>
+    </div>
+    <div v-show="resellerModal.additionalOpen">
+
+    <a-form-item>
+      <template slot="label">
+        <a-tooltip>
+          <template slot="title">{{ i18n "pages.resellers.clientLimitsDesc" }}</template>
+          {{ i18n "pages.resellers.clientLimits" }}
+          <a-icon type="question-circle"></a-icon>
+        </a-tooltip>
+      </template>
+      <a-switch v-model="resellerModal.reseller.clientLimitsEnabled"></a-switch>
+    </a-form-item>
+    <template v-if="resellerModal.reseller.clientLimitsEnabled">
+      <a-form-item label='{{ i18n "pages.clients.limitIp" }}'>
+        <a-input-number v-model.number="resellerModal.reseller.clientLimitIp" :min="0"></a-input-number>
+      </a-form-item>
+      <a-form-item label='{{ i18n "pages.clients.limitDevices" }}'>
+        <a-input v-model.trim="resellerModal.reseller.clientLimitDevices"
+          placeholder='{{ i18n "pages.clients.limitInherit" }}'></a-input>
+      </a-form-item>
+      <a-form-item label='{{ i18n "pages.clients.limitDown" }}'>
+        <a-input v-model.trim="resellerModal.reseller.clientLimitDown"
+          placeholder='{{ i18n "pages.clients.limitInherit" }}' addon-after="KB/s"></a-input>
+      </a-form-item>
+      <a-form-item label='{{ i18n "pages.clients.limitUp" }}'>
+        <a-input v-model.trim="resellerModal.reseller.clientLimitUp"
+          placeholder='{{ i18n "pages.clients.limitInherit" }}' addon-after="KB/s"></a-input>
+      </a-form-item>
+      <div :style="{ margin: '-12px 0 16px 41.6667%' }" class="bo-dim">
+        {{ i18n "pages.clients.limitSpeedDesc" }}
+      </div>
+    </template>
+
     <a-form-item>
       <template slot="label">
         <a-tooltip>
@@ -140,6 +181,11 @@
     </a-form-item>
 
     <a-form-item>
+      <template slot="label"><a-tooltip><template slot="title">Максимальное количество одновременно существующих подписок; 0 — без ограничения</template>Подписки</a-tooltip></template>
+      <a-input-number v-model.number="resellerModal.reseller.subscriptionLimit" :min="0"></a-input-number>
+    </a-form-item>
+
+    <a-form-item>
       <template slot="label">
         <a-tooltip>
           <template slot="title">{{ i18n "pages.resellers.minCreateGbDesc" }}</template>
@@ -160,6 +206,9 @@
       </template>
       <a-input-number v-model.number="resellerModal.reseller.minAddGb" :min="0"></a-input-number>
     </a-form-item>
+    </div>
+
+    <a-divider :style="{ margin: '12px 0' }"></a-divider>
 
     <!-- Which inbounds this reseller may sell on. Unticked means invisible to them, the
          same mask an admin gets, so a reseller can never create an account on an inbound
@@ -209,11 +258,14 @@
     isEdit: false,
     confirm: null,
     allInbounds: [],
+    additionalOpen: false,
     resetStartDate: '',
     reseller: {
       id: 0, username: '', password: '', nickname: '', enable: true,
-      unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
+      unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0, subscriptionLimit: 0, minCreateGb: 0, minAddGb: 0,
       allowExternalProxy: false, allowOverview: false, allowOverviewManage: false,
+      clientLimitsEnabled: false, clientLimitIp: 0,
+      clientLimitDevices: '', clientLimitDown: '', clientLimitUp: '',
       inboundIds: [],
     },
 
@@ -246,6 +298,7 @@
       this.confirm = confirm;
       this.isEdit = isEdit;
       this.allInbounds = allInbounds || [];
+      this.additionalOpen = false;
       this.resetStartDate = isEdit && reseller && reseller.balanceResetStart
         ? moment(Number(reseller.balanceResetStart)).format('YYYY-MM-DD') : '';
       if (isEdit && reseller) {
@@ -261,18 +314,27 @@
           allowanceGb: Math.round((Number(reseller.allowanceBytes) || 0) / ONE_GB_BYTES),
           balanceResetDays: Number(reseller.balanceResetDays) || 0,
           daysPerGb: Number(reseller.daysPerGb) || 0,
+          subscriptionLimit: Number(reseller.subscriptionLimit) || 0,
           minCreateGb: Number(reseller.minCreateGb) || 0,
           minAddGb: Number(reseller.minAddGb) || 0,
           allowExternalProxy: !!reseller.allowExternalProxy,
           allowOverview: !!reseller.allowOverview,
           allowOverviewManage: !!reseller.allowOverviewManage,
+          clientLimitsEnabled: !!reseller.clientLimitsEnabled,
+          clientLimitIp: Number(reseller.clientLimitIp) || 0,
+          clientLimitDevices: reseller.clientLimitDevices == null ? '' : String(reseller.clientLimitDevices),
+          clientLimitDown: reseller.clientLimitDown == null ? '' : String(reseller.clientLimitDown),
+          clientLimitUp: reseller.clientLimitUp == null ? '' : String(reseller.clientLimitUp),
           inboundIds: (reseller.inboundIds || []).slice(),
         };
       } else {
         this.reseller = {
           id: 0, username: '', password: '', nickname: '', enable: true,
-          unlimited: false, allowanceGb: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
+          unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0,
+          subscriptionLimit: 0, minCreateGb: 0, minAddGb: 0,
           allowExternalProxy: false, allowOverview: false, allowOverviewManage: false,
+          clientLimitsEnabled: false, clientLimitIp: 0,
+          clientLimitDevices: '', clientLimitDown: '', clientLimitUp: '',
           inboundIds: [],
         };
       }
@@ -293,6 +355,7 @@
         // it back is a no-op whichever way the server reads it. Recharge moves the balance.
         allowanceGb: Number(reseller.allowanceGb) || 0,
         balanceResetDays: Number(reseller.balanceResetDays) || 0,
+        subscriptionLimit: Number(reseller.subscriptionLimit) || 0,
         balanceResetStart: resellerModal.resetStartDate ? moment(resellerModal.resetStartDate, 'YYYY-MM-DD').valueOf() : 0,
         daysPerGb: Number(reseller.daysPerGb) || 0,
         minCreateGb: Number(reseller.minCreateGb) || 0,
@@ -300,6 +363,11 @@
         allowExternalProxy: reseller.allowExternalProxy,
         allowOverview: reseller.allowOverview,
         allowOverviewManage: reseller.allowOverviewManage,
+        clientLimitsEnabled: reseller.clientLimitsEnabled,
+        clientLimitIp: Number(reseller.clientLimitIp) || 0,
+        clientLimitDevices: reseller.clientLimitDevices == null ? '' : String(reseller.clientLimitDevices).trim(),
+        clientLimitDown: reseller.clientLimitDown == null ? '' : String(reseller.clientLimitDown).trim(),
+        clientLimitUp: reseller.clientLimitUp == null ? '' : String(reseller.clientLimitUp).trim(),
         // A blank entry is how "none" is sent: an omitted key binds as nil server-side and
         // cannot be told apart from "leave the existing grants alone".
         inboundIds: (reseller.inboundIds || []).length ? reseller.inboundIds : [''],

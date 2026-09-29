@@ -118,6 +118,17 @@
         ></a-input-number>
     </a-form-item>
 
+    <a-form-item label="Dest fallback">
+        <a-switch v-model="inbound.settings.fallbackEnabled"></a-switch>
+        <span v-if="inbound.settings.fallbackEnabled" style="margin-left: 12px">Dest:</span>
+        <a-input
+            v-if="inbound.settings.fallbackEnabled"
+            v-model.trim="inbound.settings.fallbackDest"
+            placeholder=""
+            style="margin-left: 12px; width: 220px"
+        ></a-input>
+    </a-form-item>
+
     <!-- The inbound-wide default endpoint set. An account that names its own External
          Proxy in the client form replaces this list for that account; everyone else's
          links are built from it. Link generation only: telemt never sees any of it. -->

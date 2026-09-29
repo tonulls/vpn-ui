@@ -50,7 +50,7 @@
       </div>
 
       <div class="bo-cf-tabs" role="tablist">
-        <button v-for="t in clientMembershipModal.tabs" :key="t.key"
+        <button v-for="t in clientMembershipModal.visibleTabs" :key="t.key"
           class="bo-cf-tab" type="button" role="tab"
           :aria-selected="clientMembershipModal.tab === t.key"
           @click="clientMembershipModal.tab = t.key">
@@ -419,6 +419,11 @@
       // before the tab existed.
       { key: 'limits',      icon: 'dashboard', label: '{{ i18n "pages.clients.tabLimits" }}' },
     ],
+    get visibleTabs() {
+      return RESELLER.isReseller && RESELLER.clientLimitsEnabled
+        ? this.tabs.filter(t => t.key !== 'limits')
+        : this.tabs;
+    },
     // Entering the deadline as a date rather than a day count.
     pickDate: false,
     // The deadline exactly as it is stored, and whether the operator has touched
@@ -548,7 +553,10 @@
         this.totalGb = 0;
         this.days = 0;
         this.delayedStart = false;
-        this.selected = [];
+        const granted = new Set((RESELLER.inboundIds || []).map(Number));
+        this.selected = RESELLER.isReseller
+          ? this.assignable.filter(ib => granted.has(Number(ib.inboundId))).map(ib => ib.inboundId)
+          : [];
         this.seedCredentials();
         // A new account inherits everything, so the whole tab starts empty.
         this.limitDown = '';

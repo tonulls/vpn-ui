@@ -405,6 +405,7 @@
 "getConfigError" = "An error occurred while retrieving the config file."
 
 [pages.inbounds]
+
 "inboundMembership" = "Inbounds"
 "inboundMembershipDesc" = "The inbounds this one account is served on. It keeps the same email, the same traffic allowance and the same expiry on every one of them. Unticking an inbound removes the account from it. The inbound this form was opened from stays ticked."
 "selectAllInbounds" = "Select all"
@@ -693,6 +694,18 @@
 "sharedUsage" = "shared"
 "sharedUsageHint" = "Xray counts traffic per account, not per inbound, so this figure is the account's remaining usage shared across every Xray inbound serving it."
 "onlineShared" = "Online, on one of this account's Xray inbounds. Xray does not report which one."
+
+[pages.inbounds.form]
+"identityDesc" = "What this inbound is called and where it listens."
+"protocolDesc" = "Options that exist only on"
+"accessLimitsDesc" = "How many devices or addresses one account may hold here, and what happens at the cap."
+"quotaDesc" = "Stored on the inbound row, and the same on every protocol."
+"externalProxyDesc" = "Advertise a different host or port to clients than the one this listens on."
+"sniffingDesc" = "What the core reads out of a connection to route it."
+"transportDesc" = "How the bytes move, plus the socket options and final mask that ride with it."
+"securityTlsDesc" = "TLS, REALITY and the certificate this inbound presents."
+"securityOtherDesc" = "The certificate and secrets this protocol authenticates with."
+"nothingBlocking" = "Nothing is blocking this."
 
 [pages.inbounds.periodicTrafficReset]
 "never" = "Never"
@@ -1193,6 +1206,14 @@
 "ipPool" = "IP Pool Subnet"
 "poolSize" = "Pool Size"
 
+[pages.settings.ldap]
+"genericFlagDesc" = "If set, overrides VLESS flag; e.g. shadowInactive"
+"truthyValuesDesc" = "Comma-separated; default: true,1,yes,on"
+"invertFlagDesc" = "Enable when attribute means disabled (e.g., shadowInactive)"
+"syncScheduleDesc" = "cron-like string, e.g. @every 1m"
+"inboundTagsDesc" = "Select inbounds to manage (auto create/delete)"
+"noInbounds" = "No inbounds found. Please create one in Inbounds."
+
 [pages.settings.service]
 "noSystemd" = "This host doesn't have systemctl (not a systemd system), so the service can't be managed here."
 "name" = "Service name"
@@ -1549,6 +1570,11 @@
 "manageOverview" = "Manage Overview"
 
 [pages.resellers]
+"clientLimits" = "Client limits"
+"clientLimitsDesc" = "When enabled, these values are applied to new clients created by this reseller, and the Limits tab is hidden from their client form. Leave a field blank to inherit the inbound limit."
+"additionalSettings" = "Additional settings"
+"collapseAdditional" = "Collapse"
+"expandAdditional" = "Expand"
 "title" = "Resellers"
 "forbidden" = "You do not have permission to do that. Ask a super admin if you need access."
 "add" = "Add Reseller"

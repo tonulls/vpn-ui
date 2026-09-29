@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
 )
@@ -31,6 +32,96 @@ func limitedReseller(allowance, spent int64) model.ResellerProfile {
 
 func unlimitedReseller() model.ResellerProfile {
 	return model.ResellerProfile{Unlimited: true}
+}
+
+func TestApplyClientLimitDefaults(t *testing.T) {
+	cm := map[string]any{
+		"limitIp": 9, "userLimitOverride": float64(8),
+		"speedLimitDown": float64(7), "speedLimitUp": float64(6),
+	}
+	profile := &model.ResellerProfile{
+		ClientLimitsEnabled: true,
+		ClientLimitIP:       1,
+		ClientLimitDevices:  intp(1),
+		ClientLimitDown:     nil,     // inherit the inbound
+		ClientLimitUp:       intp(0), // explicit unlimited
+	}
+	applyClientLimitDefaults(cm, profile)
+	if got := jsonInt64(cm["limitIp"]); got != 1 {
+		t.Errorf("limitIp = %d; want 1", got)
+	}
+	if got := jsonInt64(cm["userLimitOverride"]); got != 1 {
+		t.Errorf("userLimitOverride = %d; want 1", got)
+	}
+	if _, ok := cm["speedLimitDown"]; ok {
+		t.Error("nil speedLimitDown must inherit, but a submitted override remains")
+	}
+	if got := jsonInt64(cm["speedLimitUp"]); got != 0 {
+		t.Errorf("speedLimitUp = %d; want explicit unlimited 0", got)
+	}
+
+	untouched := map[string]any{"limitIp": 9, "speedLimitDown": float64(7)}
+	applyClientLimitDefaults(untouched, &model.ResellerProfile{ClientLimitIP: 1})
+	if got := jsonInt64(untouched["limitIp"]); got != 9 {
+		t.Errorf("disabled limits changed limitIp to %d", got)
+	}
+	if got := jsonInt64(untouched["speedLimitDown"]); got != 7 {
+		t.Errorf("disabled limits changed speedLimitDown to %d", got)
+	}
+}
+
+func TestResellerSubscriptionLimitRejectsCreateAtCap(t *testing.T) {
+	newInboundDB(t)
+	db := database.GetDB()
+	user := &model.User{Username: "cap-reseller", Password: "x", Enable: true, IsReseller: true}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ResellerProfile{
+		UserId: user.Id, AllowanceBytes: 10 * gb, SubscriptionLimit: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ResellerClient{
+		Email: "existing", UserId: user.Id, InboundId: 1, ChargedBytes: gb,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(map[string]any{"clients": []any{map[string]any{
+		"email": "new", "totalGB": float64(gb),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := &model.Inbound{Id: 1, Settings: string(body)}
+	if _, err := (&ResellerService{}).PrepareClientCreate(user, data); err == nil || !strings.Contains(err.Error(), "лимит подписок") {
+		t.Fatalf("create at the reseller's cap: err = %v; want subscription-limit refusal", err)
+	}
+
+	// The reservation rechecks inside its transaction, so two concurrent requests
+	// cannot both pass a stale preflight count.
+	err = (&ResellerService{}).reserve(ChargeTicket{
+		Active: true, Create: true, UserId: user.Id, Email: "racing-create",
+		Quote: ChargeQuote{DeltaSpent: gb, NewCharged: gb},
+	})
+	if err == nil || !strings.Contains(err.Error(), "лимит подписок") {
+		t.Fatalf("reservation at the reseller's cap: err = %v; want subscription-limit refusal", err)
+	}
+	var owned int64
+	if err := db.Model(&model.ResellerClient{}).Where("user_id = ?", user.Id).Count(&owned).Error; err != nil {
+		t.Fatal(err)
+	}
+	if owned != 1 {
+		t.Errorf("owned account rows = %d; want unchanged count 1", owned)
+	}
+	var profile model.ResellerProfile
+	if err := db.Where("user_id = ?", user.Id).First(&profile).Error; err != nil {
+		t.Fatal(err)
+	}
+	if profile.SpentBytes != 0 {
+		t.Errorf("SpentBytes = %d after refusal; want 0", profile.SpentBytes)
+	}
 }
 
 // quoteCase is one priced mutation and the ledger movement it must produce.

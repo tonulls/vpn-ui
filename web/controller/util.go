@@ -201,7 +201,7 @@ func resellerOverviewGrants(user *model.User) (access, manage bool) {
 // number here is re-derived server-side before a single byte is charged, so a
 // browser that lies about its own minimums buys nothing.
 func templateReseller(c *gin.Context) map[string]any {
-	out := map[string]any{"isReseller": false}
+	out := map[string]any{"isReseller": false, "inboundIds": []int{}}
 	user := session.GetLoginUser(c)
 	if user == nil || !user.IsReseller {
 		return out
@@ -228,6 +228,11 @@ func templateReseller(c *gin.Context) map[string]any {
 	out["minCreateGb"] = p.MinCreateGB
 	out["minAddGb"] = p.MinAddGB
 	out["allowExternalProxy"] = p.AllowExternalProxy
+	out["clientLimitsEnabled"] = p.ClientLimitsEnabled
+	adminService := service.AdminService{}
+	if inboundIds, err := adminService.AccessibleInboundIds(user.Id); err == nil {
+		out["inboundIds"] = inboundIds
+	}
 	out["allowOverview"] = p.AllowOverview
 	out["allowOverviewManage"] = p.AllowOverviewManage
 	return out

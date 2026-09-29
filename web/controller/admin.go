@@ -15,13 +15,14 @@ import (
 // ShouldBindJSON. Permissions arrive as repeated `permissions` keys, which is what
 // Qs's arrayFormat:'repeat' emits for an array.
 type adminForm struct {
-	Id           int      `json:"id" form:"id"`
-	Username     string   `json:"username" form:"username"`
-	Password     string   `json:"password" form:"password"`
-	Nickname     string   `json:"nickname" form:"nickname"`
-	Enable       bool     `json:"enable" form:"enable"`
-	IsSuperAdmin bool     `json:"isSuperAdmin" form:"isSuperAdmin"`
-	Permissions  []string `json:"permissions" form:"permissions"`
+	Id                int      `json:"id" form:"id"`
+	Username          string   `json:"username" form:"username"`
+	Password          string   `json:"password" form:"password"`
+	Nickname          string   `json:"nickname" form:"nickname"`
+	Enable            bool     `json:"enable" form:"enable"`
+	SubscriptionLimit int      `json:"subscriptionLimit" form:"subscriptionLimit"`
+	IsSuperAdmin      bool     `json:"isSuperAdmin" form:"isSuperAdmin"`
+	Permissions       []string `json:"permissions" form:"permissions"`
 	// InboundIds arrives as repeated `inboundIds` keys (Qs arrayFormat:'repeat').
 	// A blank entry is how the UI sends "none": an omitted field would bind as nil
 	// and could not be told apart from "leave alone".
@@ -46,13 +47,14 @@ func (f *adminForm) inboundIds() []int {
 // spec maps the wire form onto the service's shape.
 func (f *adminForm) spec() service.AdminSpec {
 	return service.AdminSpec{
-		Username:     f.Username,
-		Password:     f.Password,
-		Nickname:     f.Nickname,
-		Permissions:  model.PermissionsFromSlugs(f.Permissions),
-		Enable:       f.Enable,
-		IsSuperAdmin: f.IsSuperAdmin,
-		InboundIds:   f.inboundIds(),
+		Username:          f.Username,
+		Password:          f.Password,
+		Nickname:          f.Nickname,
+		Permissions:       model.PermissionsFromSlugs(f.Permissions),
+		Enable:            f.Enable,
+		SubscriptionLimit: f.SubscriptionLimit,
+		IsSuperAdmin:      f.IsSuperAdmin,
+		InboundIds:        f.inboundIds(),
 	}
 }
 

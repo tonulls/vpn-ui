@@ -78,7 +78,7 @@
     <!-- ============================ Identity ============================ -->
     <div class="bo-if-sec" data-sec="identity" v-show="inModal.section === 'identity'">
       <h4 class="bo-if-h">Identity</h4>
-      <p class="bo-if-d">What this inbound is called and where it listens.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.identityDesc" }}</p>
       <a-form
           :colon="false"
           :label-col="{ md: {span:8} }"
@@ -296,7 +296,7 @@
     <!-- ======================== Protocol settings ======================== -->
     <div class="bo-if-sec" data-sec="proto" v-show="inModal.section === 'proto'">
       <h4 class="bo-if-h">Settings</h4>
-      <p class="bo-if-d">Options that exist only on [[ ProtocolLabels[inbound.protocol] || inbound.protocol ]].</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.protocolDesc" }} [[ ProtocolLabels[inbound.protocol] || inbound.protocol ]].</p>
 
       <template v-if="inbound.protocol === Protocols.VMESS">{{template "form/vmess"}}</template>
       <template v-if="inbound.protocol === Protocols.VLESS">{{template "form/vless"}}</template>
@@ -327,7 +327,7 @@
     <!-- =========================== Transport ============================ -->
     <div class="bo-if-sec" data-sec="transport" v-show="inModal.section === 'transport'">
       <h4 class="bo-if-h">Transport</h4>
-      <p class="bo-if-d">How the bytes move, plus the socket options and final mask that ride with it.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.transportDesc" }}</p>
       <template v-if="inbound.canEnableStream()">
         {{template "form/streamSettings"}}
       </template>
@@ -337,8 +337,8 @@
     <div class="bo-if-sec" data-sec="security" v-show="inModal.section === 'security'">
       <h4 class="bo-if-h">Security</h4>
       <p class="bo-if-d">
-        <template v-if="inbound.canEnableTls()">TLS, REALITY and the certificate this inbound presents.</template>
-        <template v-else>The certificate and secrets this protocol authenticates with.</template>
+        <template v-if="inbound.canEnableTls()">{{ i18n "pages.inbounds.form.securityTlsDesc" }}</template>
+        <template v-else>{{ i18n "pages.inbounds.form.securityOtherDesc" }}</template>
       </p>
       <template v-if="inbound.canEnableTls()">
         {{template "form/tlsSettings"}}
@@ -375,7 +375,7 @@
     <!-- ========================= Access limits ========================== -->
     <div class="bo-if-sec" data-sec="access" v-show="inModal.section === 'access'">
       <h4 class="bo-if-h">Access limits</h4>
-      <p class="bo-if-d">How many devices or addresses one account may hold here, and what happens at the cap.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.accessLimitsDesc" }}</p>
 
       <!--
         IP Limit and the strategy that qualifies it: how many client source addresses one
@@ -472,7 +472,7 @@
     <!-- ============================= Quota ============================== -->
     <div class="bo-if-sec" data-sec="quota" v-show="inModal.section === 'quota'">
       <h4 class="bo-if-h">Quota and billing</h4>
-      <p class="bo-if-d">Stored on the inbound row, and the same on every protocol.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.quotaDesc" }}</p>
       <a-form
           :colon="false"
           :label-col="{ md: {span:8} }"
@@ -738,7 +738,7 @@
     <!-- ========================= External Proxy ========================= -->
     <div class="bo-if-sec" data-sec="reach" v-show="inModal.section === 'reach'">
       <h4 class="bo-if-h">External Proxy</h4>
-      <p class="bo-if-d">Advertise a different host or port to clients than the one this listens on.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.externalProxyDesc" }}</p>
       <template v-if="inbound.canEnableStream()">
         {{template "form/externalProxy" }}
       </template>
@@ -757,7 +757,7 @@
     <!-- ============================ Sniffing ============================ -->
     <div class="bo-if-sec" data-sec="sniff" v-show="inModal.section === 'sniff'">
       <h4 class="bo-if-h">Sniffing</h4>
-      <p class="bo-if-d">What the core reads out of a connection to route it.</p>
+      <p class="bo-if-d">{{ i18n "pages.inbounds.form.sniffingDesc" }}</p>
       {{template "form/sniffing"}}
     </div>
 

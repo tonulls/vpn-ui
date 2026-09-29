@@ -29,14 +29,15 @@ var (
 // returning model.User: it carries the permission slugs, and it keeps the password
 // hash and TOTP secret from ever being serialized.
 type AdminView struct {
-	Id              int      `json:"id"`
-	Username        string   `json:"username"`
-	Nickname        string   `json:"nickname"`
-	IsSuperAdmin    bool     `json:"isSuperAdmin"`
-	Enable          bool     `json:"enable"`
-	TwoFactorEnable bool     `json:"twoFactorEnable"`
-	Permissions     []string `json:"permissions"`
-	InboundCount    int64    `json:"inboundCount"`
+	Id                int      `json:"id"`
+	Username          string   `json:"username"`
+	Nickname          string   `json:"nickname"`
+	IsSuperAdmin      bool     `json:"isSuperAdmin"`
+	Enable            bool     `json:"enable"`
+	SubscriptionLimit int      `json:"subscriptionLimit"`
+	TwoFactorEnable   bool     `json:"twoFactorEnable"`
+	Permissions       []string `json:"permissions"`
+	InboundCount      int64    `json:"inboundCount"`
 	// InboundIds is what this admin may see, for the modal's checklist. Always [] for
 	// a super admin: they see everything by role, not by grant.
 	InboundIds []int `json:"inboundIds"`
@@ -44,15 +45,16 @@ type AdminView struct {
 
 func toAdminView(u *model.User, inbounds int64, inboundIds []int) AdminView {
 	return AdminView{
-		Id:              u.Id,
-		Username:        u.Username,
-		Nickname:        u.Nickname,
-		IsSuperAdmin:    u.IsSuperAdmin,
-		Enable:          u.Enable,
-		TwoFactorEnable: u.TwoFactorEnable,
-		Permissions:     u.Permissions.Slugs(),
-		InboundCount:    inbounds,
-		InboundIds:      inboundIds,
+		Id:                u.Id,
+		Username:          u.Username,
+		Nickname:          u.Nickname,
+		IsSuperAdmin:      u.IsSuperAdmin,
+		Enable:            u.Enable,
+		SubscriptionLimit: u.SubscriptionLimit,
+		TwoFactorEnable:   u.TwoFactorEnable,
+		Permissions:       u.Permissions.Slugs(),
+		InboundCount:      inbounds,
+		InboundIds:        inboundIds,
 	}
 }
 
@@ -131,11 +133,12 @@ func (s *AdminService) usernameTaken(db *gorm.DB, username string, exceptId int)
 type AdminSpec struct {
 	Username string
 	// Password empty on update means "keep the existing one".
-	Password     string
-	Nickname     string
-	Permissions  model.Permission
-	Enable       bool
-	IsSuperAdmin bool
+	Password          string
+	Nickname          string
+	Permissions       model.Permission
+	Enable            bool
+	SubscriptionLimit int
+	IsSuperAdmin      bool
 	// InboundIds is the exact set of inbounds this admin may see. Replaces whatever
 	// they had. Empty means no access at all, which is a legitimate state (an admin
 	// who has not been given anything yet), so it must not be read as "leave alone".
@@ -174,11 +177,12 @@ func (s *AdminService) AddAdmin(spec AdminSpec) (*model.User, error) {
 		return nil, err
 	}
 	user := &model.User{
-		Username:    username,
-		Password:    hash,
-		Nickname:    strings.TrimSpace(spec.Nickname),
-		Permissions: spec.Permissions,
-		Enable:      spec.Enable,
+		Username:          username,
+		Password:          hash,
+		Nickname:          strings.TrimSpace(spec.Nickname),
+		Permissions:       spec.Permissions,
+		Enable:            spec.Enable,
+		SubscriptionLimit: spec.SubscriptionLimit,
 		// A super admin is never created through this path: promotion is a separate,
 		// deliberate act (UpdateAdmin), so a misfiled create can't mint one.
 		IsSuperAdmin: false,
@@ -252,11 +256,12 @@ func (s *AdminService) UpdateAdmin(id int, spec AdminSpec) error {
 	}
 
 	updates := map[string]any{
-		"username":       username,
-		"nickname":       strings.TrimSpace(spec.Nickname),
-		"permissions":    spec.Permissions,
-		"enable":         spec.Enable,
-		"is_super_admin": spec.IsSuperAdmin,
+		"username":           username,
+		"nickname":           strings.TrimSpace(spec.Nickname),
+		"permissions":        spec.Permissions,
+		"enable":             spec.Enable,
+		"subscription_limit": spec.SubscriptionLimit,
+		"is_super_admin":     spec.IsSuperAdmin,
 	}
 	if spec.Password != "" {
 		hash, err := crypto.HashPasswordAsBcrypt(spec.Password)
