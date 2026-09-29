@@ -1052,6 +1052,19 @@
       <span class="bo-backup-name-file">[[ backupFilename ]]</span>
     </div>
   </a-modal>
+  <a-modal id="backup-restore-modal" v-model="backupRestoreModal.visible" title="Восстановить архив базы данных"
+    :closable="true" :class="themeSwitcher.currentTheme" :width="isMobile ? '95%' : 520"
+    :confirm-loading="backupRestoreModal.loading" ok-text="Восстановить" cancel-text='{{ i18n "cancel" }}'
+    @ok="restoreDatabaseArchive" @cancel="resetBackupRestoreModal">
+    <p>Будет заменена текущая база данных панели. Перед заменой создаётся локальная резервная копия.</p>
+    <a-alert type="warning" show-icon message="Проверьте, что выбрали архив именно этой панели."
+      :style="{ marginBottom: '16px' }"></a-alert>
+    <a-form-item v-if="backupRestoreModal.encrypted" label="Пароль архива">
+      <a-input type="password" autocomplete="current-password" v-model="backupRestoreModal.password"
+        placeholder="Введите пароль, использованный при создании архива"
+        @pressEnter="restoreDatabaseArchive"></a-input>
+    </a-form-item>
+  </a-modal>
   <!-- CPU History Modal -->
   <a-modal id="cpu-history-modal" v-model="cpuHistoryModal.visible" :closable="true"
     @cancel="() => cpuHistoryModal.visible = false" :class="themeSwitcher.currentTheme" width="900px" footer="">
@@ -1734,6 +1747,14 @@
     },
   };
 
+  const backupRestoreModal = {
+    visible: false,
+    loading: false,
+    file: null,
+    encrypted: false,
+    password: '',
+  };
+
   // Which components the downloaded .db is named after. Held as the names the
   // server reads off the query string, so nothing has to be translated between
   // the tick and the request.
@@ -1782,6 +1803,7 @@
       xraylogModal,
       backupModal,
       backupNameModal,
+      backupRestoreModal,
       loadingTip: '{{ i18n "loading"}}',
       showAlert: false,
       showIp: false,
@@ -3399,34 +3421,85 @@
       importDatabase() {
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = '.db';
+        fileInput.accept = '.db,.zip,.enc';
         fileInput.addEventListener('change', async (event) => {
           const dbFile = event.target.files[0];
-          if (dbFile) {
-            const formData = new FormData();
-            formData.append('db', dbFile);
+          if (!dbFile) return;
+          const lowerName = dbFile.name.toLowerCase();
+          let prefix;
+          try {
+            prefix = String.fromCharCode(...new Uint8Array(await dbFile.slice(0, 16).arrayBuffer()));
+          } catch (err) {
+            this.$message.error('Не удалось прочитать файл резервной копии.');
+            return;
+          }
+          const encryptedArchive = prefix.startsWith('MTPB');
+          const zipArchive = prefix.startsWith('PK\u0003\u0004');
+          if (encryptedArchive || zipArchive) {
             backupModal.hide();
+            this.backupRestoreModal.file = dbFile;
+            this.backupRestoreModal.encrypted = encryptedArchive;
+            this.backupRestoreModal.password = '';
+            this.backupRestoreModal.visible = true;
+            return;
+          }
+          const sqliteDatabase = prefix.startsWith('SQLite format 3\u0000');
+          if (!sqliteDatabase || !lowerName.endsWith('.db')) {
+            this.$message.error('Выберите файл SQLite .db или архив ZIP базы данных.');
+            return;
+          }
+          const formData = new FormData();
+          formData.append('db', dbFile);
+          backupModal.hide();
+          this.loading(true);
+          const uploadMsg = await HttpUtil.post('/panel/api/server/importDB', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          this.loading(false);
+          if (!uploadMsg.success) return;
+          this.loading(true);
+          const restartMsg = await HttpUtil.post("/panel/setting/restartPanel");
+          this.loading(false);
+          if (restartMsg.success) {
             this.loading(true);
-            const uploadMsg = await HttpUtil.post('/panel/api/server/importDB', formData, {
-              headers: {
-                'Content-Type': 'multipart/form-data',
-              }
-            });
-            this.loading(false);
-            if (!uploadMsg.success) {
-              return;
-            }
-            this.loading(true);
-            const restartMsg = await HttpUtil.post("/panel/setting/restartPanel");
-            this.loading(false);
-            if (restartMsg.success) {
-              this.loading(true);
-              await PromiseUtil.sleep(5000);
-              location.reload();
-            }
+            await PromiseUtil.sleep(5000);
+            location.reload();
           }
         });
         fileInput.click();
+      },
+      resetBackupRestoreModal() {
+        this.backupRestoreModal.visible = false;
+        this.backupRestoreModal.file = null;
+        this.backupRestoreModal.password = '';
+        this.backupRestoreModal.encrypted = false;
+      },
+      async restoreDatabaseArchive() {
+        const state = this.backupRestoreModal;
+        if (!state.file) return;
+        if (state.encrypted && !String(state.password || '').trim()) {
+          this.$message.error('Введите пароль архива.');
+          return;
+        }
+        const formData = new FormData();
+        formData.append('archive', state.file);
+        formData.append('password', state.password || '');
+        state.loading = true;
+        const uploadMsg = await HttpUtil.post('/panel/api/server/importBackup', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        state.loading = false;
+        if (!uploadMsg.success) return;
+        this.resetBackupRestoreModal();
+        this.$message.success('{{ i18n "pages.index.importDatabaseSuccess" }}');
+        this.loading(true);
+        const restartMsg = await HttpUtil.post("/panel/setting/restartPanel");
+        this.loading(false);
+        if (restartMsg.success) {
+          this.loading(true);
+          await PromiseUtil.sleep(5000);
+          location.reload();
+        }
       },
       // Import a stock 3x-ui (or vpn-ui) backup over the current data, keeping this
       // panel's own address/cert/secret. Distinct from importDatabase (a like-for-like

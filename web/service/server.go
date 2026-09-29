@@ -1352,73 +1352,79 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		return common.NewErrorf("Invalid or corrupt db file: %v", err)
 	}
 
-	// Stop Xray (ignore error but log)
+	dbPath := config.GetDBPath()
+	fallbackPath := fmt.Sprintf("%s.backup", dbPath)
+	if _, statErr := os.Stat(fallbackPath); statErr == nil {
+		if err := os.Remove(fallbackPath); err != nil {
+			return common.NewErrorf("Error removing existing fallback db file: %v", err)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return common.NewErrorf("Error checking existing fallback db file: %v", statErr)
+	}
+	if err := database.Checkpoint(); err != nil {
+		return common.NewErrorf("Error checkpointing current database before import: %v", err)
+	}
+
 	if errStop := s.StopXrayService(); errStop != nil {
 		logger.Warningf("Failed to stop Xray before DB import: %v", errStop)
 	}
-
-	// Close existing DB to release file locks (especially on Windows)
 	if errClose := database.CloseDB(); errClose != nil {
-		logger.Warningf("Failed to close existing DB before replacement: %v", errClose)
+		_ = s.RestartXrayService()
+		return common.NewErrorf("Error closing existing database before replacement: %v", errClose)
 	}
-
-	// Backup the current database for fallback
-	fallbackPath := fmt.Sprintf("%s.backup", config.GetDBPath())
-
-	// Remove the existing fallback file (if any)
-	if _, err := os.Stat(fallbackPath); err == nil {
-		if errRemove := os.Remove(fallbackPath); errRemove != nil {
-			return common.NewErrorf("Error removing existing fallback db file: %v", errRemove)
+	if err = os.Rename(dbPath, fallbackPath); err != nil {
+		if initErr := database.InitDB(dbPath); initErr != nil {
+			return common.NewErrorf("Error backing up current DB (%v) and reopening it (%v)", err, initErr)
 		}
-	}
-
-	// Move the current database to the fallback location
-	if err = os.Rename(config.GetDBPath(), fallbackPath); err != nil {
+		_ = s.RestartXrayService()
 		return common.NewErrorf("Error backing up current db file: %v", err)
 	}
-	// The -wal/-shm sidecars are named after the PATH, so they do not travel with
-	// the rename above and would end up paired with the IMPORTED database. A WAL
-	// from a different database is a corruption path. CloseDB normally removes
-	// them, but its error is only logged, so this is the belt to that braces.
-	database.RemoveSidecars(config.GetDBPath())
+	// WAL sidecars are path-named and must not be paired with the imported DB.
+	database.RemoveSidecars(dbPath)
 
-	// Defer fallback cleanup ONLY if everything goes well
-	defer func() {
-		if _, err := os.Stat(fallbackPath); err == nil {
-			if rerr := os.Remove(fallbackPath); rerr != nil {
-				logger.Warningf("Warning: failed to remove fallback file: %v", rerr)
-			}
+	rollback := func(cause error) error {
+		if err := s.StopXrayService(); err != nil {
+			logger.Warningf("Failed to stop Xray before DB restore rollback: %v", err)
 		}
-	}()
-
-	// Move temp to DB path
-	if err = os.Rename(tempPath, config.GetDBPath()); err != nil {
-		// Restore from fallback
-		if errRename := os.Rename(fallbackPath, config.GetDBPath()); errRename != nil {
-			return common.NewErrorf("Error moving db file and restoring fallback: %v", errRename)
+		if err := database.CloseDB(); err != nil {
+			logger.Warningf("Failed to close imported DB during rollback: %v", err)
 		}
-		return common.NewErrorf("Error moving db file: %v", err)
+		database.RemoveSidecars(dbPath)
+		if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+			return common.NewErrorf("%v; failed to remove rejected imported DB: %v", cause, err)
+		}
+		if err := os.Rename(fallbackPath, dbPath); err != nil {
+			return common.NewErrorf("%v; failed to restore previous DB: %v", cause, err)
+		}
+		if err := database.InitDB(dbPath); err != nil {
+			return common.NewErrorf("%v; previous DB file restored but could not reopen it: %v", cause, err)
+		}
+		s.inboundService.MigrateDB()
+		s.l2tpService.InitL2tp()
+		s.pptpService.InitPptp()
+		if err := s.RestartXrayService(); err != nil {
+			return common.NewErrorf("%v; previous DB restored but Xray restart failed: %v", cause, err)
+		}
+		return common.NewErrorf("%v; previous DB and Xray configuration were restored", cause)
 	}
 
-	// Open & migrate new DB
-	if err = database.InitDB(config.GetDBPath()); err != nil {
-		if errRename := os.Rename(fallbackPath, config.GetDBPath()); errRename != nil {
-			return common.NewErrorf("Error migrating db and restoring fallback: %v", errRename)
-		}
-		return common.NewErrorf("Error migrating db: %v", err)
+	if err = os.Rename(tempPath, dbPath); err != nil {
+		return rollback(common.NewErrorf("Error moving staged database into place: %v", err))
+	}
+	if err = database.InitDB(dbPath); err != nil {
+		return rollback(common.NewErrorf("Error migrating imported database: %v", err))
 	}
 
 	s.inboundService.MigrateDB()
-
-	// Regenerate L2TP/PPTP on-disk configs from the imported DB and restart services
 	s.l2tpService.InitL2tp()
 	s.pptpService.InitPptp()
-
-	// Start Xray
 	if err = s.RestartXrayService(); err != nil {
-		return common.NewErrorf("Imported DB but failed to start Xray: %v", err)
+		return rollback(common.NewErrorf("Imported database could not start Xray: %v", err))
 	}
 
+	if err := os.Remove(fallbackPath); err != nil {
+		logger.Warningf("Imported DB successfully, but could not remove fallback file %q: %v", fallbackPath, err)
+	}
 	return nil
 }
 

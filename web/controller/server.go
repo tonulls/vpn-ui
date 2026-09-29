@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/web/global"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
@@ -131,6 +133,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/logs/:count", requireOverviewManage(), a.getLogs)
 	g.POST("/xraylogs/:count", requireOverviewManage(), a.getXrayLogs)
 	g.POST("/importDB", requireOverviewManage(), a.importDB)
+	g.POST("/importBackup", requireOverviewManage(), a.importBackup)
 	g.POST("/importForeignDB", requireOverviewManage(), a.importForeignDB)
 	g.POST("/getNewEchCert", a.getNewEchCert)
 }
@@ -706,12 +709,78 @@ func (a *ServerController) importDB(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	// Always restart Xray before return
-	defer a.serverService.RestartXrayService()
 	// lastGetStatusTime removed; no longer needed
 	// Import it
 	err = a.serverService.ImportDB(file)
 	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	jsonObj(c, I18nWeb(c, "pages.index.importDatabaseSuccess"), nil)
+}
+
+// importBackup decrypts and validates a database-only archive before passing its
+// staged SQLite file to the existing like-for-like database importer.
+func (a *ServerController) importBackup(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, int64(service.MaxDatabaseBackupArchiveBytes)+(1<<20))
+	archiveFile, _, err := c.Request.FormFile("archive")
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.readDatabaseError"), err)
+		return
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	defer archiveFile.Close()
+
+	archiveBytes, err := io.ReadAll(io.LimitReader(archiveFile, int64(service.MaxDatabaseBackupArchiveBytes)+1))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	if len(archiveBytes) > service.MaxDatabaseBackupArchiveBytes {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), errors.New("backup archive exceeds the size limit"))
+		return
+	}
+	databaseBytes, _, err := service.DecodeDatabaseBackupArchive(archiveBytes, c.PostForm("password"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+
+	stagedDB, err := os.CreateTemp("", "vpn-ui-restore-*.db")
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	stagedPath := stagedDB.Name()
+	defer os.Remove(stagedPath)
+	if _, err := stagedDB.Write(databaseBytes); err != nil {
+		_ = stagedDB.Close()
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	if err := stagedDB.Sync(); err != nil {
+		_ = stagedDB.Close()
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	if err := stagedDB.Close(); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	if err := database.ValidateSQLiteDB(stagedPath); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+
+	stagedDB, err = os.Open(stagedPath)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
+		return
+	}
+	defer stagedDB.Close()
+	if err := a.serverService.ImportDB(stagedDB); err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
 		return
 	}

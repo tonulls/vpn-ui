@@ -220,6 +220,13 @@
       serviceLogLoading: false,
       serviceLogAuto: false,
       serviceLogTimer: null,
+      tgBackupRestore: {
+        visible: false,
+        loading: false,
+        file: null,
+        encrypted: false,
+        password: '',
+      },
       // The SSL certificate manager's whole client state. One object so the
       // panel's dozen fields do not spread across the page's data block, and so
       // a reset is one assignment.
@@ -1186,7 +1193,86 @@
           this.inboundOptions = [];
         }
       },
+      onTgForumToggle(enabled) {
+        if (!enabled) {
+          this.allSetting.tgNotifyForum = false;
+          this.allSetting.tgBackupEnable = false;
+        }
+      },
+      chooseTgBackupArchive() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.zip,.enc';
+        input.addEventListener('change', async event => {
+          const file = event.target.files && event.target.files[0];
+          if (!file) return;
+          let prefix;
+          try {
+            prefix = String.fromCharCode(...new Uint8Array(await file.slice(0, 5).arrayBuffer()));
+          } catch (err) {
+            this.$message.error('Не удалось прочитать файл архива.');
+            return;
+          }
+          const encrypted = prefix.startsWith('MTPB');
+          if (!encrypted && !prefix.startsWith('PK\u0003\u0004')) {
+            this.$message.error('Файл не является поддерживаемым ZIP-архивом базы данных.');
+            return;
+          }
+          this.tgBackupRestore.file = file;
+          this.tgBackupRestore.encrypted = encrypted;
+          this.tgBackupRestore.password = '';
+          this.tgBackupRestore.visible = true;
+        });
+        input.click();
+      },
+      resetTgBackupRestore() {
+        this.tgBackupRestore.visible = false;
+        this.tgBackupRestore.file = null;
+        this.tgBackupRestore.encrypted = false;
+        this.tgBackupRestore.password = '';
+      },
+      async restoreTgBackupArchive() {
+        const state = this.tgBackupRestore;
+        if (!state.file) return;
+        if (state.encrypted && !String(state.password || '').trim()) {
+          this.$message.error('Введите пароль архива.');
+          return;
+        }
+        const formData = new FormData();
+        formData.append('archive', state.file);
+        formData.append('password', state.password || '');
+        state.loading = true;
+        const uploadMsg = await HttpUtil.post('/panel/api/server/importBackup', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        state.loading = false;
+        if (!uploadMsg || !uploadMsg.success) return;
+        this.resetTgBackupRestore();
+        this.$message.success('База данных восстановлена. Перезапускаю панель…');
+        const restartMsg = await HttpUtil.post('/panel/setting/restartPanel');
+        if (!restartMsg || !restartMsg.success) return;
+        this.loading(true);
+        await PromiseUtil.sleep(5000);
+        location.reload();
+      },
       async updateAllSetting() {
+        const forumChatId = String(this.allSetting.tgForumChatId || '').trim();
+        if (this.allSetting.tgForumEnable && !forumChatId) {
+          this.$message.error('Укажите ID чата форума.');
+          return;
+        }
+        if (this.allSetting.tgNotifyForum && !this.allSetting.tgForumEnable) {
+          this.$message.error('Сначала включите Telegram Форум и укажите ID чата.');
+          return;
+        }
+        if (this.allSetting.tgBackupEnable && (!this.allSetting.tgForumEnable || !forumChatId)) {
+          this.$message.error('Для резервного копирования включите форум и укажите ID чата.');
+          return;
+        }
+        if (this.allSetting.tgBackupEncrypt && !String(this.allSetting.tgBackupPassword || '').trim()) {
+          this.$message.error('Введите пароль для шифрования архива.');
+          return;
+        }
         this.loading(true);
         const msg = await HttpUtil.post("/panel/setting/update", this.allSetting);
         this.loading(false);

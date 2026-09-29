@@ -276,5 +276,26 @@
             </template>
         </a-setting-list-item>
     </a-collapse-panel>
+    <a-collapse-panel key="7" header="Восстановление базы данных">
+        <a-setting-list-item paddings="small">
+            <template #title>Восстановить из архива</template>
+            <template #description>Загрузить .zip или .zip.enc, проверить и заменить базу данных панели.</template>
+            <template #control>
+                <a-button type="primary" icon="upload" @click="chooseTgBackupArchive">Выбрать архив</a-button>
+                <span v-if="tgBackupRestore.file" class="tg-restore-filename">[[ tgBackupRestore.file.name ]]</span>
+            </template>
+        </a-setting-list-item>
+        <a-modal v-model="tgBackupRestore.visible" title="Восстановить архив базы данных"
+            :class="themeSwitcher.currentTheme" :width="isMobile ? '95%' : 520"
+            :confirm-loading="tgBackupRestore.loading" ok-text="Восстановить" cancel-text="Отмена"
+            @ok="restoreTgBackupArchive" @cancel="resetTgBackupRestore">
+            <p>Текущая база данных будет заменена. Перед импортом панель проверит архив, пароль и целостность базы.</p>
+            <a-form-item v-if="tgBackupRestore.encrypted" label="Пароль архива">
+                <a-input type="password" autocomplete="current-password" v-model="tgBackupRestore.password"
+                    placeholder="Введите пароль, использованный при создании архива"
+                    @pressEnter="restoreTgBackupArchive"></a-input>
+            </a-form-item>
+        </a-modal>
+    </a-collapse-panel>
 </a-collapse>
 {{end}}

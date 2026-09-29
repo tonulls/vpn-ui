@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
-	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
@@ -218,6 +217,10 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	// Parse admin IDs from comma-separated string
 	if tgBotID != "" {
 		for _, adminID := range strings.Split(tgBotID, ",") {
+			adminID = strings.TrimSpace(adminID)
+			if adminID == "" {
+				continue
+			}
 			id, err := strconv.ParseInt(adminID, 10, 64)
 			if err != nil {
 				logger.Warning("Failed to parse admin ID from Telegram bot chat ID:", err)
@@ -2636,41 +2639,10 @@ func (t *Tgbot) SendMsgToTgbotAdmins(msg string, replyMarkup ...telego.ReplyMark
 	}
 }
 
-// SendReport sends a periodic report to admin chats.
-func (t *Tgbot) SendReport() {
-	runTime, err := t.settingService.GetTgbotRuntime()
-	if err == nil && len(runTime) > 0 {
-		msg := ""
-		msg += t.I18nBot("tgbot.messages.report", "RunTime=="+runTime)
-		msg += t.I18nBot("tgbot.messages.datetime", "DateTime=="+time.Now().Format("2006-01-02 15:04:05"))
-		t.SendMsgToTgbotAdmins(msg)
-	}
-
-	info := t.sendServerUsage()
-	t.SendMsgToTgbotAdmins(info)
-
-	t.sendExhaustedToAdmins()
-	t.notifyExhausted()
-
-	backupEnable, err := t.settingService.GetTgBotBackup()
-	if err == nil && backupEnable {
-		t.SendBackupToAdmins()
-	}
-}
-
-// SendBackupToAdmins sends a database backup to admin chats.
-func (t *Tgbot) SendBackupToAdmins() {
-	if !t.IsRunning() {
-		return
-	}
-	for i, adminId := range adminIds {
-		t.sendBackup(int64(adminId))
-		// Add delay between sends to avoid Telegram rate limits
-		if i < len(adminIds)-1 {
-			time.Sleep(1 * time.Second)
-		}
-	}
-}
+// SendReport is retained as a no-op for compatibility with older in-process
+// callers. Automatic periodic report broadcasts were replaced by event-based
+// notifications and the independent scheduled database backup.
+func (t *Tgbot) SendReport() {}
 
 // sendExhaustedToAdmins sends notifications about exhausted clients to admins.
 func (t *Tgbot) sendExhaustedToAdmins() {
@@ -2766,38 +2738,6 @@ func (t *Tgbot) prepareServerUsageInfo() string {
 	t.setCachedServerStats(info)
 
 	return info
-}
-
-// UserLoginNotify sends a notification about user login attempts to admins.
-func (t *Tgbot) UserLoginNotify(username string, password string, ip string, time string, status LoginStatus) {
-	if !t.IsRunning() {
-		return
-	}
-
-	if username == "" || ip == "" || time == "" {
-		logger.Warning("UserLoginNotify failed, invalid info!")
-		return
-	}
-
-	loginNotifyEnabled, err := t.settingService.GetTgBotLoginNotify()
-	if err != nil || !loginNotifyEnabled {
-		return
-	}
-
-	msg := ""
-	switch status {
-	case LoginSuccess:
-		msg += t.I18nBot("tgbot.messages.loginSuccess")
-		msg += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-	case LoginFail:
-		msg += t.I18nBot("tgbot.messages.loginFailed")
-		msg += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-		msg += t.I18nBot("tgbot.messages.password", "Password=="+password)
-	}
-	msg += t.I18nBot("tgbot.messages.username", "Username=="+username)
-	msg += t.I18nBot("tgbot.messages.ip", "IP=="+ip)
-	msg += t.I18nBot("tgbot.messages.time", "Time=="+time)
-	t.SendMsgToTgbotAdmins(msg)
 }
 
 // getInboundUsages retrieves and formats inbound usage information.
@@ -3644,55 +3584,15 @@ func (t *Tgbot) onlineClients(chatId int64, messageID ...int) {
 	}
 }
 
-// sendBackup sends a backup of the database and configuration files.
+// sendBackup is the legacy bot-command entry point; it now sends only the new
+// database archive to the configured forum topic, never raw DB/config files to DM.
 func (t *Tgbot) sendBackup(chatId int64) {
-	output := t.I18nBot("tgbot.messages.backupTime", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
-	t.SendMsgToTgbot(chatId, output)
-
-	// Update by manually trigger a checkpoint operation
-	err := database.Checkpoint()
-	if err != nil {
-		logger.Error("Error in trigger a checkpoint operation: ", err)
+	if err := t.SendDatabaseBackupArchive(); err != nil {
+		logger.Warningf("Manual Telegram backup failed: %v", err)
+		t.SendMsgToTgbot(chatId, t.I18nBot("tgbot.answers.errorOperation"))
+		return
 	}
-
-	// Send database backup
-	file, err := os.Open(config.GetDBPath())
-	if err == nil {
-		defer file.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		document := tu.Document(
-			tu.ID(chatId),
-			tu.File(file),
-		)
-		_, err = bot.SendDocument(ctx, document)
-		if err != nil {
-			logger.Error("Error in uploading backup: ", err)
-		}
-	} else {
-		logger.Error("Error in opening db file for backup: ", err)
-	}
-
-	// Small delay between file sends
-	time.Sleep(500 * time.Millisecond)
-
-	// Send config.json backup
-	file, err = os.Open(xray.GetConfigPath())
-	if err == nil {
-		defer file.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		document := tu.Document(
-			tu.ID(chatId),
-			tu.File(file),
-		)
-		_, err = bot.SendDocument(ctx, document)
-		if err != nil {
-			logger.Error("Error in uploading config.json: ", err)
-		}
-	} else {
-		logger.Error("Error in opening config.json file for backup: ", err)
-	}
+	t.SendMsgToTgbot(chatId, "Резервная копия отправлена в тему форума.")
 }
 
 // sendBanLogs sends the ban logs to the specified chat.

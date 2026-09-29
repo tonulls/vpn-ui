@@ -46,10 +46,26 @@ var defaultValueMap = map[string]string{
 	"tgBotAPIServer":              "",
 	"tgBotChatId":                 "",
 	"tgRunTime":                   "@daily",
-	"tgBotBackup":                 "false",
-	"tgBotLoginNotify":            "true",
-	"tgCpu":                       "80",
+	"tgBotBackup":                 "false", // Legacy key; automatic reports are no longer scheduled.
+	"tgBotLoginNotify":            "true",  // Legacy key; per-event switches below are authoritative.
 	"tgLang":                      "en-US",
+	"tgForumEnable":               "false",
+	"tgForumChatId":               "",
+	"tgNotifyDirect":              "true",
+	"tgNotifyForum":               "false",
+	"tgNotifyLoginSuccess":        "true",
+	"tgNotifyLoginFailure":        "true",
+	"tgNotifyCPU":                 "false",
+	"tgCpu":                       "80",
+	"tgTopicLoginSuccess":         "",
+	"tgTopicLoginFailure":         "",
+	"tgTopicCPU":                  "",
+	"tgBackupEnable":              "false",
+	"tgBackupIntervalHours":       "24",
+	"tgBackupTopicId":             "",
+	"tgBackupEncrypt":             "false",
+	"tgBackupPassword":            "",
+	"tgBackupLastSentAt":          "0",
 	"twoFactorEnable":             "false",
 	"twoFactorToken":              "",
 	"systemdServiceName":          "vpn-ui",
@@ -159,6 +175,8 @@ func (s *SettingService) GetDefaultJSONConfig() (any, error) {
 	return jsonData, nil
 }
 
+const redactedBackupPassword = "********"
+
 func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 	db := database.GetDB()
 	settings := make([]*model.Setting, 0)
@@ -231,6 +249,11 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		}
 	}
 
+	// The archive password is write-only. Return a fixed marker so the settings
+	// form can show that one exists without exposing it in the settings API.
+	if allSetting.TgBackupPassword != "" {
+		allSetting.TgBackupPassword = redactedBackupPassword
+	}
 	return allSetting, nil
 }
 
@@ -394,6 +417,94 @@ func (s *SettingService) GetTgBotLoginNotify() (bool, error) {
 
 func (s *SettingService) GetTgCpu() (int, error) {
 	return s.getInt("tgCpu")
+}
+
+func (s *SettingService) GetTgForumEnable() (bool, error) {
+	return s.getBool("tgForumEnable")
+}
+
+func (s *SettingService) GetTgForumChatId() (string, error) {
+	return s.getString("tgForumChatId")
+}
+
+func (s *SettingService) GetTgNotifyDirect() (bool, error) {
+	return s.getBool("tgNotifyDirect")
+}
+
+func (s *SettingService) GetTgNotifyForum() (bool, error) {
+	return s.getBool("tgNotifyForum")
+}
+
+func (s *SettingService) GetTgNotifyLoginSuccess() (bool, error) {
+	return s.getBool("tgNotifyLoginSuccess")
+}
+
+func (s *SettingService) GetTgNotifyLoginFailure() (bool, error) {
+	return s.getBool("tgNotifyLoginFailure")
+}
+
+func (s *SettingService) GetTgNotifyCPU() (bool, error) {
+	return s.getBool("tgNotifyCPU")
+}
+
+func (s *SettingService) GetTgTopicLoginSuccess() (string, error) {
+	return s.getString("tgTopicLoginSuccess")
+}
+
+func (s *SettingService) SetTgTopicLoginSuccess(value string) error {
+	return s.setString("tgTopicLoginSuccess", value)
+}
+
+func (s *SettingService) GetTgTopicLoginFailure() (string, error) {
+	return s.getString("tgTopicLoginFailure")
+}
+
+func (s *SettingService) SetTgTopicLoginFailure(value string) error {
+	return s.setString("tgTopicLoginFailure", value)
+}
+
+func (s *SettingService) GetTgTopicCPU() (string, error) {
+	return s.getString("tgTopicCPU")
+}
+
+func (s *SettingService) SetTgTopicCPU(value string) error {
+	return s.setString("tgTopicCPU", value)
+}
+
+func (s *SettingService) GetTgBackupEnable() (bool, error) {
+	return s.getBool("tgBackupEnable")
+}
+
+func (s *SettingService) GetTgBackupIntervalHours() (int, error) {
+	return s.getInt("tgBackupIntervalHours")
+}
+
+func (s *SettingService) GetTgBackupTopicId() (string, error) {
+	return s.getString("tgBackupTopicId")
+}
+
+func (s *SettingService) SetTgBackupTopicId(value string) error {
+	return s.setString("tgBackupTopicId", value)
+}
+
+func (s *SettingService) GetTgBackupEncrypt() (bool, error) {
+	return s.getBool("tgBackupEncrypt")
+}
+
+func (s *SettingService) GetTgBackupPassword() (string, error) {
+	return s.getString("tgBackupPassword")
+}
+
+func (s *SettingService) GetTgBackupLastSentAt() (int64, error) {
+	value, err := s.getString("tgBackupLastSentAt")
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(value, 10, 64)
+}
+
+func (s *SettingService) SetTgBackupLastSentAt(value time.Time) error {
+	return s.setString("tgBackupLastSentAt", strconv.FormatInt(value.Unix(), 10))
 }
 
 func (s *SettingService) GetTgLang() (string, error) {
@@ -988,6 +1099,12 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	if err := allSetting.CheckValid(); err != nil {
 		return err
 	}
+	oldForumChatID, _ := s.GetTgForumChatId()
+	topicKeys := []string{"tgTopicLoginSuccess", "tgTopicLoginFailure", "tgTopicCPU", "tgBackupTopicId"}
+	oldTopicIDs := make(map[string]string, len(topicKeys))
+	for _, key := range topicKeys {
+		oldTopicIDs[key], _ = s.getString(key)
+	}
 
 	v := reflect.ValueOf(allSetting).Elem()
 	t := reflect.TypeFor[entity.AllSetting]()
@@ -997,9 +1114,32 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		key := field.Tag.Get("json")
 		fieldV := v.FieldByName(field.Name)
 		value := fmt.Sprint(fieldV.Interface())
+		if key == "tgBackupPassword" && (value == redactedBackupPassword || value == "") {
+			// Password updates are write-only. A blank/masked value means retain the
+			// current secret; turning encryption off is controlled by its own switch.
+			continue
+		}
 		err := s.saveSetting(key, value)
 		if err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if oldForumChatID != allSetting.TgForumChatId {
+		// Topic IDs are scoped to a forum chat. Clear values carried over from the
+		// previous group, but keep IDs the operator explicitly changed in this save.
+		newTopicIDs := map[string]string{
+			"tgTopicLoginSuccess": allSetting.TgTopicLoginSuccess,
+			"tgTopicLoginFailure": allSetting.TgTopicLoginFailure,
+			"tgTopicCPU":          allSetting.TgTopicCPU,
+			"tgBackupTopicId":     allSetting.TgBackupTopicId,
+		}
+		for _, key := range topicKeys {
+			if newTopicIDs[key] != oldTopicIDs[key] {
+				continue
+			}
+			if err := s.setString(key, ""); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return common.Combine(errs...)

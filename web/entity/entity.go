@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,16 +38,29 @@ type AllSetting struct {
 	Datepicker  string `json:"datepicker" form:"datepicker"`   // Date picker format
 
 	// Telegram bot settings
-	TgBotEnable      bool   `json:"tgBotEnable" form:"tgBotEnable"`           // Enable Telegram bot notifications
-	TgBotToken       string `json:"tgBotToken" form:"tgBotToken"`             // Telegram bot token
-	TgBotProxy       string `json:"tgBotProxy" form:"tgBotProxy"`             // Proxy URL for Telegram bot
-	TgBotAPIServer   string `json:"tgBotAPIServer" form:"tgBotAPIServer"`     // Custom API server for Telegram bot
-	TgBotChatId      string `json:"tgBotChatId" form:"tgBotChatId"`           // Telegram chat ID for notifications
-	TgRunTime        string `json:"tgRunTime" form:"tgRunTime"`               // Cron schedule for Telegram notifications
-	TgBotBackup      bool   `json:"tgBotBackup" form:"tgBotBackup"`           // Enable database backup via Telegram
-	TgBotLoginNotify bool   `json:"tgBotLoginNotify" form:"tgBotLoginNotify"` // Send login notifications
-	TgCpu            int    `json:"tgCpu" form:"tgCpu"`                       // CPU usage threshold for alerts
-	TgLang           string `json:"tgLang" form:"tgLang"`                     // Telegram bot language
+	TgBotEnable           bool   `json:"tgBotEnable" form:"tgBotEnable"`                     // Enable Telegram bot
+	TgBotToken            string `json:"tgBotToken" form:"tgBotToken"`                       // Telegram bot token
+	TgBotProxy            string `json:"tgBotProxy" form:"tgBotProxy"`                       // Proxy URL for Telegram bot
+	TgBotAPIServer        string `json:"tgBotAPIServer" form:"tgBotAPIServer"`               // Custom API server for Telegram bot
+	TgBotChatId           string `json:"tgBotChatId" form:"tgBotChatId"`                     // Telegram admin chat IDs for private delivery
+	TgRunTime             string `json:"tgRunTime" form:"tgRunTime"`                         // Legacy report schedule (retained for DB compatibility)
+	TgLang                string `json:"tgLang" form:"tgLang"`                               // Telegram bot language
+	TgForumEnable         bool   `json:"tgForumEnable" form:"tgForumEnable"`                 // Enable Telegram forum destination
+	TgForumChatId         string `json:"tgForumChatId" form:"tgForumChatId"`                 // Telegram forum supergroup chat ID
+	TgNotifyDirect        bool   `json:"tgNotifyDirect" form:"tgNotifyDirect"`               // Send event notifications to admins privately
+	TgNotifyForum         bool   `json:"tgNotifyForum" form:"tgNotifyForum"`                 // Send event notifications to forum
+	TgNotifyLoginSuccess  bool   `json:"tgNotifyLoginSuccess" form:"tgNotifyLoginSuccess"`   // Notify successful logins
+	TgNotifyLoginFailure  bool   `json:"tgNotifyLoginFailure" form:"tgNotifyLoginFailure"`   // Notify failed logins
+	TgNotifyCPU           bool   `json:"tgNotifyCPU" form:"tgNotifyCPU"`                     // Notify CPU threshold crossings
+	TgCpu                 int    `json:"tgCpu" form:"tgCpu"`                                 // CPU usage threshold for alerts
+	TgTopicLoginSuccess   string `json:"tgTopicLoginSuccess" form:"tgTopicLoginSuccess"`     // Forum thread ID for successful logins
+	TgTopicLoginFailure   string `json:"tgTopicLoginFailure" form:"tgTopicLoginFailure"`     // Forum thread ID for failed logins
+	TgTopicCPU            string `json:"tgTopicCPU" form:"tgTopicCPU"`                       // Forum thread ID for CPU alerts
+	TgBackupEnable        bool   `json:"tgBackupEnable" form:"tgBackupEnable"`               // Enable scheduled database backup
+	TgBackupIntervalHours int    `json:"tgBackupIntervalHours" form:"tgBackupIntervalHours"` // Backup interval in hours
+	TgBackupTopicId       string `json:"tgBackupTopicId" form:"tgBackupTopicId"`             // Forum thread ID for backups
+	TgBackupEncrypt       bool   `json:"tgBackupEncrypt" form:"tgBackupEncrypt"`             // Encrypt backup archive
+	TgBackupPassword      string `json:"tgBackupPassword" form:"tgBackupPassword"`           // Write-only backup archive password
 
 	// Security settings
 	TimeLocation    string `json:"timeLocation" form:"timeLocation"`       // Time zone location
@@ -112,8 +126,69 @@ type AllSetting struct {
 	// JSON subscription routing rules
 }
 
+// normalizeForumChatID accepts Telegram supergroup IDs with or without the
+// canonical minus sign and returns the negative -100… form.
+func normalizeForumChatID(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	digits := strings.TrimPrefix(raw, "-")
+	if strings.HasPrefix(raw, "+") || !strings.HasPrefix(digits, "100") {
+		return "", common.NewError("forum chat ID must be a Telegram supergroup ID beginning with 100")
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return "", common.NewError("forum chat ID must contain only digits and an optional leading minus")
+		}
+	}
+	if _, err := strconv.ParseInt(digits, 10, 64); err != nil {
+		return "", common.NewError("forum chat ID is outside the supported numeric range")
+	}
+	return "-" + digits, nil
+}
+
 // CheckValid validates all settings in the AllSetting struct, checking IP addresses, ports, SSL certificates, and other configuration values.
 func (s *AllSetting) CheckValid() error {
+	forumChatID, err := normalizeForumChatID(s.TgForumChatId)
+	if err != nil {
+		return err
+	}
+	s.TgForumChatId = forumChatID
+	if s.TgForumEnable && forumChatID == "" {
+		return common.NewError("forum chat ID is required when Telegram forum is enabled")
+	}
+	if s.TgNotifyForum && !s.TgForumEnable {
+		return common.NewError("enable the Telegram forum before enabling forum notifications")
+	}
+	if s.TgBackupEnable && (!s.TgForumEnable || forumChatID == "") {
+		return common.NewError("enable the Telegram forum and set its chat ID before enabling backups")
+	}
+	if s.TgBackupIntervalHours == 0 {
+		s.TgBackupIntervalHours = 24
+	}
+	if s.TgBackupIntervalHours < 1 || s.TgBackupIntervalHours > 8760 {
+		return common.NewError("backup interval must be between 1 and 8760 hours")
+	}
+	if s.TgCpu == 0 {
+		s.TgCpu = 80
+	}
+	if s.TgCpu < 1 || s.TgCpu > 100 {
+		return common.NewError("CPU threshold must be between 1 and 100 percent")
+	}
+	if s.TgBackupEncrypt && strings.TrimSpace(s.TgBackupPassword) == "" {
+		return common.NewError("backup password is required when archive encryption is enabled")
+	}
+	for _, topicID := range []string{s.TgTopicLoginSuccess, s.TgTopicLoginFailure, s.TgTopicCPU, s.TgBackupTopicId} {
+		if topicID == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(strings.TrimSpace(topicID), 10, 64)
+		if err != nil || id <= 0 {
+			return common.NewError("forum topic IDs must be positive integers")
+		}
+	}
+
 	if s.WebListen != "" {
 		ip := net.ParseIP(s.WebListen)
 		if ip == nil {
@@ -181,7 +256,7 @@ func (s *AllSetting) CheckValid() error {
 		s.SubClashPath += "/"
 	}
 
-	_, err := time.LoadLocation(s.TimeLocation)
+	_, err = time.LoadLocation(s.TimeLocation)
 	if err != nil {
 		return common.NewError("time location not exist:", s.TimeLocation)
 	}

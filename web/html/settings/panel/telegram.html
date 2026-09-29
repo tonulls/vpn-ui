@@ -35,37 +35,130 @@
             </template>
         </a-setting-list-item>
     </a-collapse-panel>
-    <a-collapse-panel key="2" header='{{ i18n "pages.settings.notifications" }}'>
+
+    <a-collapse-panel key="2" header="Форум">
         <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.telegramNotifyTime"}}</template>
-            <template #description>{{ i18n "pages.settings.telegramNotifyTimeDesc"}}</template>
+            <template #title>Включить Telegram Форум</template>
+            <template #description>Разрешить боту отправлять события и резервные копии в форум супергруппы.</template>
             <template #control>
-                <a-input type="text" v-model="allSetting.tgRunTime"></a-input>
+                <a-switch v-model="allSetting.tgForumEnable" @change="onTgForumToggle"></a-switch>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.tgNotifyBackup" }}</template>
-            <template #description>{{ i18n "pages.settings.tgNotifyBackupDesc" }}</template>
+            <template #title>ID чата Форума</template>
+            <template #description>Вставьте ID супергруппы. Можно указать со знаком минус или без него.</template>
             <template #control>
-                <a-switch v-model="allSetting.tgBotBackup"></a-switch>
-            </template>
-        </a-setting-list-item>
-        <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.tgNotifyLogin" }}</template>
-            <template #description>{{ i18n "pages.settings.tgNotifyLoginDesc" }}</template>
-            <template #control>
-                <a-switch v-model="allSetting.tgBotLoginNotify"></a-switch>
-            </template>
-        </a-setting-list-item>
-        <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.tgNotifyCpu" }}</template>
-            <template #description>{{ i18n "pages.settings.tgNotifyCpuDesc" }}</template>
-            <template #control>
-                <a-input-number :min="0" :min="100" v-model="allSetting.tgCpu" :style="{ width: '100%' }"></a-switch>
+                <a-input type="text" placeholder="-1001234567890" v-model.trim="allSetting.tgForumChatId"
+                    :disabled="!allSetting.tgForumEnable"></a-input>
             </template>
         </a-setting-list-item>
     </a-collapse-panel>
-    <a-collapse-panel key="3" header='{{ i18n "pages.settings.proxyAndServer" }}'>
+
+    <a-collapse-panel key="3" header="Уведомления">
+        <a-setting-list-item paddings="small">
+            <template #title>Каналы доставки</template>
+            <template #description>Личные уведомления включены по умолчанию; форумные можно включить отдельно.</template>
+            <template #control>
+                <div class="tg-notify-channels">
+                    <label><span>В личку бота</span><a-switch v-model="allSetting.tgNotifyDirect"></a-switch></label>
+                    <label><span>В форум</span><a-switch v-model="allSetting.tgNotifyForum"
+                        :disabled="!allSetting.tgForumEnable || !allSetting.tgForumChatId"></a-switch></label>
+                </div>
+            </template>
+        </a-setting-list-item>
+
+        <div class="tg-events-table" role="table" aria-label="События Telegram">
+            <div class="tg-events-row tg-events-header" role="row">
+                <div role="columnheader">Событие</div>
+                <div role="columnheader" class="tg-center">Включить</div>
+                <div role="columnheader">Порог</div>
+                <div role="columnheader">ID темы форума</div>
+            </div>
+            <div class="tg-events-row" role="row">
+                <div class="tg-event-name" role="cell">
+                    <strong>Успешный вход</strong>
+                    <small>Вход администратора в панель</small>
+                </div>
+                <div class="tg-center" role="cell"><a-switch v-model="allSetting.tgNotifyLoginSuccess"></a-switch></div>
+                <div class="tg-event-empty" role="cell">—</div>
+                <div role="cell"><a-input v-model.trim="allSetting.tgTopicLoginSuccess"
+                    placeholder="Создаётся автоматически" :disabled="!allSetting.tgForumEnable"></a-input></div>
+            </div>
+            <div class="tg-events-row" role="row">
+                <div class="tg-event-name" role="cell">
+                    <strong>Неуспешный вход</strong>
+                    <small>Неверные учётные данные или код 2FA</small>
+                </div>
+                <div class="tg-center" role="cell"><a-switch v-model="allSetting.tgNotifyLoginFailure"></a-switch></div>
+                <div class="tg-event-empty" role="cell">—</div>
+                <div role="cell"><a-input v-model.trim="allSetting.tgTopicLoginFailure"
+                    placeholder="Создаётся автоматически" :disabled="!allSetting.tgForumEnable"></a-input></div>
+            </div>
+            <div class="tg-events-row" role="row">
+                <div class="tg-event-name" role="cell">
+                    <strong>Нагрузка на ЦП</strong>
+                    <small>Одно уведомление при пересечении порога вверх</small>
+                </div>
+                <div class="tg-center" role="cell"><a-switch v-model="allSetting.tgNotifyCPU"></a-switch></div>
+                <div role="cell" class="tg-cpu-threshold">
+                    <a-input-number v-model="allSetting.tgCpu" :min="1" :max="100" :formatter="value => `${value}%`"
+                        :parser="value => value.replace('%', '')" aria-label="Порог CPU в процентах"></a-input-number>
+                </div>
+                <div role="cell"><a-input v-model.trim="allSetting.tgTopicCPU"
+                    placeholder="Создаётся автоматически" :disabled="!allSetting.tgForumEnable"></a-input></div>
+            </div>
+        </div>
+        <div class="tg-events-note">Если ID темы оставить пустым, форумная тема создастся автоматически при первой отправке в неё.</div>
+    </a-collapse-panel>
+
+    <a-collapse-panel key="4" header="Backup">
+        <a-setting-list-item paddings="small">
+            <template #title>Резервное копирование</template>
+            <template #description>Отправлять архив базы данных в Telegram-форум по расписанию.</template>
+            <template #control>
+                <a-switch v-model="allSetting.tgBackupEnable"
+                    :disabled="!allSetting.tgForumEnable || !allSetting.tgForumChatId"></a-switch>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>Интервал</template>
+            <template #description>Период отправки резервной копии в часах.</template>
+            <template #control>
+                <div class="tg-interval-control">
+                    <a-input-number v-model="allSetting.tgBackupIntervalHours" :min="1" :max="8760"
+                        :style="{ width: '100%' }"></a-input-number>
+                    <span>часов</span>
+                </div>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>ID темы для резервных копий</template>
+            <template #description>Оставьте пустым, чтобы тема создалась автоматически.</template>
+            <template #control>
+                <a-input v-model.trim="allSetting.tgBackupTopicId" placeholder="Создаётся автоматически"
+                    :disabled="!allSetting.tgForumEnable"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>Шифровать архив паролем</template>
+            <template #description>Если выключено, будет отправлен обычный ZIP-файл.</template>
+            <template #control>
+                <a-switch v-model="allSetting.tgBackupEncrypt"></a-switch>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item v-if="allSetting.tgBackupEncrypt" paddings="small">
+            <template #title>Пароль архива</template>
+            <template #description>Сохранённый пароль отображается маской. Пустое поле не удаляет его.</template>
+            <template #control>
+                <a-input type="password" autocomplete="new-password" v-model="allSetting.tgBackupPassword"
+                    placeholder="Введите пароль для архива"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-alert type="warning" show-icon message="Незашифрованный архив содержит чувствительные данные из базы данных."
+            :style="{ margin: '8px 20px 16px' }"></a-alert>
+    </a-collapse-panel>
+
+    <a-collapse-panel key="5" header='{{ i18n "pages.settings.proxyAndServer" }}'>
         <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.telegramProxy"}}</template>
             <template #description>{{ i18n "pages.settings.telegramProxyDesc"}}</template>

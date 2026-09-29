@@ -2657,3 +2657,108 @@ body.dark .custom-geo-section .ant-table:not(.ant-table-expanded-row .ant-table)
   border-color:var(--dark-color-surface-400);
 }
 
+/* Telegram event rows share a fixed column grid so every topic ID field starts
+   at the same vertical edge, independent of event label length. */
+.tg-notify-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+}
+
+.tg-notify-channels label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.tg-events-table {
+  margin: 8px 20px 0;
+  overflow-x: auto;
+  border: 1px solid var(--color-stroke, rgba(128, 128, 128, .22));
+  border-radius: 8px;
+}
+
+.tg-events-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.15fr) 86px minmax(100px, .7fr) minmax(220px, 1.3fr);
+  gap: 14px;
+  align-items: center;
+  min-width: 620px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--color-stroke, rgba(128, 128, 128, .16));
+}
+
+.tg-events-row:last-child {
+  border-bottom: 0;
+}
+
+.tg-events-header {
+  color: var(--color-text-secondary, #888);
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(128, 128, 128, .055);
+}
+
+.tg-event-name {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tg-event-name small {
+  color: var(--color-text-secondary, #888);
+  line-height: 1.35;
+}
+
+.tg-center {
+  display: flex;
+  justify-content: center;
+}
+
+.tg-event-empty {
+  color: var(--color-text-secondary, #999);
+  padding-left: 12px;
+}
+
+.tg-cpu-threshold .ant-input-number,
+.tg-events-row [role="cell"] .ant-input {
+  width: 100%;
+}
+
+.tg-events-note {
+  margin: 10px 20px 18px;
+  color: var(--color-text-secondary, #888);
+  font-size: 12px;
+}
+
+.tg-interval-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tg-interval-control .ant-input-number {
+  flex: 1;
+}
+
+.tg-interval-control span,
+.tg-restore-filename {
+  color: var(--color-text-secondary, #888);
+  font-size: 12px;
+}
+
+@media (max-width: 767px) {
+  .tg-events-table {
+    margin-right: 12px;
+    margin-left: 12px;
+  }
+
+  .tg-events-row {
+    gap: 10px;
+    padding: 12px;
+    grid-template-columns: minmax(155px, 1fr) 70px minmax(92px, .6fr) minmax(190px, 1.2fr);
+  }
+}
+

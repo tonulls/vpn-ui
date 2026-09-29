@@ -65,13 +65,16 @@ func (a *APIController) initRouter(g *gin.RouterGroup, customGeo *service.Custom
 	customGeoGroup.Use(requireXrayOrOverviewManage())
 	NewCustomGeoController(customGeoGroup, customGeo)
 
-	// Extra routes
-	// Mails the entire SQLite DB (every admin's inbounds, client credentials, and
-	// the users table with its bcrypt hashes) to a Telegram chat: escalation-class.
+	// Extra routes. The manual backup endpoint is escalation-class and sends the
+	// configured database-only ZIP archive to its forum backup topic.
 	api.GET("/backuptotgbot", requireOverviewManage(), a.BackuptoTgbot)
 }
 
-// BackuptoTgbot sends a backup of the panel data to Telegram bot admins.
+// BackuptoTgbot sends one database-only archive to the configured Telegram forum.
 func (a *APIController) BackuptoTgbot(c *gin.Context) {
-	a.Tgbot.SendBackupToAdmins()
+	if err := a.Tgbot.SendDatabaseBackupArchive(); err != nil {
+		jsonMsg(c, "Не удалось отправить резервную копию в форум", err)
+		return
+	}
+	jsonObj(c, "Резервная копия отправлена в форум", nil)
 }
