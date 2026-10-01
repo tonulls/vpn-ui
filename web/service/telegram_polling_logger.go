@@ -31,6 +31,13 @@ func (l *telegramPollingLogger) Errorf(format string, args ...any) {
 	if strings.HasPrefix(message, "Retrying getting updates in") {
 		return
 	}
+	if strings.Contains(message, "terminated by other getUpdates request") {
+		if !l.shouldLogPollingError(time.Now()) {
+			return
+		}
+		logger.Warningf("Telegram getUpdates conflict (HTTP 409): another poll for this bot token is active; retrying in the background: %s", message)
+		return
+	}
 	if strings.HasPrefix(message, "Execution error getUpdates:") || strings.HasPrefix(message, "Getting updates:") {
 		if !l.shouldLogPollingError(time.Now()) {
 			return

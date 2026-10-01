@@ -65,8 +65,8 @@
     </div>
 
     <div class="bo-cf-pane">
-      <!-- Identity keeps the everyday account fields visible; the optional identity
-           and quota controls live in the collapsed Additional settings section. -->
+      <!-- Identity keeps the everyday account fields visible; for a limited reseller
+           the required traffic quota is shown here rather than hidden in Additional. -->
       <template v-if="clientMembershipModal.tab === 'identity'">
         <div class="bo-cf-field"
           :class="{ 'bo-cf-field--error': clientMembershipModal.showNameError }">
@@ -83,13 +83,33 @@
             </a-tooltip>
           </a-input>
           <div class="bo-cf-hint bo-cf-error-hint" v-if="clientMembershipModal.showNameError">
-            {{ i18n "emptyUsername" }}
+            {{ i18n "pages.login.toasts.emptyUsername" }}
           </div>
           <div class="bo-cf-hint" v-if="clientMembershipModal.isEdit">{{ i18n "pages.clients.emailLocked" }}</div>
         </div>
         <div class="bo-cf-field">
           <label>{{ i18n "comment" }}</label>
           <a-input v-model="clientMembershipModal.client.comment"></a-input>
+        </div>
+        <div class="bo-cf-field" v-if="clientMembershipModal.showQuotaInIdentity"
+          :class="{ 'bo-cf-field--error': clientMembershipModal.quotaError }">
+          <label>
+            {{ i18n "pages.inbounds.totalFlow" }}
+            <a-icon v-if="clientMembershipModal.quotaError" type="exclamation-circle"
+              class="bo-cf-error-icon"></a-icon>
+          </label>
+          <a-input-number v-model="clientMembershipModal.totalGb" :min="1"
+            :style="{ width: '100%' }"></a-input-number>
+          <div class="bo-cf-hint" v-if="!clientMembershipModal.quotaValidationAttempted">
+            {{ i18n "pages.clients.resellerQuotaRequired" }}
+          </div>
+          <div class="bo-cf-hint" v-if="clientMembershipModal.resellerLimited">
+            {{ i18n "pages.resellers.available" }}:
+            [[ clientMembershipModal.availableGbText ]] GB
+          </div>
+          <div class="bo-cf-hint bo-cf-error-hint" v-if="clientMembershipModal.quotaError">
+            [[ clientMembershipModal.quotaError ]]
+          </div>
         </div>
         <div class="bo-cf-switch">
           <div>
@@ -136,7 +156,7 @@
           </a-row>
 
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="12" v-if="!clientMembershipModal.showQuotaInIdentity">
             <div class="bo-cf-field"
               :class="{ 'bo-cf-field--error': clientMembershipModal.quotaError }">
               <label>
@@ -518,7 +538,7 @@
         || this.invalidLimit(this.limitDevices);
     },
     tabHasError(key) {
-      if (key === 'identity') return this.showNameError;
+      if (key === 'identity') return this.showNameError || (this.showQuotaInIdentity && !!this.quotaError);
       if (key === 'inbounds') return this.missingRequiredInbound || this.protocolClash;
       if (key === 'credentials') return this.credentialsInvalid;
       if (key === 'limits') return this.limitsInvalid;
@@ -658,10 +678,9 @@
         // Start with no account name; the operator can type one or explicitly
         // request a generated value with the addon button.
         this.client = this.blankClient();
-        // Keep the model in step with a-input-number's reseller min. Otherwise it
-        // renders a clamped 1 GB while v-model still holds 0 and submit reports a
-        // false "traffic limit required" error until the value is edited.
-        this.totalGb = this.resellerLimited ? 1 : 0;
+        // A limited reseller must deliberately choose the traffic allotment; leave
+        // it empty rather than displaying a default quota the operator may overlook.
+        this.totalGb = this.resellerLimited ? null : 0;
         this.days = 0;
         this.delayedStart = false;
         const granted = new Set((RESELLER.inboundIds || []).map(Number));
@@ -703,7 +722,11 @@
     // what is being typed, which is the only way the rail earns its space before
     // the account exists.
     get resellerLimited() { return !!(RESELLER.isReseller && !RESELLER.unlimited); },
-    get additionalHasError() { return !!this.quotaError; },
+    get showQuotaInIdentity() { return !this.isEdit && this.resellerLimited; },
+    get availableGbText() {
+      return ((Number(this.availableBytes) || 0) / 1073741824).toFixed(2);
+    },
+    get additionalHasError() { return !this.showQuotaInIdentity && !!this.quotaError; },
     get quotaError() {
       if (!this.resellerLimited || !this.quotaValidationAttempted) return '';
       if (!(Number(this.totalGb) > 0)) return '{{ i18n "pages.clients.resellerQuotaRequired" }}';
@@ -736,7 +759,10 @@
     },
     get usedText() { return SizeFormatter.sizeFormat(this.usedBytes); },
     get leftText() {
-      if (!this.quotaBytes) return '{{ i18n "pages.clients.summaryUnlimited" }}';
+      if (!this.quotaBytes) {
+        if (this.showQuotaInIdentity) return '—';
+        return '{{ i18n "pages.clients.summaryUnlimited" }}';
+      }
       return SizeFormatter.sizeFormat(Math.max(0, this.quotaBytes - this.usedBytes));
     },
     // Whether this account's duration is a function of its traffic rather than
@@ -748,6 +774,7 @@
     // The derived duration, shown in place of the controls so the reseller can see
     // what they are selling before they save.
     get resellerForcedDaysText() {
+      if (this.showQuotaInIdentity && !(Number(this.totalGb) > 0)) return '—';
       const days = NumberFormatter.toFixed((this.totalGb || 0) * RESELLER.daysPerGb, 1);
       return days + ' ' + '{{ i18n "pages.client.expireDays" }}';
     },

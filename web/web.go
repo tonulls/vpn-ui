@@ -611,9 +611,11 @@ func (s *Server) Start() (err error) {
 	s.startTask()
 
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()
-	if (err == nil) && (isTgbotenabled) {
+	if err == nil && isTgbotenabled {
 		tgBot := s.tgbotService.NewTgbot()
-		tgBot.Start(i18nFS)
+		if err := tgBot.Start(i18nFS); err != nil {
+			logger.Warningf("Telegram bot receiver could not start; the panel will continue without it: %v", err)
+		}
 	}
 
 	return nil
@@ -636,9 +638,9 @@ func (s *Server) Stop() error {
 	if s.cron != nil {
 		s.cron.Stop()
 	}
-	if s.tgbotService.IsRunning() {
-		s.tgbotService.Stop()
-	}
+	// Always stop Telegram polling on server shutdown. IsRunning can already be
+	// false during receiver teardown while its long-poll request is still exiting.
+	s.tgbotService.Stop()
 	// Gracefully stop WebSocket hub
 	if s.wsHub != nil {
 		s.wsHub.Stop()

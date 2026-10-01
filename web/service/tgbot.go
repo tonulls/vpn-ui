@@ -44,8 +44,11 @@ var (
 
 	// botCancel stores the function to cancel the context, stopping Long Polling gracefully.
 	botCancel context.CancelFunc
-	// tgBotMutex protects concurrent access to botCancel variable
+	// tgBotMutex protects the receiver state.
 	tgBotMutex sync.Mutex
+	// tgBotLifecycleMutex serializes bot replacement and shutdown, so a new poll
+	// cannot begin until the previous getUpdates request has fully stopped.
+	tgBotLifecycleMutex sync.Mutex
 	// botWG waits for the OnReceive Long Polling goroutine to finish.
 	botWG sync.WaitGroup
 
@@ -92,6 +95,14 @@ var (
 )
 
 var userStates = make(map[int64]string)
+
+// telegramUpdatesViaLongPolling is the single polling seam used by the receiver;
+// keeping it replaceable lets lifecycle tests prove stop-before-start ordering.
+var telegramUpdatesViaLongPolling = func(
+	b *telego.Bot, ctx context.Context, params *telego.GetUpdatesParams, options ...telego.LongPollingOption,
+) (<-chan telego.Update, error) {
+	return b.UpdatesViaLongPolling(ctx, params, options...)
+}
 
 // LoginStatus represents the result of a login attempt.
 type LoginStatus byte
@@ -170,6 +181,9 @@ func (t *Tgbot) setCachedServerStats(stats string) {
 
 // Start initializes and starts the Telegram bot with the provided translation files.
 func (t *Tgbot) Start(i18nFS embed.FS) error {
+	tgBotLifecycleMutex.Lock()
+	defer tgBotLifecycleMutex.Unlock()
+
 	// Initialize localizer
 	err := locale.InitLocalizer(i18nFS, &t.settingService)
 	if err != nil {
@@ -177,8 +191,9 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	}
 
 	// If Start is called again (e.g. during reload), ensure any previous long-polling
-	// loop is stopped before creating a new bot / receiver.
-	StopBot()
+	// loop is fully stopped before creating a new bot / receiver. Start holds the
+	// lifecycle mutex already, so it uses the locked helper instead of StopBot.
+	stopBotLocked()
 
 	// Initialize hash storage to store callback queries
 	hashStorage = global.NewHashStorage(20 * time.Minute)
@@ -239,13 +254,12 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	// so an unreachable Telegram API cannot delay the web server.
 	go t.trySetBotCommands(bot)
 
-	// Start receiving Telegram bot messages
-	tgBotMutex.Lock()
-	alreadyRunning := isRunning || botCancel != nil
-	tgBotMutex.Unlock()
-	if !alreadyRunning {
-		logger.Info("Telegram bot receiver started")
-		go t.OnReceive()
+	// Reserve the receiver synchronously while still holding the lifecycle mutex.
+	// OnReceive then starts its worker; a concurrent shutdown cannot miss a poll
+	// that has been launched but has not yet published botCancel/isRunning.
+	logger.Info("Telegram bot receiver started")
+	if err := t.onReceiveLocked(); err != nil {
+		return fmt.Errorf("start Telegram receiver: %w", err)
 	}
 
 	return nil
@@ -381,11 +395,23 @@ func (t *Tgbot) Stop() {
 // StopBot safely stops the Telegram bot's Long Polling operation by cancelling its context.
 // This is the global function called from main.go's signal handler and t.Stop().
 func StopBot() {
-	// Don't hold the mutex while cancelling/waiting.
+	tgBotLifecycleMutex.Lock()
+	defer tgBotLifecycleMutex.Unlock()
+	stopBotLocked()
+}
+
+// stopBotLocked requires tgBotLifecycleMutex, preventing another receiver from
+// starting until the current polling goroutine has exited.
+func stopBotLocked() {
 	tgBotMutex.Lock()
 	cancel := botCancel
-	botCancel = nil
 	handler := botHandler
+	if cancel != nil {
+		// Cancel before publishing the stopped state so a receiver worker that has
+		// not installed its handler yet cannot slip in after we capture it.
+		cancel()
+	}
+	botCancel = nil
 	botHandler = nil
 	isRunning = false
 	tgBotMutex.Unlock()
@@ -395,10 +421,7 @@ func StopBot() {
 	}
 
 	if cancel != nil {
-		logger.Info("Sending cancellation signal to Telegram bot...")
-		// Cancels the context passed to UpdatesViaLongPolling; this closes updates channel
-		// and lets botHandler.Start() exit cleanly.
-		cancel()
+		logger.Info("Waiting for Telegram long polling to stop...")
 		botWG.Wait()
 		logger.Info("Telegram bot successfully stopped.")
 	}
@@ -430,6 +453,16 @@ func (t *Tgbot) decodeQuery(query string) (string, error) {
 
 // OnReceive starts the message receiving loop for the Telegram bot.
 func (t *Tgbot) OnReceive() {
+	tgBotLifecycleMutex.Lock()
+	defer tgBotLifecycleMutex.Unlock()
+	if err := t.onReceiveLocked(); err != nil {
+		logger.Warningf("Telegram receiver could not start: %v", err)
+	}
+}
+
+// onReceiveLocked requires tgBotLifecycleMutex. It publishes the cancel function
+// before starting the worker so StopBot cannot miss a just-launched poll.
+func (t *Tgbot) onReceiveLocked() error {
 	params := telego.GetUpdatesParams{
 		Timeout: 20, // Reduced timeout to detect connection issues faster
 	}
@@ -437,8 +470,12 @@ func (t *Tgbot) OnReceive() {
 	tgBotMutex.Lock()
 	if botCancel != nil || isRunning {
 		tgBotMutex.Unlock()
-		logger.Warning("TgBot OnReceive called while already running; ignoring.")
-		return
+		return nil
+	}
+	activeBot := bot
+	if activeBot == nil {
+		tgBotMutex.Unlock()
+		return errors.New("Telegram bot is not initialized")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -449,12 +486,15 @@ func (t *Tgbot) OnReceive() {
 	botWG.Add(1)
 	tgBotMutex.Unlock()
 
-	// Keep polling in the background and use a calmer retry interval when Telegram
-	// is unreachable; cancellation still lets the panel stop the receiver cleanly.
-	updates, err := bot.UpdatesViaLongPolling(
+	// Keep polling in the background when Telegram is unreachable. Telego waits
+	// with time.Sleep between retries (not context-aware), so keep this short: a
+	// shutdown can then drain its update channel promptly instead of leaving a
+	// stale getUpdates request alive across a panel restart.
+	updates, err := telegramUpdatesViaLongPolling(
+		activeBot,
 		ctx,
 		&params,
-		telego.WithLongPollingRetryTimeout(30*time.Second),
+		telego.WithLongPollingRetryTimeout(time.Second),
 	)
 	if err != nil {
 		cancel()
@@ -463,13 +503,41 @@ func (t *Tgbot) OnReceive() {
 		isRunning = false
 		tgBotMutex.Unlock()
 		botWG.Done()
-		logger.Warningf("Telegram receiver could not start; the panel will continue without it: %v", err)
-		return
+		return fmt.Errorf("start Telegram long polling: %w", err)
 	}
 	go func() {
-		defer botWG.Done()
-		h, _ := th.NewBotHandler(bot, updates)
+		var h *th.BotHandler
+		defer func() {
+			cancel()
+			tgBotMutex.Lock()
+			if botHandler == h {
+				botHandler = nil
+			}
+			botCancel = nil
+			isRunning = false
+			tgBotMutex.Unlock()
+			botWG.Done()
+		}()
+
+		var handlerErr error
+		h, handlerErr = th.NewBotHandler(activeBot, updates)
+		if handlerErr != nil {
+			cancel()
+			for range updates {
+			}
+			logger.Warningf("Telegram receiver could not create its update handler: %v", handlerErr)
+			return
+		}
 		tgBotMutex.Lock()
+		if ctx.Err() != nil {
+			tgBotMutex.Unlock()
+			_ = h.Stop()
+			// The polling client owns the producer goroutine. Drain until it closes
+			// updates so StopBot's WaitGroup also covers its full shutdown.
+			for range updates {
+			}
+			return
+		}
 		botHandler = h
 		tgBotMutex.Unlock()
 
@@ -650,7 +718,14 @@ func (t *Tgbot) OnReceive() {
 		}, th.AnyMessage())
 
 		h.Start()
+		// BotHandler.Stop may return before Telego's producer has finished an
+		// in-flight getUpdates call. Cancel and drain the channel before Done so a
+		// later Start cannot overlap that request.
+		cancel()
+		for range updates {
+		}
 	}()
+	return nil
 }
 
 // answerCommand processes incoming command messages from Telegram users.

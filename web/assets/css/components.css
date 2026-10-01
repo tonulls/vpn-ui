@@ -89,7 +89,7 @@
 /* Secondary text sitting beside primary text: a port after a remark, a traffic
    figure under an email. Used across the Clients page and the client forms to
    mean "here if you want it, not what you are reading". */
-.bo-dim { color:var(--text-3); font-size:12px; }
+.bo-dim { color:var(--text-3); font-size:12px; line-height:1.5; }
 
 /* ================================================================== *
  * shell: rail nav

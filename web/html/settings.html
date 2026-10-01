@@ -1327,13 +1327,12 @@
           sendUpdateUserRequest();
         }
       },
-      async waitForPanelReady(probeUrl, timeoutMs = 120000, requireRestartGap = true) {
-        const startedAt = Date.now();
+      async waitForPanelReady(probeUrl, timeoutMs = 5000, startedAt = Date.now()) {
         const deadline = startedAt + timeoutMs;
-        let sawRestartGap = false;
         let probeNumber = 0;
 
         while (Date.now() < deadline) {
+          const remainingMs = deadline - Date.now();
           const url = new URL(probeUrl);
           url.searchParams.set('_panel_restart_probe', `${Date.now()}-${probeNumber++}`);
           const ready = await new Promise(resolve => {
@@ -1347,23 +1346,19 @@
               image.onerror = null;
               resolve(value);
             };
-            const timer = setTimeout(() => finish(false), 2500);
+            const timer = setTimeout(() => finish(false), Math.min(2500, remainingMs));
             image.onload = () => finish(true);
             image.onerror = () => finish(false);
             image.src = url.toString();
           });
 
-          const elapsed = Date.now() - startedAt;
-          if (!ready && elapsed >= 3500) {
-            // Ignore transient failures before the server's scheduled SIGHUP.
-            sawRestartGap = true;
-          } else if (ready && sawRestartGap && elapsed >= 5000) {
-            return true;
-          } else if (ready && !requireRestartGap && elapsed >= 30000) {
-            // A reverse proxy may keep serving static assets throughout the restart.
-            return true;
-          }
-          await PromiseUtil.sleep(500);
+          // The restart is scheduled three seconds after the request. Give the
+          // service a brief startup margin, but never keep the loading state beyond
+          // the five-second UI deadline—even when a proxy keeps static assets up.
+          if (ready && Date.now() - startedAt >= 4500) return true;
+
+          const sleepMs = Math.min(500, Math.max(0, deadline - Date.now()));
+          if (sleepMs > 0) await PromiseUtil.sleep(sleepMs);
         }
         return false;
       },
@@ -1404,16 +1399,16 @@
         }
         const probeUrl = new URL(`/${base}assets/img/logo.png`, target.origin).toString();
 
+        const restartStartedAt = Date.now();
         this.loading(true);
         try {
-          const msg = await HttpUtil.post("/panel/setting/restartPanel", null, { timeout: 15000 });
+          const msg = await HttpUtil.post("/panel/setting/restartPanel", null, { timeout: 5000 });
           if (!msg || !msg.success) {
             this.$message.error(msg && msg.msg ? msg.msg : '{{ i18n "pages.settings.restartPanelTimeout" }}');
             return;
           }
 
-          const requireRestartGap = target.origin === window.location.origin;
-          const ready = await this.waitForPanelReady(probeUrl, 30000, requireRestartGap);
+          const ready = await this.waitForPanelReady(probeUrl, 5000, restartStartedAt);
           if (!ready) {
             this.$message.error('{{ i18n "pages.settings.restartPanelTimeout" }}');
             return;
