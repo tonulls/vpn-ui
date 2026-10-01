@@ -13,22 +13,25 @@ import (
 
 // SUBController handles HTTP requests for subscription links and JSON configurations.
 type SUBController struct {
-	subTitle         string
-	subSupportUrl    string
-	subPageTitle     string
-	subFaviconUrl    string
-	subShowSupport   bool
-	subProfileUrl    string
-	subAnnounce      string
-	subEnableRouting bool
-	subRoutingRules  string
-	subPath          string
-	subJsonPath      string
-	subClashPath     string
-	jsonEnabled      bool
-	clashEnabled     bool
-	subEncrypt       bool
-	updateInterval   string
+	subTitle              string
+	subSupportUrl         string
+	subPageTitle          string
+	subFaviconUrl         string
+	subShowSupport        bool
+	subSupportButtonLabel string
+	subProfileUrl         string
+	subShowProfileUrl     bool
+	subProfileButtonLabel string
+	subAnnounce           string
+	subEnableRouting      bool
+	subRoutingRules       string
+	subPath               string
+	subJsonPath           string
+	subClashPath          string
+	jsonEnabled           bool
+	clashEnabled          bool
+	subEncrypt            bool
+	updateInterval        string
 
 	subService      *SubService
 	subJsonService  *SubJsonService
@@ -60,25 +63,31 @@ func NewSUBController(
 	subAnnounce string,
 	subEnableRouting bool,
 	subRoutingRules string,
+	subShowProfileUrl bool,
+	subProfileButtonLabel string,
+	subSupportButtonLabel string,
 ) *SUBController {
 	sub := NewSubService(showInfo, rModel)
 	a := &SUBController{
-		subTitle:         subTitle,
-		subSupportUrl:    subSupportUrl,
-		subPageTitle:     subPageTitle,
-		subFaviconUrl:    subFaviconUrl,
-		subShowSupport:   subShowSupport,
-		subProfileUrl:    subProfileUrl,
-		subAnnounce:      subAnnounce,
-		subEnableRouting: subEnableRouting,
-		subRoutingRules:  subRoutingRules,
-		subPath:          subPath,
-		subJsonPath:      jsonPath,
-		subClashPath:     clashPath,
-		jsonEnabled:      jsonEnabled,
-		clashEnabled:     clashEnabled,
-		subEncrypt:       encrypt,
-		updateInterval:   update,
+		subTitle:              subTitle,
+		subSupportUrl:         subSupportUrl,
+		subPageTitle:          subPageTitle,
+		subFaviconUrl:         subFaviconUrl,
+		subShowSupport:        subShowSupport,
+		subSupportButtonLabel: subSupportButtonLabel,
+		subProfileUrl:         subProfileUrl,
+		subShowProfileUrl:     subShowProfileUrl,
+		subProfileButtonLabel: subProfileButtonLabel,
+		subAnnounce:           subAnnounce,
+		subEnableRouting:      subEnableRouting,
+		subRoutingRules:       subRoutingRules,
+		subPath:               subPath,
+		subJsonPath:           jsonPath,
+		subClashPath:          clashPath,
+		jsonEnabled:           jsonEnabled,
+		clashEnabled:          clashEnabled,
+		subEncrypt:            encrypt,
+		updateInterval:        update,
 
 		subService:      sub,
 		subJsonService:  NewSubJsonService(jsonFragment, jsonNoise, jsonMux, jsonRules, sub),
@@ -154,33 +163,37 @@ func (a *SUBController) subs(c *gin.Context) {
 			// subscription client has no use for them.
 			page.Configs = a.subService.ConfigLinks(subId, host, scheme, hostWithPort, a.subPath)
 			c.HTML(200, "subpage.html", gin.H{
-				"title":             "subscription.title",
-				"page_title":        a.subPageTitle,
-				"subscription_page": true,
-				"favicon_url":       a.subFaviconUrl,
-				"support_url":       a.subSupportUrl,
-				"show_support":      a.subShowSupport,
-				"cur_ver":           config.GetVersion(),
-				"asset_ver":         config.GetAssetVersion(),
-				"host":              page.Host,
-				"base_path":         page.BasePath,
-				"sId":               page.SId,
-				"download":          page.Download,
-				"upload":            page.Upload,
-				"total":             page.Total,
-				"used":              page.Used,
-				"remained":          page.Remained,
-				"expire":            page.Expire,
-				"lastOnline":        page.LastOnline,
-				"datepicker":        page.Datepicker,
-				"downloadByte":      page.DownloadByte,
-				"uploadByte":        page.UploadByte,
-				"totalByte":         page.TotalByte,
-				"subUrl":            page.SubUrl,
-				"subJsonUrl":        page.SubJsonUrl,
-				"subClashUrl":       page.SubClashUrl,
-				"result":            page.Result,
-				"configs":           page.Configs,
+				"title":                "subscription.title",
+				"page_title":           a.subPageTitle,
+				"subscription_page":    true,
+				"favicon_url":          a.subFaviconUrl,
+				"support_url":          a.subSupportUrl,
+				"show_support":         a.subShowSupport,
+				"support_button_label": a.subSupportButtonLabel,
+				"profile_url":          a.subProfileUrl,
+				"show_profile_url":     a.subShowProfileUrl,
+				"profile_button_label": a.subProfileButtonLabel,
+				"cur_ver":              config.GetVersion(),
+				"asset_ver":            config.GetAssetVersion(),
+				"host":                 page.Host,
+				"base_path":            page.BasePath,
+				"sId":                  page.SId,
+				"download":             page.Download,
+				"upload":               page.Upload,
+				"total":                page.Total,
+				"used":                 page.Used,
+				"remained":             page.Remained,
+				"expire":               page.Expire,
+				"lastOnline":           page.LastOnline,
+				"datepicker":           page.Datepicker,
+				"downloadByte":         page.DownloadByte,
+				"uploadByte":           page.UploadByte,
+				"totalByte":            page.TotalByte,
+				"subUrl":               page.SubUrl,
+				"subJsonUrl":           page.SubJsonUrl,
+				"subClashUrl":          page.SubClashUrl,
+				"result":               page.Result,
+				"configs":              page.Configs,
 			})
 			return
 		}

@@ -12,14 +12,23 @@
             <template #title>{{ i18n "pages.settings.telegramToken"}}</template>
             <template #description>{{ i18n "pages.settings.telegramTokenDesc"}}</template>
             <template #control>
-                <a-input type="text" v-model="allSetting.tgBotToken"></a-input>
+                <a-input type="text" v-model.trim="allSetting.tgBotToken"
+                    :required="allSetting.tgBotEnable"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.telegramChatId"}}</template>
-            <template #description>{{ i18n "pages.settings.telegramChatIdDesc"}}</template>
+            <template #title>User ID главного администратора бота</template>
+            <template #description>Один или несколько User ID через запятую. Обязательное поле, если Telegram-бот включён.</template>
             <template #control>
-                <a-input type="text" v-model="allSetting.tgBotChatId"></a-input>
+                <a-input type="text" placeholder="123456789, 987654321" v-model.trim="allSetting.tgBotChatId"
+                    :required="allSetting.tgBotEnable"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>User ID администратора бота</template>
+            <template #description>Дополнительные администраторы: один или несколько User ID через запятую. Поле необязательное.</template>
+            <template #control>
+                <a-input type="text" placeholder="Можно оставить пустым" v-model.trim="allSetting.tgBotAdditionalChatId"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
@@ -114,10 +123,10 @@
     <a-collapse-panel key="4" header="Backup">
         <a-setting-list-item paddings="small">
             <template #title>Резервное копирование</template>
-            <template #description>Отправлять архив базы данных в Telegram-форум по расписанию.</template>
+            <template #description>Отправлять архив по расписанию в личку главного администратора и/или в форум — согласно включённым каналам доставки.</template>
             <template #control>
                 <a-switch v-model="allSetting.tgBackupEnable"
-                    :disabled="!allSetting.tgForumEnable || !allSetting.tgForumChatId"></a-switch>
+                    :disabled="!allSetting.tgBotEnable || ((!allSetting.tgNotifyDirect || !allSetting.tgBotChatId) && (!allSetting.tgNotifyForum || !allSetting.tgForumEnable || !allSetting.tgForumChatId))"></a-switch>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
@@ -133,10 +142,10 @@
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>ID темы для резервных копий</template>
-            <template #description>Оставьте пустым, чтобы тема создалась автоматически.</template>
+            <template #description>Используется только при отправке в форум; оставьте пустым для автоматического создания темы.</template>
             <template #control>
-                <a-input v-model.trim="allSetting.tgBackupTopicId" placeholder="Создаётся автоматически"
-                    :disabled="!allSetting.tgForumEnable"></a-input>
+                <a-input v-model.trim="allSetting.tgBackupTopicId" placeholder="Не требуется для личной отправки"
+                    :disabled="!allSetting.tgNotifyForum || !allSetting.tgForumEnable || !allSetting.tgForumChatId"></a-input>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">

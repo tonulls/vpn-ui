@@ -42,7 +42,8 @@ type AllSetting struct {
 	TgBotToken            string `json:"tgBotToken" form:"tgBotToken"`                       // Telegram bot token
 	TgBotProxy            string `json:"tgBotProxy" form:"tgBotProxy"`                       // Proxy URL for Telegram bot
 	TgBotAPIServer        string `json:"tgBotAPIServer" form:"tgBotAPIServer"`               // Custom API server for Telegram bot
-	TgBotChatId           string `json:"tgBotChatId" form:"tgBotChatId"`                     // Telegram admin chat IDs for private delivery
+	TgBotChatId           string `json:"tgBotChatId" form:"tgBotChatId"`                     // Main Telegram bot admin user IDs; required when bot is enabled
+	TgBotAdditionalChatId string `json:"tgBotAdditionalChatId" form:"tgBotAdditionalChatId"` // Optional additional Telegram bot admin user IDs
 	TgRunTime             string `json:"tgRunTime" form:"tgRunTime"`                         // Legacy report schedule (retained for DB compatibility)
 	TgLang                string `json:"tgLang" form:"tgLang"`                               // Telegram bot language
 	TgForumEnable         bool   `json:"tgForumEnable" form:"tgForumEnable"`                 // Enable Telegram forum destination
@@ -75,6 +76,9 @@ type AllSetting struct {
 	SubFaviconUrl               string `json:"subFaviconUrl" form:"subFaviconUrl"`                             // Favicon URL for the subscription page
 	SubShowSupport              bool   `json:"subShowSupport" form:"subShowSupport"`                           // Show support link on the subscription page
 	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Subscription support URL
+	SubSupportButtonLabel       string `json:"subSupportButtonLabel" form:"subSupportButtonLabel"`             // Label for the support button on the subscription page
+	SubShowProfileUrl           bool   `json:"subShowProfileUrl" form:"subShowProfileUrl"`                     // Show profile URL button on the subscription page
+	SubProfileButtonLabel       string `json:"subProfileButtonLabel" form:"subProfileButtonLabel"`             // Label for the profile URL button on the subscription page
 	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Subscription profile URL
 	SubAnnounce                 string `json:"subAnnounce" form:"subAnnounce"`                                 // Subscription announce
 	SubEnableRouting            bool   `json:"subEnableRouting" form:"subEnableRouting"`                       // Enable routing for subscription
@@ -148,8 +152,55 @@ func normalizeForumChatID(raw string) (string, error) {
 	return "-" + digits, nil
 }
 
+func normalizeTelegramUserIDs(raw, label string, required bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		if required {
+			return "", common.NewError(label, " is required when Telegram bot is enabled")
+		}
+		return "", nil
+	}
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		idText := strings.TrimSpace(part)
+		if idText == "" {
+			return "", common.NewError(label, " contains an empty ID")
+		}
+		id, err := strconv.ParseInt(idText, 10, 64)
+		if err != nil || id <= 0 {
+			return "", common.NewError(label, " must contain positive Telegram user IDs separated by commas")
+		}
+		canonical := strconv.FormatInt(id, 10)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		ids = append(ids, canonical)
+	}
+	if required && len(ids) == 0 {
+		return "", common.NewError(label, " is required when Telegram bot is enabled")
+	}
+	return strings.Join(ids, ","), nil
+}
+
 // CheckValid validates all settings in the AllSetting struct, checking IP addresses, ports, SSL certificates, and other configuration values.
 func (s *AllSetting) CheckValid() error {
+	s.TgBotToken = strings.TrimSpace(s.TgBotToken)
+	if s.TgBotEnable && s.TgBotToken == "" {
+		return common.NewError("Telegram bot token is required when Telegram bot is enabled")
+	}
+	mainAdminIDs, err := normalizeTelegramUserIDs(s.TgBotChatId, "main Telegram bot admin user ID", s.TgBotEnable)
+	if err != nil {
+		return err
+	}
+	s.TgBotChatId = mainAdminIDs
+	additionalAdminIDs, err := normalizeTelegramUserIDs(s.TgBotAdditionalChatId, "additional Telegram bot admin user ID", false)
+	if err != nil {
+		return err
+	}
+	s.TgBotAdditionalChatId = additionalAdminIDs
+
 	forumChatID, err := normalizeForumChatID(s.TgForumChatId)
 	if err != nil {
 		return err
@@ -161,8 +212,15 @@ func (s *AllSetting) CheckValid() error {
 	if s.TgNotifyForum && !s.TgForumEnable {
 		return common.NewError("enable the Telegram forum before enabling forum notifications")
 	}
-	if s.TgBackupEnable && (!s.TgForumEnable || forumChatID == "") {
-		return common.NewError("enable the Telegram forum and set its chat ID before enabling backups")
+	if s.TgBackupEnable {
+		if !s.TgBotEnable {
+			return common.NewError("enable the Telegram bot before enabling backups")
+		}
+		directBackupAvailable := s.TgNotifyDirect && mainAdminIDs != ""
+		forumBackupAvailable := s.TgNotifyForum && s.TgForumEnable && forumChatID != ""
+		if !directBackupAvailable && !forumBackupAvailable {
+			return common.NewError("enable at least one backup delivery channel: private chat or forum")
+		}
 	}
 	if s.TgBackupIntervalHours == 0 {
 		s.TgBackupIntervalHours = 24
@@ -195,6 +253,23 @@ func (s *AllSetting) CheckValid() error {
 			return common.NewError("web listen is not valid ip:", s.WebListen)
 		}
 	}
+
+	trustedProxies, err := proxyip.NormalizeTrustedProxies(s.WebTrustedProxies)
+	if err != nil {
+		return common.NewError("trusted reverse proxies must be valid IP addresses or CIDRs:", err)
+	}
+	if trustedProxies == "" {
+		trustedProxies = proxyip.DefaultTrustedProxyCIDRs
+	}
+	s.WebTrustedProxies = trustedProxies
+	trustedXrayProxies, err := proxyip.NormalizeTrustedProxies(s.XrayTrustedProxies)
+	if err != nil {
+		return common.NewError("trusted Xray proxies must be valid IP addresses or CIDRs:", err)
+	}
+	if trustedXrayProxies == "" {
+		trustedXrayProxies = proxyip.DefaultTrustedProxyCIDRs
+	}
+	s.XrayTrustedProxies = trustedXrayProxies
 
 	if s.SubListen != "" {
 		ip := net.ParseIP(s.SubListen)

@@ -618,6 +618,20 @@ style attribute {
   min-width:30px;
 }
 
+.clients-page .ant-table-selection-column {
+  width:42px;
+  min-width:42px;
+}
+
+.clients-page .ant-table-expand-icon-th,
+.clients-page .ant-table-row-expand-icon-cell {
+  text-align:center;
+}
+
+.clients-page .ant-table-row-expand-icon-cell .ant-table-row-expand-icon {
+  margin-inline-end:0;
+}
+
 .ant-tabs {
   background-color:#fff;
 }

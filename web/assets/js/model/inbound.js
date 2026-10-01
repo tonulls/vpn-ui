@@ -6250,6 +6250,7 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
     userLimit = 10,
     mtprotoUsers = [new Inbound.MtprotoSettings.MtprotoUser()],
     externalProxy = [],
+    proxyProtocol = false,
   ) {
     super(protocol);
     this.modeClassic = modeClassic;
@@ -6263,6 +6264,7 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
     // The inbound-wide link endpoints, used by every account that names none of its
     // own. An account's own list replaces this one rather than extending it.
     this.externalProxy = externalProxy;
+    this.proxyProtocol = proxyProtocol;
   }
 
   // Whether ANY account on this inbound carries an ad tag, which is the condition
@@ -6368,6 +6370,7 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
       json.userLimit ?? legacy.userLimit,
       Inbound.MtprotoSettings.MtprotoUser.fromJson(json.clients),
       Array.isArray(json.externalProxy) ? json.externalProxy : [],
+      json.proxyProtocol ?? false,
     );
   }
 
@@ -6382,6 +6385,7 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
       userLimit: this.userLimit,
       clients: Inbound.MtprotoSettings.MtprotoUser.toJsonArray(this.mtprotoUsers),
       externalProxy: this.externalProxy,
+      proxyProtocol: this.proxyProtocol,
     };
   }
 };

@@ -66,15 +66,15 @@ func (a *APIController) initRouter(g *gin.RouterGroup, customGeo *service.Custom
 	NewCustomGeoController(customGeoGroup, customGeo)
 
 	// Extra routes. The manual backup endpoint is escalation-class and sends the
-	// configured database-only ZIP archive to its forum backup topic.
+	// configured database-only ZIP archive to the enabled delivery destinations.
 	api.GET("/backuptotgbot", requireOverviewManage(), a.BackuptoTgbot)
 }
 
-// BackuptoTgbot sends one database-only archive to the configured Telegram forum.
+// BackuptoTgbot sends one database-only archive to the configured Telegram channels.
 func (a *APIController) BackuptoTgbot(c *gin.Context) {
 	if err := a.Tgbot.SendDatabaseBackupArchive(); err != nil {
-		jsonMsg(c, "Не удалось отправить резервную копию в форум", err)
+		jsonMsg(c, "Не удалось отправить резервную копию", err)
 		return
 	}
-	jsonObj(c, "Резервная копия отправлена в форум", nil)
+	jsonObj(c, "Резервная копия отправлена по выбранным каналам доставки", nil)
 }

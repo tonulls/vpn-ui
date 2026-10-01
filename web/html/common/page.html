@@ -75,10 +75,10 @@
 <body>
   <div id="message"></div>
   <script>
-    // The caller's own reseller limits, if they are one. Injected with the page
-    // rather than fetched, because the client form has to know BEFORE first
-    // paint whether to render an expiry field at all: an XHR would flash a
-    // control the reseller is not allowed to have.
+    // The caller's subscription cap and, for resellers, their own reseller limits.
+    // Injected with the page rather than fetched, because the client form has to
+    // know BEFORE first paint whether to render an expiry field at all: an XHR
+    // would flash a control the reseller is not allowed to have.
     //
     // This drives what the UI SHOWS, never what it ALLOWS. Every value here is
     // re-derived server-side before a single byte is charged (see
@@ -87,7 +87,8 @@
     const RESELLER = Object.assign(
       { isReseller: false, unlimited: false, allowanceBytes: 0, spentBytes: 0,
         availableBytes: 0, daysPerGb: 0, minCreateGb: 0, minAddGb: 0,
-        allowExternalProxy: false, clientLimitsEnabled: false, inboundIds: [] },
+        subscriptionLimit: 0, allowExternalProxy: false,
+        clientLimitsEnabled: false, inboundIds: [] },
       {{ .reseller }}
     );
 

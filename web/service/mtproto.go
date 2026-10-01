@@ -114,6 +114,10 @@ type mtprotoSettings struct {
 	FallbackEnabled bool   `json:"fallbackEnabled"`
 	FallbackDest    string `json:"fallbackDest"`
 
+	// ProxyProtocol is opt-in per inbound. When enabled, the listener is bound to
+	// loopback and accepts PROXY headers only from local reverse proxies.
+	ProxyProtocol bool `json:"proxyProtocol"`
+
 	// UserLimit is the PER-ACCOUNT device cap, the same shape l2tp/wgc/gre/openconnect
 	// use: nil=absent(legacy=>1); 0=no limit; else 1..64. Enforced by telemt counting
 	// distinct client source IPs per account, not by the panel's IP allocator.
@@ -1057,6 +1061,9 @@ func (s *MtprotoService) buildServerConfig(inbound *model.Inbound, settings *mtp
 
 	b.WriteString("[server]\n")
 	b.WriteString(fmt.Sprintf("port = %d\n", inbound.Port))
+	if settings.ProxyProtocol {
+		b.WriteString("proxy_protocol_trusted_cidrs = [\"127.0.0.1/32\", \"::1/128\"]\n")
+	}
 	b.WriteString(fmt.Sprintf("metrics_listen = \"127.0.0.1:%d\"\n", mtprotoMetricsPort(inbound)))
 	b.WriteString("metrics_whitelist = [\"127.0.0.1/32\"]\n\n")
 
@@ -1065,6 +1072,13 @@ func (s *MtprotoService) buildServerConfig(inbound *model.Inbound, settings *mtp
 	// we do not need.
 	b.WriteString("[server.api]\n")
 	b.WriteString("enabled = false\n\n")
+
+	if settings.ProxyProtocol {
+		b.WriteString("[[server.listeners]]\n")
+		b.WriteString("ip = \"127.0.0.1\"\n")
+		b.WriteString(fmt.Sprintf("port = %d\n", inbound.Port))
+		b.WriteString("proxy_protocol = true\n\n")
+	}
 
 	b.WriteString("[censorship]\n")
 	// A client may present any SNI, so the listener must not insist on this one:

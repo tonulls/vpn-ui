@@ -8,7 +8,38 @@
           <a-row :gutter="[16, 16]" :style="{ margin: 0 }">
             <a-col :span="24">
 
-              <div class="bo-tile" :style="{ padding: '0', overflow: 'hidden', marginBottom: '16px' }"><div class="bo-stat-grid bo-stat-grid--5"><div class="bo-stat-cell"><span class="bo-stat-cell-label">Отправлено / получено</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.up) ]] / [[ SizeFormatter.sizeFormat(clientStats.down) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Всего трафика</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.up + clientStats.down) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Общее использование за всё время</span><span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.allTime) ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Всего подключений</span><span class="bo-stat-cell-value num">[[ clientStats.connections ]]</span></div><div class="bo-stat-cell"><span class="bo-stat-cell-label">Клиенты</span><span class="bo-stat-cell-value num">[[ clientStats.total ]]</span></div></div></div>
+              <div class="bo-tile" :style="{ padding: '0', overflow: 'hidden', marginBottom: '16px' }">
+                <div class="bo-stat-grid bo-stat-grid--4">
+                  <div class="bo-stat-cell">
+                    <span class="bo-stat-cell-label">Отправлено / получено</span>
+                    <span class="bo-stat-cell-label bo-stat-cell-sublabel" aria-hidden="true">&nbsp;</span>
+                    <span class="bo-stat-cell-value num">↑ [[ SizeFormatter.sizeFormat(clientStats.up) ]] / ↓ [[ SizeFormatter.sizeFormat(clientStats.down) ]]</span>
+                  </div>
+                  <div class="bo-stat-cell">
+                    <span class="bo-stat-cell-label">Общий трафик</span>
+                    <span class="bo-stat-cell-label bo-stat-cell-sublabel">За всё время</span>
+                    <span class="bo-stat-cell-value num">[[ SizeFormatter.sizeFormat(clientStats.allTime) ]]</span>
+                  </div>
+                  <div class="bo-stat-cell">
+                    <span class="bo-stat-cell-label">Трафик</span>
+                    <span class="bo-stat-cell-label bo-stat-cell-sublabel">[[ RESELLER.isReseller ? 'Остаток / использовано' : 'Использовано' ]]</span>
+                    <span class="bo-stat-cell-value num" v-if="RESELLER.isReseller">
+                      [[ resellerBalance.unlimited ? '∞' : SizeFormatter.sizeFormat(resellerBalance.availableBytes) ]]
+                      / [[ SizeFormatter.sizeFormat(clientStats.up + clientStats.down) ]]
+                    </span>
+                    <span class="bo-stat-cell-value num" v-else>
+                      [[ SizeFormatter.sizeFormat(clientStats.up + clientStats.down) ]]
+                    </span>
+                  </div>
+                  <div class="bo-stat-cell">
+                    <span class="bo-stat-cell-label">Клиенты</span>
+                    <span class="bo-stat-cell-label bo-stat-cell-sublabel">Доступно / использовано</span>
+                    <span class="bo-stat-cell-value num">
+                      [[ RESELLER.subscriptionLimit > 0 ? RESELLER.subscriptionLimit : '∞' ]] / [[ clientStats.total ]]
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               <!-- The account-centric view, and the only place clients are managed.
                    The Inbounds page answers "what is serving traffic"; this one
@@ -143,9 +174,9 @@
                   :columns="columns"
                   :data-source="clients"
                   :row-key="r => r.email"
-                  :row-selection="{ selectedRowKeys: selectedEmails, onChange: onSelectChange }"
+                  :row-selection="{ selectedRowKeys: selectedEmails, onChange: onSelectChange, columnWidth: 42 }"
                   :pagination="pagination"
-                  :scroll="{ x: 1100 }"
+                  :scroll="{ x: 980 }"
                   :expanded-row-keys="expandedRowKeys"
                   :expand-row-by-click="true"
                   v-on="{ expandedRowsChange: keys => { expandedRowKeys = keys; } }"
@@ -563,9 +594,9 @@
       ],
     },
     computed: {
-      // Fixed widths keep the account list predictable: the account identity gets
-      // 150px, expiry 125px, and the protocol chips 192px. Serving is capped in the
-      // cell itself, so the table does not let many memberships stretch the layout.
+      // Fixed widths keep the account list predictable. The quota, expiry, serving,
+      // and action columns are deliberately compact; the serving cell itself is
+      // capped, so many memberships cannot stretch the layout.
       //
       // No column carries a sorter. The orderings this page offers are not columns:
       // three of the five are about state, and "newest" has no column at all. Header
@@ -577,15 +608,15 @@
         }, extra || {});
         return [
           col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 150 }),
-          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 140 }),
-          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 125 }),
-          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 192 }),
+          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 127 }),
+          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 93 }),
+          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 169 }),
           col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol', { width: 100 }),
           // 104 fitted a switch and a menu button. The Account Info button made three
           // controls, which overflowed the cell and gave the whole table a horizontal
           // scrollbar. Measured, not guessed: switch 28 + gap 6 + button 24 + gap 6 +
           // button 24 = 88, plus the cell's own padding.
-          { title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' }, width: 132, align: 'right' },
+          { title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' }, width: 110, align: 'right' },
         ];
       },
     },

@@ -45,6 +45,7 @@ var defaultValueMap = map[string]string{
 	"tgBotProxy":                  "",
 	"tgBotAPIServer":              "",
 	"tgBotChatId":                 "",
+	"tgBotAdditionalChatId":       "",
 	"tgRunTime":                   "@daily",
 	"tgBotBackup":                 "false", // Legacy key; automatic reports are no longer scheduled.
 	"tgBotLoginNotify":            "true",  // Legacy key; per-event switches below are authoritative.
@@ -76,6 +77,9 @@ var defaultValueMap = map[string]string{
 	"subFaviconUrl":               "",
 	"subShowSupport":              "false",
 	"subSupportUrl":               "",
+	"subSupportButtonLabel":       "",
+	"subShowProfileUrl":           "false",
+	"subProfileButtonLabel":       "",
 	"subProfileUrl":               "",
 	"subAnnounce":                 "",
 	"subEnableRouting":            "true",
@@ -389,6 +393,22 @@ func (s *SettingService) GetTgBotChatId() (string, error) {
 
 func (s *SettingService) SetTgBotChatId(chatIds string) error {
 	return s.setString("tgBotChatId", chatIds)
+}
+
+func (s *SettingService) GetTgBotAdditionalChatId() (string, error) {
+	return s.getString("tgBotAdditionalChatId")
+}
+
+func (s *SettingService) GetTgBotAdminUserIDs() ([]int64, error) {
+	mainIDs, err := s.GetTgBotChatId()
+	if err != nil {
+		return nil, err
+	}
+	additionalIDs, err := s.GetTgBotAdditionalChatId()
+	if err != nil {
+		return nil, err
+	}
+	return parseTelegramAdminIDs(mainIDs, additionalIDs)
 }
 
 func (s *SettingService) GetTgbotEnabled() (bool, error) {
@@ -807,6 +827,18 @@ func (s *SettingService) GetSubShowSupport() (bool, error) {
 
 func (s *SettingService) GetSubSupportUrl() (string, error) {
 	return s.getString("subSupportUrl")
+}
+
+func (s *SettingService) GetSubSupportButtonLabel() (string, error) {
+	return s.getString("subSupportButtonLabel")
+}
+
+func (s *SettingService) GetSubShowProfileUrl() (bool, error) {
+	return s.getBool("subShowProfileUrl")
+}
+
+func (s *SettingService) GetSubProfileButtonLabel() (string, error) {
+	return s.getString("subProfileButtonLabel")
 }
 
 func (s *SettingService) GetSubProfileUrl() (string, error) {

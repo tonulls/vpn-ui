@@ -145,9 +145,13 @@
                         </a-space>
                     </template>
                     <template #extra>
+                        <a href="{{ .profile_url }}" target="_blank" rel="noopener noreferrer"
+                            class="ant-btn subscription-support-button" v-if="{{ if and .show_profile_url .profile_url }}true{{ else }}false{{ end }}">
+                            <span aria-hidden="true">🌐</span><span>{{ if .profile_button_label }}{{ .profile_button_label }}{{ else }}{{ i18n "pages.settings.subProfileButtonDefault" }}{{ end }}</span>
+                        </a>
                         <a href="{{ .support_url }}" target="_blank" rel="noopener noreferrer"
                             class="ant-btn subscription-support-button" v-if="{{ if and .show_support .support_url }}true{{ else }}false{{ end }}">
-                            <span aria-hidden="true">📟</span><span>Support</span>
+                            <span aria-hidden="true">📟</span><span>{{ if .support_button_label }}{{ .support_button_label }}{{ else }}{{ i18n "pages.settings.subSupportButtonDefault" }}{{ end }}</span>
                         </a>
                         <a-popover :overlay-class-name="themeSwitcher.currentTheme" title='{{ i18n "menu.settings" }}'
                             placement="bottomRight" trigger="click">

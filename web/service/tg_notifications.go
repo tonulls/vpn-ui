@@ -113,23 +113,46 @@ func (t *Tgbot) eventEnabled(event telegramEvent) (bool, error) {
 }
 
 func (t *Tgbot) sendEventToAdmins(message string) {
-	recipients, err := t.settingService.GetTgBotChatId()
-	if err != nil {
-		logger.Warningf("Read Telegram private notification recipients: %v", err)
-		return
-	}
-	for _, rawID := range strings.Split(recipients, ",") {
-		rawID = strings.TrimSpace(rawID)
-		if rawID == "" {
-			continue
-		}
-		chatID, err := strconv.ParseInt(rawID, 10, 64)
-		if err != nil {
-			logger.Warningf("Invalid Telegram private chat ID %q: %v", rawID, err)
-			continue
-		}
+	for _, chatID := range currentTelegramAdminIDs(t.settingService) {
 		t.SendMsgToTgbot(chatID, message)
 	}
+}
+
+func currentTelegramAdminIDs(settingService SettingService) []int64 {
+	configured, err := settingService.GetTgBotAdminUserIDs()
+	if err == nil {
+		tgBotMutex.Lock()
+		adminIds = append(adminIds[:0], configured...)
+		tgBotMutex.Unlock()
+	} else {
+		logger.Warningf("Read Telegram admin user IDs; keeping last loaded list: %v", err)
+	}
+	tgBotMutex.Lock()
+	defer tgBotMutex.Unlock()
+	return append([]int64(nil), adminIds...)
+}
+
+func parseTelegramAdminIDs(mainIDs, additionalIDs string) ([]int64, error) {
+	seen := make(map[int64]struct{})
+	parsed := make([]int64, 0)
+	for _, list := range []string{mainIDs, additionalIDs} {
+		for _, rawID := range strings.Split(list, ",") {
+			rawID = strings.TrimSpace(rawID)
+			if rawID == "" {
+				continue
+			}
+			id, err := strconv.ParseInt(rawID, 10, 64)
+			if err != nil || id <= 0 {
+				return nil, fmt.Errorf("invalid Telegram admin user ID %q", rawID)
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			parsed = append(parsed, id)
+		}
+	}
+	return parsed, nil
 }
 
 func (t *Tgbot) forumChatID() (int64, error) {

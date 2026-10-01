@@ -194,16 +194,17 @@ func resellerOverviewGrants(user *model.User) (access, manage bool) {
 	return p.AllowOverview, p.AllowOverview && p.AllowOverviewManage
 }
 
-// templateReseller is the caller's own reseller limits and balance, shaped for
-// templates. Empty (isReseller false) for an admin.
-//
-// Like templatePerms this drives what the UI SHOWS, never what it ALLOWS. Every
-// number here is re-derived server-side before a single byte is charged, so a
-// browser that lies about its own minimums buys nothing.
+// templateReseller shapes the caller's effective subscription cap and, for
+// resellers, their own balance and reseller-specific limits. It is presentation
+// data only; server-side checks remain authoritative.
 func templateReseller(c *gin.Context) map[string]any {
-	out := map[string]any{"isReseller": false, "inboundIds": []int{}}
+	out := map[string]any{"isReseller": false, "inboundIds": []int{}, "subscriptionLimit": 0}
 	user := session.GetLoginUser(c)
-	if user == nil || !user.IsReseller {
+	if user == nil {
+		return out
+	}
+	if !user.IsReseller {
+		out["subscriptionLimit"] = user.SubscriptionLimit
 		return out
 	}
 	var svc service.ResellerService
@@ -220,6 +221,7 @@ func templateReseller(c *gin.Context) map[string]any {
 		available = 0
 	}
 	out["isReseller"] = true
+	out["subscriptionLimit"] = p.SubscriptionLimit
 	out["unlimited"] = p.Unlimited
 	out["allowanceBytes"] = p.AllowanceBytes
 	out["spentBytes"] = p.SpentBytes

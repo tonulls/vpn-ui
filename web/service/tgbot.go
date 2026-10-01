@@ -206,28 +206,11 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 		return err
 	}
 
-	// Get Telegram bot chat ID(s)
-	tgBotID, err := t.settingService.GetTgBotChatId()
+	// Load the primary and optional additional administrator user IDs.
+	parsedAdminIds, err := t.settingService.GetTgBotAdminUserIDs()
 	if err != nil {
-		logger.Warning("Failed to get Telegram bot chat ID:", err)
+		logger.Warning("Failed to get Telegram bot administrator user IDs:", err)
 		return err
-	}
-
-	parsedAdminIds := make([]int64, 0)
-	// Parse admin IDs from comma-separated string
-	if tgBotID != "" {
-		for _, adminID := range strings.Split(tgBotID, ",") {
-			adminID = strings.TrimSpace(adminID)
-			if adminID == "" {
-				continue
-			}
-			id, err := strconv.ParseInt(adminID, 10, 64)
-			if err != nil {
-				logger.Warning("Failed to parse admin ID from Telegram bot chat ID:", err)
-				return err
-			}
-			parsedAdminIds = append(parsedAdminIds, int64(id))
-		}
 	}
 	tgBotMutex.Lock()
 	adminIds = parsedAdminIds
@@ -252,7 +235,9 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 		return err
 	}
 
-	t.trySetBotCommands(bot)
+	// Registering commands is a network request; keep it off the panel startup path
+	// so an unreachable Telegram API cannot delay the web server.
+	go t.trySetBotCommands(bot)
 
 	// Start receiving Telegram bot messages
 	tgBotMutex.Lock()
@@ -273,7 +258,9 @@ func (t *Tgbot) trySetBotCommands(bot *telego.Bot) {
 		}
 	}()
 
-	err := bot.SetMyCommands(context.Background(), &telego.SetMyCommandsParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
 		Commands: []telego.BotCommand{
 			{Command: "start", Description: t.I18nBot("tgbot.commands.startDesc")},
 			{Command: "help", Description: t.I18nBot("tgbot.commands.helpDesc")},
@@ -351,7 +338,10 @@ func (t *Tgbot) NewBot(token string, proxyUrl string, apiServerUrl string) (*tel
 
 	// Build bot options
 	var options []telego.BotOption
-	options = append(options, telego.WithFastHTTPClient(client))
+	options = append(options,
+		telego.WithFastHTTPClient(client),
+		telego.WithLogger(newTelegramPollingLogger(token)),
+	)
 
 	if apiServerUrl != "" {
 		options = append(options, telego.WithAPIServer(apiServerUrl))
@@ -459,8 +449,23 @@ func (t *Tgbot) OnReceive() {
 	botWG.Add(1)
 	tgBotMutex.Unlock()
 
-	// Get updates channel using the context with shorter timeout for better error recovery
-	updates, _ := bot.UpdatesViaLongPolling(ctx, &params)
+	// Keep polling in the background and use a calmer retry interval when Telegram
+	// is unreachable; cancellation still lets the panel stop the receiver cleanly.
+	updates, err := bot.UpdatesViaLongPolling(
+		ctx,
+		&params,
+		telego.WithLongPollingRetryTimeout(30*time.Second),
+	)
+	if err != nil {
+		cancel()
+		tgBotMutex.Lock()
+		botCancel = nil
+		isRunning = false
+		tgBotMutex.Unlock()
+		botWG.Done()
+		logger.Warningf("Telegram receiver could not start; the panel will continue without it: %v", err)
+		return
+	}
 	go func() {
 		defer botWG.Done()
 		h, _ := th.NewBotHandler(bot, updates)
@@ -2195,7 +2200,7 @@ func (t *Tgbot) SubmitAddClient() (bool, error) {
 
 // checkAdmin checks if the given Telegram ID is an admin.
 func checkAdmin(tgId int64) bool {
-	for _, adminId := range adminIds {
+	for _, adminId := range currentTelegramAdminIDs(SettingService{}) {
 		if adminId == tgId {
 			return true
 		}
@@ -2628,12 +2633,13 @@ func (t *Tgbot) sendClientQRLinks(chatId int64, email string) {
 
 // SendMsgToTgbotAdmins sends a message to all admin Telegram chats.
 func (t *Tgbot) SendMsgToTgbotAdmins(msg string, replyMarkup ...telego.ReplyMarkup) {
+	admins := currentTelegramAdminIDs(t.settingService)
 	if len(replyMarkup) > 0 {
-		for _, adminId := range adminIds {
+		for _, adminId := range admins {
 			t.SendMsgToTgbot(adminId, msg, replyMarkup[0])
 		}
 	} else {
-		for _, adminId := range adminIds {
+		for _, adminId := range admins {
 			t.SendMsgToTgbot(adminId, msg)
 		}
 	}
@@ -2649,8 +2655,8 @@ func (t *Tgbot) sendExhaustedToAdmins() {
 	if !t.IsRunning() {
 		return
 	}
-	for _, adminId := range adminIds {
-		t.getExhausted(int64(adminId))
+	for _, adminId := range currentTelegramAdminIDs(t.settingService) {
+		t.getExhausted(adminId)
 	}
 }
 
@@ -3584,15 +3590,15 @@ func (t *Tgbot) onlineClients(chatId int64, messageID ...int) {
 	}
 }
 
-// sendBackup is the legacy bot-command entry point; it now sends only the new
-// database archive to the configured forum topic, never raw DB/config files to DM.
+// sendBackup is the legacy bot-command entry point; it sends only the database
+// archive to the enabled private and/or forum channels, never raw DB/config files.
 func (t *Tgbot) sendBackup(chatId int64) {
 	if err := t.SendDatabaseBackupArchive(); err != nil {
 		logger.Warningf("Manual Telegram backup failed: %v", err)
 		t.SendMsgToTgbot(chatId, t.I18nBot("tgbot.answers.errorOperation"))
 		return
 	}
-	t.SendMsgToTgbot(chatId, "Резервная копия отправлена в тему форума.")
+	t.SendMsgToTgbot(chatId, "Резервная копия отправлена по выбранным каналам доставки.")
 }
 
 // sendBanLogs sends the ban logs to the specified chat.

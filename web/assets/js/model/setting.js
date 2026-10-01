@@ -18,6 +18,7 @@ class AllSetting {
         this.tgBotProxy = "";
         this.tgBotAPIServer = "";
         this.tgBotChatId = "";
+        this.tgBotAdditionalChatId = "";
         this.tgRunTime = "@daily";
         this.tgLang = "en-US";
         this.tgForumEnable = false;
@@ -46,6 +47,9 @@ class AllSetting {
         this.subFaviconUrl = "";
         this.subShowSupport = false;
         this.subSupportUrl = "";
+        this.subSupportButtonLabel = "";
+        this.subShowProfileUrl = false;
+        this.subProfileButtonLabel = "";
         this.subProfileUrl = "";
         this.subAnnounce = "";
         this.subEnableRouting = true;

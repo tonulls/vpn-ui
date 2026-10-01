@@ -28,6 +28,19 @@
         <template slot="label">
             <a-tooltip>
                 <template slot="title">
+                    {{ i18n "pages.xray.mtproto.proxyProtocolDesc" }}
+                </template>
+                {{ i18n "pages.xray.mtproto.proxyProtocol" }}
+                <a-icon type="question-circle"></a-icon>
+            </a-tooltip>
+        </template>
+        <a-switch v-model="inbound.settings.proxyProtocol"></a-switch>
+    </a-form-item>
+
+    <a-form-item>
+        <template slot="label">
+            <a-tooltip>
+                <template slot="title">
                     {{ i18n "pages.xray.mtproto.modeClassicDesc" }}
                 </template>
                 {{ i18n "pages.xray.mtproto.modeClassic" }}

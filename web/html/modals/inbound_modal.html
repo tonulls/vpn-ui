@@ -616,19 +616,25 @@
         watch: {
             "inModal.visible"(v) {
                 if (v) {
-                    const id = inModal.inbound && inModal.inbound.id ? inModal.inbound.id : "new";
-                    const saved = window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`) ||
-                        window.localStorage.getItem("vpnui.externalTlsSettings");
-                    const tls = inModal.inbound.stream && inModal.inbound.stream.tls;
-                    const configured = !!(tls && ((tls.sni || "").trim() ||
+                    const inbound = inModal.inbound;
+                    const isNewInbound = !inbound || !inbound.id;
+                    const id = !isNewInbound ? inbound.id : "new";
+                    // New inbounds start with Security=None. Ignore the remembered
+                    // switch and the model's TLS defaults in that state: neither is
+                    // an explicit external-TLS choice for this new connection.
+                    const saved = isNewInbound ? null :
+                        (window.localStorage.getItem(`vpnui.externalTlsSettings.${id}`) ||
+                            window.localStorage.getItem("vpnui.externalTlsSettings"));
+                    const tls = inbound.stream && inbound.stream.tls;
+                    const configured = !isNewInbound && !!(tls && ((tls.sni || "").trim() ||
                         (tls.settings && (tls.settings.fingerprint || "").trim()) ||
                         (Array.isArray(tls.alpn) && tls.alpn.length)));
                     this.externalTlsSettingsVisible = saved === "1" || configured;
-                    if (!this.externalTlsSettingsVisible && inModal.inbound.stream.security === "none") {
-                        inModal.inbound.stream.tls.sni = "";
-                        inModal.inbound.stream.tls.alpn = [];
-                        if (inModal.inbound.stream.tls.settings) {
-                            inModal.inbound.stream.tls.settings.fingerprint = "";
+                    if (!this.externalTlsSettingsVisible && inbound.stream.security === "none") {
+                        tls.sni = "";
+                        tls.alpn = [];
+                        if (tls.settings) {
+                            tls.settings.fingerprint = "";
                         }
                     }
                     this.$nextTick(() => this.measureSections());
@@ -655,6 +661,23 @@
                 this.$nextTick(() => this.measureSections());
             },
             "inModal.inbound.stream.security"(newVal, oldVal) {
+                const tls = inModal.inbound && inModal.inbound.stream && inModal.inbound.stream.tls;
+                if (tls && newVal === "tls" && oldVal === "none" &&
+                    !(tls.sni || "").trim() &&
+                    !(tls.settings && (tls.settings.fingerprint || "").trim()) &&
+                    (!Array.isArray(tls.alpn) || tls.alpn.length === 0)) {
+                    // The model's TLS object is retained while Security=None. Keep
+                    // the conventional ALPN defaults when the operator later chooses TLS.
+                    tls.alpn = [ALPN_OPTION.H2, ALPN_OPTION.HTTP1];
+                } else if (tls && newVal === "none" && oldVal === "tls" &&
+                    !this.externalTlsSettingsVisible) {
+                    // With external settings disabled, switching TLS off must not
+                    // leave TLS defaults behind as accidental external metadata.
+                    tls.sni = "";
+                    tls.alpn = [];
+                    if (tls.settings) tls.settings.fingerprint = "";
+                }
+
                 // Clear flow when security changes from reality/tls to none.
                 // One assignment now that flow lives on the inbound: the old loop
                 // over the clients could not reach the accounts the Clients page

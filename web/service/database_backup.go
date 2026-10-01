@@ -9,6 +9,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/util/common"
 	"github.com/mymmrac/telego/telegoutil"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -16,8 +17,8 @@ import (
 )
 
 // SendScheduledDatabaseBackup sends one consistent, database-only archive to the
-// configured forum backup topic. Scheduling and the last-success timestamp belong
-// to the job layer.
+// delivery destinations selected in settings. Scheduling and the last-success
+// timestamp belong to the job layer.
 func (t *Tgbot) SendScheduledDatabaseBackup() error {
 	backupEnabled, err := t.settingService.GetTgBackupEnable()
 	if err != nil || !backupEnabled {
@@ -27,7 +28,7 @@ func (t *Tgbot) SendScheduledDatabaseBackup() error {
 }
 
 // SendDatabaseBackupArchive performs one on-demand archive send, irrespective of
-// the schedule switch. It still requires the Telegram bot and forum destination.
+// the schedule switch. It sends to the enabled private and/or forum destinations.
 func (t *Tgbot) SendDatabaseBackupArchive() error {
 	if !t.IsRunning() || bot == nil {
 		return fmt.Errorf("Telegram bot is not running")
@@ -36,13 +37,51 @@ func (t *Tgbot) SendDatabaseBackupArchive() error {
 	if err != nil || !enabled {
 		return fmt.Errorf("Telegram bot is disabled")
 	}
-	forumEnabled, err := t.settingService.GetTgForumEnable()
-	if err != nil || !forumEnabled {
-		return fmt.Errorf("Telegram forum is disabled")
-	}
-	chatID, err := t.forumChatID()
+
+	sendDirect, err := t.settingService.GetTgNotifyDirect()
 	if err != nil {
-		return err
+		return fmt.Errorf("read private backup channel setting: %w", err)
+	}
+	sendForum, err := t.settingService.GetTgNotifyForum()
+	if err != nil {
+		return fmt.Errorf("read forum backup channel setting: %w", err)
+	}
+
+	directIDs := make([]int64, 0)
+	var deliveryErrors []error
+	if sendDirect {
+		mainIDs, err := t.settingService.GetTgBotChatId()
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("read main admin user IDs: %w", err))
+		} else {
+			directIDs, err = parseTelegramAdminIDs(mainIDs, "")
+			if err != nil {
+				deliveryErrors = append(deliveryErrors, err)
+			} else if len(directIDs) == 0 {
+				deliveryErrors = append(deliveryErrors, fmt.Errorf("private backup delivery requires a main admin user ID"))
+			}
+		}
+	}
+
+	forumChatID := int64(0)
+	forumReady := false
+	if sendForum {
+		forumEnabled, err := t.settingService.GetTgForumEnable()
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("read Telegram forum setting: %w", err))
+		} else if !forumEnabled {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("forum delivery is selected but the Telegram forum is disabled"))
+		} else if forumChatID, err = t.forumChatID(); err != nil {
+			deliveryErrors = append(deliveryErrors, err)
+		} else {
+			forumReady = true
+		}
+	}
+	if len(directIDs) == 0 && !forumReady {
+		if len(deliveryErrors) > 0 {
+			return common.Combine(deliveryErrors...)
+		}
+		return fmt.Errorf("no backup delivery channel is enabled")
 	}
 
 	databaseBytes, err := snapshotDatabaseForTelegramBackup()
@@ -81,25 +120,38 @@ func (t *Tgbot) SendDatabaseBackupArchive() error {
 		return fmt.Errorf("database backup archive exceeds the configured size limit")
 	}
 
-	topicID, err := t.getOrCreateForumTopic(telegramEventBackup, chatID)
-	if err != nil {
-		return fmt.Errorf("get backup forum topic: %w", err)
-	}
 	name := "vpn-ui-backup-" + createdAt.Format("20060102-150405") + ".zip"
 	if encrypt {
 		name += ".enc"
 	}
+	for _, adminID := range directIDs {
+		if err := sendBackupDocument(adminID, archive, name, 0); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("send database backup to main admin %d: %w", adminID, err))
+		}
+	}
+	if forumReady {
+		topicID, err := t.getOrCreateForumTopic(telegramEventBackup, forumChatID)
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("get backup forum topic: %w", err))
+		} else if err := sendBackupDocument(forumChatID, archive, name, topicID); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("send database backup to Telegram forum: %w", err))
+		}
+	}
+	return common.Combine(deliveryErrors...)
+}
+
+func sendBackupDocument(chatID int64, archive []byte, name string, topicID int) error {
 	document := telegoutil.Document(
 		telegoutil.ID(chatID),
 		telegoutil.FileFromBytes(archive, name),
 	)
-	document.MessageThreadID = topicID
+	if topicID > 0 {
+		document.MessageThreadID = topicID
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if _, err := bot.SendDocument(ctx, document); err != nil {
-		return fmt.Errorf("send database backup to Telegram forum: %w", err)
-	}
-	return nil
+	_, err := bot.SendDocument(ctx, document)
+	return err
 }
 
 // snapshotDatabaseForTelegramBackup uses SQLite VACUUM INTO, which incorporates

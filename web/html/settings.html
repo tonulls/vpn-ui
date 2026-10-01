@@ -1196,7 +1196,9 @@
       onTgForumToggle(enabled) {
         if (!enabled) {
           this.allSetting.tgNotifyForum = false;
-          this.allSetting.tgBackupEnable = false;
+          if (!this.allSetting.tgNotifyDirect || !this.allSetting.tgBotChatId) {
+            this.allSetting.tgBackupEnable = false;
+          }
         }
       },
       chooseTgBackupArchive() {
@@ -1257,17 +1259,35 @@
       },
       async updateAllSetting() {
         const forumChatId = String(this.allSetting.tgForumChatId || '').trim();
+        const botToken = String(this.allSetting.tgBotToken || '').trim();
+        const mainAdminIds = String(this.allSetting.tgBotChatId || '').trim();
+        if (this.allSetting.tgBotEnable && !botToken) {
+          this.$message.error('Укажите токен Telegram-бота.');
+          return;
+        }
+        if (this.allSetting.tgBotEnable && !mainAdminIds) {
+          this.$message.error('Укажите User ID главного администратора бота.');
+          return;
+        }
         if (this.allSetting.tgForumEnable && !forumChatId) {
           this.$message.error('Укажите ID чата форума.');
           return;
         }
-        if (this.allSetting.tgNotifyForum && !this.allSetting.tgForumEnable) {
-          this.$message.error('Сначала включите Telegram Форум и укажите ID чата.');
+        if (this.allSetting.tgNotifyForum && (!this.allSetting.tgForumEnable || !forumChatId)) {
+          this.$message.error('Включите Telegram Форум и укажите ID чата.');
           return;
         }
-        if (this.allSetting.tgBackupEnable && (!this.allSetting.tgForumEnable || !forumChatId)) {
-          this.$message.error('Для резервного копирования включите форум и укажите ID чата.');
-          return;
+        if (this.allSetting.tgBackupEnable) {
+          if (!this.allSetting.tgBotEnable) {
+            this.$message.error('Для резервного копирования включите Telegram-бота.');
+            return;
+          }
+          const directBackup = this.allSetting.tgNotifyDirect && mainAdminIds;
+          const forumBackup = this.allSetting.tgNotifyForum && this.allSetting.tgForumEnable && forumChatId;
+          if (!directBackup && !forumBackup) {
+            this.$message.error('Для резервного копирования включите «В личку бота» и/или «В форум».');
+            return;
+          }
         }
         if (this.allSetting.tgBackupEncrypt && !String(this.allSetting.tgBackupPassword || '').trim()) {
           this.$message.error('Введите пароль для шифрования архива.');
@@ -1307,6 +1327,46 @@
           sendUpdateUserRequest();
         }
       },
+      async waitForPanelReady(probeUrl, timeoutMs = 120000, requireRestartGap = true) {
+        const startedAt = Date.now();
+        const deadline = startedAt + timeoutMs;
+        let sawRestartGap = false;
+        let probeNumber = 0;
+
+        while (Date.now() < deadline) {
+          const url = new URL(probeUrl);
+          url.searchParams.set('_panel_restart_probe', `${Date.now()}-${probeNumber++}`);
+          const ready = await new Promise(resolve => {
+            const image = new Image();
+            let settled = false;
+            const finish = value => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              image.onload = null;
+              image.onerror = null;
+              resolve(value);
+            };
+            const timer = setTimeout(() => finish(false), 2500);
+            image.onload = () => finish(true);
+            image.onerror = () => finish(false);
+            image.src = url.toString();
+          });
+
+          const elapsed = Date.now() - startedAt;
+          if (!ready && elapsed >= 3500) {
+            // Ignore transient failures before the server's scheduled SIGHUP.
+            sawRestartGap = true;
+          } else if (ready && sawRestartGap && elapsed >= 5000) {
+            return true;
+          } else if (ready && !requireRestartGap && elapsed >= 30000) {
+            // A reverse proxy may keep serving static assets throughout the restart.
+            return true;
+          }
+          await PromiseUtil.sleep(500);
+        }
+        return false;
+      },
       async restartPanel() {
         await new Promise(resolve => {
           this.$confirm({
@@ -1318,44 +1378,50 @@
             onOk: () => resolve(),
           });
         });
-        this.loading(true);
-        const msg = await HttpUtil.post("/panel/setting/restartPanel");
-        this.loading(false);
-        if (!msg.success) return;
-
-        this.loading(true);
-        await PromiseUtil.sleep(5000);
 
         const { webDomain, webPort, webBasePath, webCertFile, webKeyFile } = this.allSetting;
         const newProtocol = (webCertFile || webKeyFile) ? "https:" : "http:";
-
         let base = webBasePath ? webBasePath.replace(/^\//, "") : "";
         if (base && !base.endsWith("/")) base += "/";
 
+        let target;
         if (!this.entryIsIP) {
-          const url = new URL(window.location.href);
-          url.pathname = `/${base}panel/settings`;
-          url.protocol = newProtocol;
-          window.location.replace(url.toString());
-          return;
+          target = new URL(window.location.href);
+          target.pathname = `/${base}panel/settings`;
+          target.protocol = newProtocol;
+        } else {
+          let finalHost = this.entryHost;
+          let finalPort = this.entryPort || "";
+          if (webDomain && this._isIp(webDomain)) {
+            finalHost = webDomain;
+          }
+          if (webPort && Number(webPort) !== Number(this.entryPort)) {
+            finalPort = String(webPort);
+          }
+          target = new URL(`${newProtocol}//${finalHost}`);
+          if (finalPort) target.port = finalPort;
+          target.pathname = `/${base}panel/settings`;
         }
+        const probeUrl = new URL(`/${base}assets/img/logo.png`, target.origin).toString();
 
-        let finalHost = this.entryHost;
-        let finalPort = this.entryPort || "";
+        this.loading(true);
+        try {
+          const msg = await HttpUtil.post("/panel/setting/restartPanel", null, { timeout: 15000 });
+          if (!msg || !msg.success) return;
 
-        if (webDomain && this._isIp(webDomain)) {
-          finalHost = webDomain;
+          const requireRestartGap = target.origin === window.location.origin;
+          const ready = await this.waitForPanelReady(probeUrl, 120000, requireRestartGap);
+          if (!ready) {
+            this.$message.error('{{ i18n "pages.settings.restartPanelTimeout" }}');
+            return;
+          }
+          window.location.replace(target.toString());
+        } catch (error) {
+          console.error("Panel restart flow failed:", error);
+          this.$message.error('{{ i18n "pages.settings.restartPanelTimeout" }}');
+        } finally {
+          this.loading(false);
         }
-
-        if (webPort && Number(webPort) !== Number(this.entryPort)) {
-          finalPort = String(webPort);
-        }
-
-        const url = new URL(`${newProtocol}//${finalHost}`);
-        if (finalPort) url.port = finalPort;
-        url.pathname = `/${base}panel/settings`;
-
-        window.location.replace(url.toString());
       },
       // Two-factor is per-admin and lives on the admin's own row, not in the shared
       // settings blob (which was readable by every logged-in admin). So this saves

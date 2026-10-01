@@ -191,10 +191,29 @@
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.subShowProfileUrl" }}</template>
+            <template #description>{{ i18n "pages.settings.subShowProfileUrlDesc" }}</template>
+            <template #control>
+                <div style="display:flex;align-items:center;gap:10px;width:100%">
+                    <a-switch v-model="allSetting.subShowProfileUrl"></a-switch>
+                    <a-input v-if="allSetting.subShowProfileUrl" type="text"
+                        v-model="allSetting.subProfileButtonLabel"
+                        placeholder='{{ i18n "pages.settings.subButtonLabelPlaceholder" }}'
+                        style="flex:1;min-width:0"></a-input>
+                </div>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.subShowSupport" }}</template>
             <template #description>{{ i18n "pages.settings.subShowSupportDesc" }}</template>
             <template #control>
-                <a-switch v-model="allSetting.subShowSupport"></a-switch>
+                <div style="display:flex;align-items:center;gap:10px;width:100%">
+                    <a-switch v-model="allSetting.subShowSupport"></a-switch>
+                    <a-input v-if="allSetting.subShowSupport" type="text"
+                        v-model="allSetting.subSupportButtonLabel"
+                        placeholder='{{ i18n "pages.settings.subButtonLabelPlaceholder" }}'
+                        style="flex:1;min-width:0"></a-input>
+                </div>
             </template>
         </a-setting-list-item>
     </a-collapse-panel>

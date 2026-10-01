@@ -197,7 +197,7 @@
         @cancel="() => del.visible = false">
         <a-alert type="warning" show-icon :style="{ marginBottom: '16px' }">
           <template slot="message">
-            [[ del.clientCount ]] {{ i18n "pages.resellers.deleteHasAccounts" }}
+            {{ i18n "pages.resellers.deleteHasAccounts" "Count==[[ del.clientCount ]]" }}
           </template>
         </a-alert>
         <!-- a-radio labels are single-line with a fixed height in antd-vue 1.7.8; the
