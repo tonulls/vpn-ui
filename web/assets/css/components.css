@@ -1287,15 +1287,24 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
 }
 .bo-cf-tab:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .bo-cf-tab-error { color:var(--error); font-size:14px; }
+.bo-cf-additional-head {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  margin:8px 0 12px;
+}
+.bo-cf-additional-head > strong { display:inline-flex; align-items:center; gap:6px; }
+.bo-cf-additional-title--error { color:var(--error); }
+.bo-cf-additional-error-icon { color:var(--error); font-size:14px; }
 
 .bo-cf-field { margin-bottom:14px; }
 .bo-cf-field.bo-cf-field--error > label { color:var(--error); }
 .bo-cf-error-icon { color:var(--error); font-size:14px; }
 .bo-cf-field--error .ant-input,
-.bo-cf-field--error .ant-input-group-addon {
+.bo-cf-field--error .ant-input-group-addon,
+.bo-cf-field--error .ant-input-number {
   border-color:var(--error) !important;
   box-shadow:0 0 0 2px var(--error-weak) !important;
 }
+.bo-cf-hint.bo-cf-error-hint { color:var(--error); }
 .bo-cf-field > label {
   display:flex; align-items:center; gap:6px; flex-wrap:wrap;
   font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:5px;

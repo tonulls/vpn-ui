@@ -1522,18 +1522,6 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		logger.Debug("No enabled inbound founded to removing by api", tag)
 	}
 
-	// Delete client traffics of inbounds
-	err := db.Where("inbound_id = ?", id).Delete(xray.ClientTraffic{}).Error
-	if err != nil {
-		return false, err
-	}
-	// And the memberships on it, which carry this inbound's share of each account's
-	// usage. SyncInboundAccounts drops them too when the controller reaches it, but
-	// not every caller of DelInbound does, and a membership left pointing at a
-	// deleted inbound keeps its bytes out of the Xray-native remainder for good.
-	if err := db.Where("inbound_id = ?", id).Delete(&model.AccountInbound{}).Error; err != nil {
-		return false, err
-	}
 	inbound, err := s.GetInbound(id)
 	if err != nil {
 		return false, err
@@ -1543,10 +1531,38 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		return false, err
 	}
 	for _, client := range clients {
-		err := s.DelClientIPs(db, client.Email)
+		otherInboundIds, err := s.membershipInboundIdsOutside(db, id, client.Email)
 		if err != nil {
 			return false, err
 		}
+		if len(otherInboundIds) > 0 {
+			// The traffic row is account-wide. Move its legacy home pointer instead of
+			// deleting usage still needed by memberships on the surviving inbounds.
+			if err := db.Model(&xray.ClientTraffic{}).Where("email = ?", client.Email).
+				Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+				return false, err
+			}
+			if err := db.Model(&model.ResellerClient{}).
+				Where("email = ? AND inbound_id = ?", client.Email, id).
+				Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+				return false, err
+			}
+			continue
+		}
+		if err := s.DelClientIPs(db, client.Email); err != nil {
+			return false, err
+		}
+	}
+
+	// Rows still pointing at this inbound belong to accounts with no surviving
+	// membership; the ones above were re-anchored and retain their lifetime usage.
+	if err := db.Where("inbound_id = ?", id).Delete(xray.ClientTraffic{}).Error; err != nil {
+		return false, err
+	}
+	// Drop this inbound's membership records too. SyncInboundAccounts does so when
+	// the controller reaches it, but not every caller of DelInbound does.
+	if err := db.Where("inbound_id = ?", id).Delete(&model.AccountInbound{}).Error; err != nil {
+		return false, err
 	}
 
 	return needRestart, db.Delete(model.Inbound{}, id).Error
@@ -2527,22 +2543,45 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 	oldInbound.Settings = string(newSettings)
 
 	db := database.GetDB()
-
-	err = s.DelClientIPs(db, email)
-	if err != nil {
-		logger.Error("Error in delete client IPs")
-		return false, err
+	var otherInboundIds []int
+	if email != "" {
+		// client_traffics and its IP bindings are account-wide, not per inbound.
+		// Keep them while another membership still serves the account: the final
+		// deletion needs the usage snapshot to refund only the unused quota.
+		otherInboundIds, err = s.membershipInboundIdsOutside(db, inboundId, email)
+		if err != nil {
+			return false, err
+		}
+	}
+	servedElsewhere := len(otherInboundIds) > 0
+	if servedElsewhere {
+		// Keep the legacy home pointer on a surviving membership. Otherwise the last
+		// delete sees a stale live inbound here and mistakes the removed account for
+		// one that is still served, keeping its reseller slot occupied.
+		if err := db.Model(&xray.ClientTraffic{}).Where("email = ?", email).
+			Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+			return false, err
+		}
+		if err := db.Model(&model.ResellerClient{}).
+			Where("email = ? AND inbound_id = ?", email, inboundId).
+			Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+			return false, err
+		}
+	} else {
+		err = s.DelClientIPs(db, email)
+		if err != nil {
+			logger.Error("Error in delete client IPs")
+			return false, err
+		}
 	}
 	needRestart := false
 
 	if len(email) > 0 {
-		// Read into a slice, not First. A missing row is not an error here, it is "no
-		// stats to delete", and it is the ordinary state of the SECOND membership of one
-		// account: email is unique panel-wide, so an account on N inbounds has ONE
-		// traffic row, the first delete takes it, and every remaining membership then
-		// failed outright with "Get stats error" and could never be removed. That left a
-		// deleted account still serving on every inbound but the first. Same trap and
-		// same fix as DelInboundClientByEmail below.
+		// Read into a slice, not First. A missing row is not an error here: a legacy
+		// or partially removed membership may already have lost it. When this is the
+		// last membership, remove the account-wide traffic row; until then keep it so
+		// the later final delete can snapshot the real lifetime usage and settle the
+		// reseller's remaining quota.
 		//
 		// notDepleted stays true when there is no row: it only decides whether to bother
 		// calling RemoveUser, and a user the core does not have answers "User %s not
@@ -2558,10 +2597,12 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 		}
 		if len(stats) > 0 {
 			notDepleted = stats[0].Enable
-			err = s.DelClientStat(db, email)
-			if err != nil {
-				logger.Error("Delete stats Data Error")
-				return false, err
+			if !servedElsewhere {
+				err = s.DelClientStat(db, email)
+				if err != nil {
+					logger.Error("Delete stats Data Error")
+					return false, err
+				}
 			}
 		}
 		if needApiDel && notDepleted {
@@ -4199,44 +4240,27 @@ func (s *InboundService) AddClientStat(tx *gorm.DB, inboundId int, client *model
 	return nil
 }
 
-// emailServedOutside answers whether an email is already served by something OTHER
-// than the client the caller is writing right now. It is the live-account test
-// AddClientStat uses to decide whether a pre-existing counter row is a real
-// membership or an orphan.
+// membershipInboundIdsOutside finds the other inbounds that still serve an email,
+// without consulting client_traffics.inbound_id. That legacy home pointer is precisely
+// what a membership delete may need to move to one of these surviving inbounds.
 //
-// exceptInboundId is skipped because the caller is mid-write on it, and the two
-// orders both occur: AddInbound has already saved the settings holding the new
-// client (so the target inbound would always answer "live" and no orphan would ever
-// be reset), while AddInboundClient and UpdateInboundClient have not saved yet. The
-// duplicate-email check runs ahead of every one of these paths, so a client reaching
-// here is one no OTHER inbound was supposed to be holding anyway.
-//
-// Two sources, and deliberately not servingInboundIds, which unions a third:
-// client_traffics.inbound_id. That column is read off the very row whose liveness is
-// in question, so an orphan would vouch for itself and the reset could never happen.
-//
-//   - settings.clients, scanned. The source of truth in both worlds, correct before
-//     the accounts migration has run and after it.
-//   - account_inbounds, filtered to inbounds that still exist. It catches a
-//     membership recorded before the projection spliced its entry into settings.
-//     Including it can only make this answer "live" more often, which is the safe
-//     direction: the worst case is the old behaviour (reuse the row), where a wrong
-//     "orphan" would zero a paying customer's usage.
-func (s *InboundService) emailServedOutside(tx *gorm.DB, exceptInboundId int, email string) (bool, error) {
+// Settings are the source of truth before and after the accounts migration. The
+// account_inbounds mirror is also included, filtered to live inbounds, because a
+// membership may be recorded before its entry is projected into settings.
+func (s *InboundService) membershipInboundIdsOutside(tx *gorm.DB, exceptInboundId int, email string) ([]int, error) {
 	key := accountKey(email)
 	if key == "" {
-		return false, nil
+		return nil, nil
 	}
 
 	var inbounds []*model.Inbound
 	if err := tx.Model(&model.Inbound{}).Select("id", "settings").Find(&inbounds).Error; err != nil {
-		return false, err
+		return nil, err
 	}
 	liveIds := make(map[int]bool, len(inbounds))
+	found := map[int]bool{}
 	for _, inbound := range inbounds {
 		liveIds[inbound.Id] = true
-	}
-	for _, inbound := range inbounds {
 		if inbound.Id == exceptInboundId {
 			continue
 		}
@@ -4247,7 +4271,8 @@ func (s *InboundService) emailServedOutside(tx *gorm.DB, exceptInboundId int, em
 		for _, entry := range clients {
 			entryEmail, _ := entry["email"].(string)
 			if accountKey(entryEmail) == key {
-				return true, nil
+				found[inbound.Id] = true
+				break
 			}
 		}
 	}
@@ -4257,14 +4282,34 @@ func (s *InboundService) emailServedOutside(tx *gorm.DB, exceptInboundId int, em
 		Joins("JOIN accounts ON accounts.id = account_inbounds.account_id").
 		Where("LOWER(TRIM(accounts.email)) = ?", key).
 		Pluck("account_inbounds.inbound_id", &memberships).Error; err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, id := range memberships {
 		if id != exceptInboundId && liveIds[id] {
-			return true, nil
+			found[id] = true
 		}
 	}
-	return false, nil
+
+	ids := make([]int, 0, len(found))
+	for id := range found {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids, nil
+}
+
+// emailServedOutside answers whether an email is already served by something OTHER
+// than the client the caller is writing right now. It is the live-account test
+// AddClientStat uses to decide whether a pre-existing counter row is a real
+// membership or an orphan.
+//
+// exceptInboundId is skipped because the caller is mid-write on it: AddInbound may
+// already have saved the target settings, while AddInboundClient and
+// UpdateInboundClient have not. client_traffics.inbound_id is deliberately ignored;
+// an orphan row must not vouch for its own liveness.
+func (s *InboundService) emailServedOutside(tx *gorm.DB, exceptInboundId int, email string) (bool, error) {
+	ids, err := s.membershipInboundIdsOutside(tx, exceptInboundId, email)
+	return len(ids) > 0, err
 }
 
 func (s *InboundService) UpdateClientStat(tx *gorm.DB, email string, client *model.Client) error {
@@ -5788,31 +5833,46 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 	oldInbound.Settings = string(newSettings)
 
 	db := database.GetDB()
-
-	// remove IP bindings
-	if err := s.DelClientIPs(db, storedEmail); err != nil {
-		logger.Error("Error in delete client IPs")
+	otherInboundIds, err := s.membershipInboundIdsOutside(db, inboundId, storedEmail)
+	if err != nil {
 		return false, err
+	}
+	servedElsewhere := len(otherInboundIds) > 0
+	if servedElsewhere {
+		// Keep the one account-wide traffic row anchored to an inbound that will
+		// continue serving it; a stale pointer would make final settlement think it
+		// is still live and leave both quota and the subscription slot charged.
+		if err := db.Model(&xray.ClientTraffic{}).Where("email = ?", storedEmail).
+			Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+			return false, err
+		}
+		if err := db.Model(&model.ResellerClient{}).
+			Where("email = ? AND inbound_id = ?", storedEmail, inboundId).
+			Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+			return false, err
+		}
+	} else {
+		// These rows belong to the account, not this inbound. Drop them only after its
+		// last membership is removed so the remaining quota can be refunded accurately.
+		if err := s.DelClientIPs(db, storedEmail); err != nil {
+			logger.Error("Error in delete client IPs")
+			return false, err
+		}
 	}
 
 	needRestart := false
 
-	// remove stats too
 	if len(storedEmail) > 0 {
 		// Counted directly rather than read through GetClientTrafficByEmail. That one
 		// resolves the account's inbound (to attach a uuid this path never uses) and
 		// reports a MISSING row as a hard error, "Inbound Not Found For Email".
-		//
-		// A missing row is not an error here, it is "no stats to delete", and it is
-		// the ordinary state of the SECOND membership of one account: an account on
-		// N inbounds has ONE traffic row, the first delete takes it, and every
-		// remaining membership then failed outright and could never be removed. That
-		// left a deleted account still serving on every inbound but the first.
+		// Missing is harmless here; retain the row until the final membership so a
+		// later delete can still snapshot lifetime usage before refunding the quota.
 		var stats int64
 		if err := db.Model(xray.ClientTraffic{}).Where("email = ?", storedEmail).Count(&stats).Error; err != nil {
 			return false, err
 		}
-		if stats > 0 {
+		if stats > 0 && !servedElsewhere {
 			if err := s.DelClientStat(db, storedEmail); err != nil {
 				logger.Error("Delete stats Data Error")
 				return false, err

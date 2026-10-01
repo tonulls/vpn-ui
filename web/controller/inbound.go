@@ -1191,10 +1191,15 @@ func (a *InboundController) delAccountClient(c *gin.Context) {
 		return
 	}
 	email := c.Param("email")
+	used, usedKnown := a.usageBeforeDelete(email)
 	if err := accountService.DeleteAccountWithoutInbound(email); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
+	// This route is for accounts with no memberships, but a reseller-owned parked
+	// account still has a charge. Snapshot before DeleteAccountWithoutInbound removes
+	// its traffic row, then settle it just like the final inbound membership delete.
+	a.refundDeletedClient(email, used, usedKnown)
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
 }
 

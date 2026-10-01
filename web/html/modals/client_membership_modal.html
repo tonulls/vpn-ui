@@ -82,6 +82,9 @@
               <a-icon type="reload" @click="clientMembershipModal.regenerate('email')"></a-icon>
             </a-tooltip>
           </a-input>
+          <div class="bo-cf-hint bo-cf-error-hint" v-if="clientMembershipModal.showNameError">
+            {{ i18n "emptyUsername" }}
+          </div>
           <div class="bo-cf-hint" v-if="clientMembershipModal.isEdit">{{ i18n "pages.clients.emailLocked" }}</div>
         </div>
         <div class="bo-cf-field">
@@ -96,8 +99,12 @@
           <a-switch v-model="clientMembershipModal.client.enable"></a-switch>
         </div>
 
-        <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '8px 0 12px' }">
-          <strong>{{ i18n "pages.resellers.additionalSettings" }}</strong>
+        <div class="bo-cf-additional-head">
+          <strong :class="{ 'bo-cf-additional-title--error': clientMembershipModal.additionalHasError }">
+            {{ i18n "pages.resellers.additionalSettings" }}
+            <a-icon v-if="clientMembershipModal.additionalHasError" type="exclamation-circle"
+              class="bo-cf-additional-error-icon"></a-icon>
+          </strong>
           <a-button type="link" size="small"
             @click="clientMembershipModal.additionalOpen = !clientMembershipModal.additionalOpen">
             <span v-if="clientMembershipModal.additionalOpen">{{ i18n "pages.resellers.collapseAdditional" }}</span>
@@ -130,21 +137,27 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
-            <div class="bo-cf-field">
-              <label>{{ i18n "pages.inbounds.totalFlow" }}</label>
+            <div class="bo-cf-field"
+              :class="{ 'bo-cf-field--error': clientMembershipModal.quotaError }">
+              <label>
+                {{ i18n "pages.inbounds.totalFlow" }}
+                <a-icon v-if="clientMembershipModal.quotaError" type="exclamation-circle"
+                  class="bo-cf-error-icon"></a-icon>
+              </label>
               <a-input-number v-model="clientMembershipModal.totalGb"
                 :min="clientMembershipModal.resellerLimited ? 1 : 0"
                 :style="{ width: '100%' }"></a-input-number>
               <div class="bo-cf-hint" v-if="!clientMembershipModal.resellerLimited">
                 {{ i18n "pages.clients.zeroUnlimited" }}
               </div>
-              <div class="bo-cf-hint" v-if="clientMembershipModal.resellerLimited">
+              <div class="bo-cf-hint" v-if="clientMembershipModal.resellerLimited && !clientMembershipModal.quotaValidationAttempted">
                 {{ i18n "pages.clients.resellerQuotaRequired" }}
+              </div>
+              <div class="bo-cf-hint" v-if="clientMembershipModal.resellerLimited">
                 {{ i18n "pages.resellers.available" }}:
                 [[ SizeFormatter.sizeFormat(clientMembershipModal.availableBytes) ]]
               </div>
-              <div class="bo-cf-hint" v-if="clientMembershipModal.quotaError"
-                :style="{ color: 'var(--error)' }">
+              <div class="bo-cf-hint bo-cf-error-hint" v-if="clientMembershipModal.quotaError">
                 [[ clientMembershipModal.quotaError ]]
               </div>
             </div>
@@ -450,6 +463,7 @@
     totalGb: 0,
     availableBytes: Number(RESELLER.availableBytes) || 0,
     balanceFresh: false,
+    quotaValidationAttempted: false,
     days: 0,
     client: {},
     row: null,
@@ -644,7 +658,10 @@
         // Start with no account name; the operator can type one or explicitly
         // request a generated value with the addon button.
         this.client = this.blankClient();
-        this.totalGb = 0;
+        // Keep the model in step with a-input-number's reseller min. Otherwise it
+        // renders a clamped 1 GB while v-model still holds 0 and submit reports a
+        // false "traffic limit required" error until the value is edited.
+        this.totalGb = this.resellerLimited ? 1 : 0;
         this.days = 0;
         this.delayedStart = false;
         const granted = new Set((RESELLER.inboundIds || []).map(Number));
@@ -658,6 +675,7 @@
         this.limitDevices = '';
       }
       this.balanceFresh = false;
+      this.quotaValidationAttempted = false;
       this.visible = true;
       if (this.resellerLimited) this.refreshResellerBalance();
     },
@@ -685,8 +703,9 @@
     // what is being typed, which is the only way the rail earns its space before
     // the account exists.
     get resellerLimited() { return !!(RESELLER.isReseller && !RESELLER.unlimited); },
+    get additionalHasError() { return !!this.quotaError; },
     get quotaError() {
-      if (!this.resellerLimited) return '';
+      if (!this.resellerLimited || !this.quotaValidationAttempted) return '';
       if (!(Number(this.totalGb) > 0)) return '{{ i18n "pages.clients.resellerQuotaRequired" }}';
       if (!this.isEdit && this.balanceFresh && Number(this.totalGb) * 1073741824 > this.availableBytes) {
         return '{{ i18n "pages.clients.quotaExceedsBalance" }} ' +
@@ -1062,23 +1081,20 @@
     },
 
     async ok() {
-      // The server remains authoritative, but refresh the visible balance before
-      // validating so an admin's recent recharge is reflected without reopening
-      // the reseller's session. Limited resellers must never submit quota 0: that
-      // value means unlimited in the stored client model.
+      const email = (this.client.email || '').trim();
+      if (!this.isEdit) this.nameInvalid = !email;
+      this.quotaValidationAttempted = true;
+
+      // Refresh before checking an over-balance value so a recent recharge is
+      // reflected without reopening the form. Mark all required fields first: an
+      // invalid quota must not return early and hide the missing-name error.
       if (this.resellerLimited) await this.refreshResellerBalance();
-      if (this.quotaError) return;
+      if (this.showNameError || this.quotaError) return;
 
       // New accounts need a destination inbound before they can be created. The
       // disabled modal button enforces this in the UI; keep the guard here too so
       // keyboard or programmatic submission cannot bypass it.
       if (!this.isEdit && !this.selected.length) return;
-
-      const email = (this.client.email || '').trim();
-      if (!email) {
-        if (!this.isEdit) this.nameInvalid = true;
-        return;
-      }
       if (this.protocolClash || this.limitsInvalid) return;
 
       const ids = this.selected.slice().sort((a, b) => a - b);

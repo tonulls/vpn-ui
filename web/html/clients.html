@@ -1286,6 +1286,7 @@
           onOk: async () => {
             const stuck = await this.deleteAccount(row);
             await this.getDBInbounds();
+            await this.refreshResellerBalance();
             this.reportStuck(row.email, stuck);
           },
         });
@@ -1309,11 +1310,23 @@
           if (!msg || !msg.success) stuck.push(row.email);
           return stuck;
         }
-        for (const m of (row.memberships || [])) {
+        const memberships = row.memberships || [];
+        let successMessage = '';
+        for (const m of memberships) {
+          // One account can be served by several inbounds, but the operator deleted
+          // one account. Keep transport errors visible while suppressing each
+          // per-membership success; report one aggregate success only if all deletes
+          // completed, then let reportStuck explain any partial failure.
           const msg = await HttpUtil.post(
-            `/panel/api/inbounds/${m.inboundId}/delClientByEmail/${encodeURIComponent(row.email)}`);
-          if (!msg || !msg.success) stuck.push(m.remark || (m.protocol + ':' + m.port));
+            `/panel/api/inbounds/${m.inboundId}/delClientByEmail/${encodeURIComponent(row.email)}`,
+            undefined, { suppressSuccessMessage: true });
+          if (!msg || !msg.success) {
+            stuck.push(m.remark || (m.protocol + ':' + m.port));
+          } else if (msg.msg) {
+            successMessage = msg.msg;
+          }
         }
+        if (!stuck.length && successMessage) this.$message.success(successMessage);
         return stuck;
       },
       reportStuck(email, stuck) {

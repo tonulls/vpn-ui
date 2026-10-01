@@ -7,8 +7,8 @@ class Msg {
 }
 
 class HttpUtil {
-    static _handleMsg(msg) {
-        if (!(msg instanceof Msg) || msg.msg === "") {
+    static _handleMsg(msg, suppressSuccessMessage = false) {
+        if (!(msg instanceof Msg) || msg.msg === "" || (suppressSuccessMessage && msg.success)) {
             return;
         }
         const messageType = msg.success ? 'success' : 'error';
@@ -44,10 +44,13 @@ class HttpUtil {
     }
 
     static async post(url, data, options = {}) {
+        // Application-only response handling flags must not be passed through as
+        // Axios options (where they are ignored but obscure the request contract).
+        const { suppressSuccessMessage = false, ...axiosOptions } = options || {};
         try {
-            const resp = await axios.post(url, data, options);
+            const resp = await axios.post(url, data, axiosOptions);
             const msg = this._respToMsg(resp);
-            this._handleMsg(msg);
+            this._handleMsg(msg, suppressSuccessMessage);
             return msg;
         } catch (error) {
             console.error('POST request failed:', error);
