@@ -2,6 +2,8 @@ class AllSetting {
 
     constructor(data) {
         this.webListen = "";
+        this.webTrustedProxies = "127.0.0.1/32, ::1/128";
+        this.xrayTrustedProxies = "127.0.0.1/32, ::1/128";
         this.webDomain = "";
         this.webPort = 2053;
         this.webCertFile = "";

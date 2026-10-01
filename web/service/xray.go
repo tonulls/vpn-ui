@@ -13,6 +13,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
 	"github.com/mhsanaei/3x-ui/v2/xray"
 
 	"go.uber.org/atomic"
@@ -213,6 +214,18 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		return nil, err
 	}
 
+	trustedXrayProxies, err := s.settingService.GetXrayTrustedProxies()
+	if err != nil {
+		return nil, err
+	}
+	trustedXrayProxies, err = proxyip.NormalizeTrustedProxies(trustedXrayProxies)
+	if err != nil {
+		return nil, err
+	}
+	if trustedXrayProxies == "" {
+		trustedXrayProxies = proxyip.DefaultTrustedProxyCIDRs
+	}
+
 	// Depletion is decided per ACCOUNT (per email), never per inbound.
 	//
 	// This map used to be built per inbound from inbound.ClientStats, which is a
@@ -357,6 +370,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			}
 
 			delete(stream, "externalProxy")
+			if err := applyTrustedXrayProxySettings(stream, trustedXrayProxies); err != nil {
+				return nil, err
+			}
 
 			newStream, err := json.MarshalIndent(stream, "", "  ")
 			if err != nil {

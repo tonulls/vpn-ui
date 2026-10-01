@@ -85,8 +85,9 @@ func (w *WebSocketController) HandleWebSocket(c *gin.Context) {
 	// Check authentication. The user is captured rather than discarded: the socket
 	// is tagged with their id so scoped payloads reach only them.
 	user := session.GetLoginUser(c)
+	clientIP := getRemoteIp(c)
 	if user == nil {
-		logger.Warningf("Unauthorized WebSocket connection attempt from %s", getRemoteIp(c))
+		logger.Warningf("Unauthorized WebSocket connection attempt from %s", clientIP)
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
@@ -110,7 +111,7 @@ func (w *WebSocketController) HandleWebSocket(c *gin.Context) {
 
 	// Register client
 	w.hub.Register(client)
-	logger.Debugf("WebSocket client %s registered from %s", clientID, getRemoteIp(c))
+	logger.Debugf("WebSocket client %s registered from %s", clientID, clientIP)
 
 	// Start goroutines for reading and writing
 	go w.writePump(client, conn)

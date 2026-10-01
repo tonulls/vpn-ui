@@ -29,6 +29,22 @@
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.trustedReverseProxies"}}</template>
+            <template #description>{{ i18n "pages.settings.trustedReverseProxiesDesc"}}</template>
+            <template #control>
+                <a-input type="text" v-model.trim="allSetting.webTrustedProxies"
+                    placeholder="127.0.0.1/32, ::1/128"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.xrayTrustedProxies"}}</template>
+            <template #description>{{ i18n "pages.settings.xrayTrustedProxiesDesc"}}</template>
+            <template #control>
+                <a-input type="text" v-model.trim="allSetting.xrayTrustedProxies"
+                    placeholder="127.0.0.1/32, ::1/128"></a-input>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.panelListeningDomain"}}</template>
             <template #description>{{ i18n "pages.settings.panelListeningDomainDesc"}}</template>
             <template #control>

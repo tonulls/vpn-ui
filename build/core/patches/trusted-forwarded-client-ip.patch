@@ -1,0 +1,526 @@
+diff --git a/common/protocol/http/headers.go b/common/protocol/http/headers.go
+index db3aa670..b9257069 100644
+--- a/common/protocol/http/headers.go
++++ b/common/protocol/http/headers.go
+@@ -1,6 +1,7 @@
+ package http
+ 
+ import (
++	stdnet "net"
+ 	"net/http"
+ 	"strconv"
+ 	"strings"
+@@ -10,18 +11,159 @@ import (
+ 
+ // ParseXForwardedFor parses X-Forwarded-For header in http headers, and return the IP list in it.
+ func ParseXForwardedFor(header http.Header) []net.Address {
+-	xff := header.Get("X-Forwarded-For")
+-	if xff == "" {
++	var addrs []net.Address
++	for _, value := range header.Values("X-Forwarded-For") {
++		for _, proxy := range strings.Split(value, ",") {
++			proxy = strings.TrimSpace(proxy)
++			if proxy != "" {
++				addrs = append(addrs, net.ParseAddress(proxy))
++			}
++		}
++	}
++	return addrs
++}
++
++// ParseTrustedXForwardedFor applies X-Forwarded-For only when request.RemoteAddr
++// belongs to a configured trusted proxy. The trusted list uses ordinary header names
++// plus internal entries in the form "proxy:<CIDR>". With no proxy entries, the legacy
++// header-selection behavior is retained for standalone Xray configurations.
++func ParseTrustedXForwardedFor(remoteAddr string, header http.Header, trusted []string) []net.Address {
++	var headerNames []string
++	var proxyNetworks []*stdnet.IPNet
++	proxyPolicyConfigured := false
++	for _, value := range trusted {
++		value = strings.TrimSpace(value)
++		if strings.HasPrefix(value, "proxy:") {
++			proxyPolicyConfigured = true
++			_, network, err := stdnet.ParseCIDR(strings.TrimSpace(strings.TrimPrefix(value, "proxy:")))
++			if err == nil {
++				proxyNetworks = append(proxyNetworks, network)
++			}
++			continue
++		}
++		if value != "" {
++			headerNames = append(headerNames, value)
++		}
++	}
++
++	peer := parseProxyPeer(remoteAddr)
++	if proxyPolicyConfigured && (peer == nil || !isTrustedProxy(peer, proxyNetworks)) {
+ 		return nil
+ 	}
+-	list := strings.Split(xff, ",")
+-	addrs := make([]net.Address, 0, len(list))
+-	for _, proxy := range list {
+-		addrs = append(addrs, net.ParseAddress(proxy))
++	if len(headerNames) > 0 {
++		allowed := false
++		for _, name := range headerNames {
++			if len(header.Values(name)) > 0 {
++				allowed = true
++				break
++			}
++		}
++		if !allowed {
++			return nil
++		}
++	}
++
++	var addrs []net.Address
++	if allowsForwardingHeader(headerNames, "X-Forwarded-For") {
++		addrs = ParseXForwardedFor(header)
++	}
++	if len(addrs) == 0 && proxyPolicyConfigured && allowsForwardingHeader(headerNames, "Forwarded") {
++		addrs = parseForwarded(header)
++	}
++	if len(addrs) == 0 && proxyPolicyConfigured && allowsForwardingHeader(headerNames, "X-Real-IP") {
++		if ip := stdnet.ParseIP(strings.TrimSpace(header.Get("X-Real-IP"))); ip != nil {
++			return []net.Address{net.IPAddress(ip)}
++		}
++	}
++	if !proxyPolicyConfigured || len(addrs) == 0 {
++		return addrs
++	}
++
++	current := peer
++	for i := len(addrs) - 1; i >= 0; i-- {
++		if !isTrustedProxy(current, proxyNetworks) {
++			return []net.Address{net.IPAddress(current)}
++		}
++		if !addrs[i].Family().IsIP() {
++			return nil
++		}
++		current = addrs[i].IP()
++	}
++	return []net.Address{net.IPAddress(current)}
++}
++
++func allowsForwardingHeader(allowed []string, want string) bool {
++	if len(allowed) == 0 {
++		return true
++	}
++	for _, name := range allowed {
++		if strings.EqualFold(name, want) {
++			return true
++		}
++	}
++	return false
++}
++
++func parseForwarded(header http.Header) []net.Address {
++	var addrs []net.Address
++	for _, value := range header.Values("Forwarded") {
++		for _, element := range strings.Split(value, ",") {
++			foundFor := false
++			for _, parameter := range strings.Split(element, ";") {
++				key, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
++				if !found || !strings.EqualFold(strings.TrimSpace(key), "for") {
++					continue
++				}
++				foundFor = true
++				ip := parseForwardedIP(strings.TrimSpace(value))
++				if ip == nil {
++					return nil
++				}
++				addrs = append(addrs, net.IPAddress(ip))
++				break
++			}
++			if !foundFor {
++				return nil
++			}
++		}
+ 	}
+ 	return addrs
+ }
+ 
++func parseForwardedIP(value string) stdnet.IP {
++	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
++		unquoted, err := strconv.Unquote(value)
++		if err != nil {
++			return nil
++		}
++		value = unquoted
++	}
++	if strings.EqualFold(value, "unknown") || strings.HasPrefix(value, "_") {
++		return nil
++	}
++	if host, _, err := stdnet.SplitHostPort(value); err == nil {
++		value = host
++	}
++	return stdnet.ParseIP(strings.Trim(strings.TrimSpace(value), "[]"))
++}
++
++func parseProxyPeer(remoteAddr string) stdnet.IP {
++	host, _, err := stdnet.SplitHostPort(remoteAddr)
++	if err == nil {
++		return stdnet.ParseIP(host)
++	}
++	return stdnet.ParseIP(strings.Trim(strings.TrimSpace(remoteAddr), "[]"))
++}
++
++func isTrustedProxy(ip stdnet.IP, networks []*stdnet.IPNet) bool {
++	for _, network := range networks {
++		if network.Contains(ip) {
++			return true
++		}
++	}
++	return false
++}
++
+ // RemoveHopByHopHeaders removes hop by hop headers in http header list.
+ func RemoveHopByHopHeaders(header http.Header) {
+ 	// Strip hop-by-hop header based on RFC:
+diff --git a/infra/conf/transport_internet.go b/infra/conf/transport_internet.go
+index 43b1a5f8..974443a5 100644
+--- a/infra/conf/transport_internet.go
++++ b/infra/conf/transport_internet.go
+@@ -6,6 +6,7 @@ import (
+ 	"encoding/hex"
+ 	"encoding/json"
+ 	"math"
++	stdlibnet "net"
+ 	"net/url"
+ 	"os"
+ 	"regexp"
+@@ -1078,6 +1079,7 @@ type SocketConfig struct {
+ 	AddressPortStrategy   string                 `json:"addressPortStrategy"`
+ 	HappyEyeballsSettings *HappyEyeballsConfig   `json:"happyEyeballs"`
+ 	TrustedXForwardedFor  []string               `json:"trustedXForwardedFor"`
++	TrustedProxyCIDRs     []string               `json:"trustedProxyCIDRs"`
+ }
+ 
+ // Build implements Buildable.
+@@ -1177,6 +1179,16 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
+ 		happyEyeballs.MaxConcurrentTry = c.HappyEyeballsSettings.MaxConcurrentTry
+ 	}
+ 
++	trustedXForwardedFor := append([]string(nil), c.TrustedXForwardedFor...)
++	// Encode CIDRs in the existing protobuf field to avoid changing the generated schema.
++	for _, cidr := range c.TrustedProxyCIDRs {
++		cidr = strings.TrimSpace(cidr)
++		if _, _, err := stdlibnet.ParseCIDR(cidr); err != nil {
++			return nil, errors.New("invalid trustedProxyCIDRs entry: ", cidr)
++		}
++		trustedXForwardedFor = append(trustedXForwardedFor, "proxy:"+cidr)
++	}
++
+ 	return &internet.SocketConfig{
+ 		Mark:                 c.Mark,
+ 		Tfo:                  tfo,
+@@ -1197,7 +1209,7 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
+ 		CustomSockopt:        customSockopts,
+ 		AddressPortStrategy:  addressPortStrategy,
+ 		HappyEyeballs:        happyEyeballs,
+-		TrustedXForwardedFor: c.TrustedXForwardedFor,
++		TrustedXForwardedFor: trustedXForwardedFor,
+ 	}, nil
+ }
+ 
+diff --git a/transport/internet/grpc/encoding/hunkconn.go b/transport/internet/grpc/encoding/hunkconn.go
+index f1155de8..1f51382f 100644
+--- a/transport/internet/grpc/encoding/hunkconn.go
++++ b/transport/internet/grpc/encoding/hunkconn.go
+@@ -3,11 +3,14 @@ package encoding
+ import (
+ 	"context"
+ 	"io"
++	stdhttp "net/http"
++	"strings"
+ 
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/net/cnc"
++	http_proto "github.com/xtls/xray-core/common/protocol/http"
+ 	"github.com/xtls/xray-core/common/signal/done"
+ 	"google.golang.org/grpc/metadata"
+ 	"google.golang.org/grpc/peer"
+@@ -38,11 +41,22 @@ func NewHunkReadWriter(hc HunkConn, cancel context.CancelFunc) *HunkReaderWriter
+ 	return &HunkReaderWriter{hc, cancel, done.New(), nil, 0}
+ }
+ 
+-func NewHunkConn(hc HunkConn, cancel context.CancelFunc) net.Conn {
++func hasTrustedProxyPolicy(trusted []string) bool {
++	for _, value := range trusted {
++		if strings.HasPrefix(strings.TrimSpace(value), "proxy:") {
++			return true
++		}
++	}
++	return false
++}
++
++func NewHunkConn(hc HunkConn, cancel context.CancelFunc, trustedForwardedHeaders ...[]string) net.Conn {
+ 	var rAddr net.Addr
++	peerAddr := "0.0.0.0:0"
+ 	pr, ok := peer.FromContext(hc.Context())
+-	if ok {
++	if ok && pr.Addr != nil {
+ 		rAddr = pr.Addr
++		peerAddr = pr.Addr.String()
+ 	} else {
+ 		rAddr = &net.TCPAddr{
+ 			IP:   []byte{0, 0, 0, 0},
+@@ -50,16 +64,25 @@ func NewHunkConn(hc HunkConn, cancel context.CancelFunc) net.Conn {
+ 		}
+ 	}
+ 
+-	md, ok := metadata.FromIncomingContext(hc.Context())
+-	if ok {
+-		header := md.Get("x-real-ip")
+-		if len(header) > 0 {
+-			realip := net.ParseAddress(header[0])
+-			if realip.Family().IsIP() {
+-				rAddr = &net.TCPAddr{
+-					IP:   realip.IP(),
+-					Port: 0,
+-				}
++	var trusted []string
++	if len(trustedForwardedHeaders) > 0 {
++		trusted = trustedForwardedHeaders[0]
++	}
++	if md, ok := metadata.FromIncomingContext(hc.Context()); ok {
++		headers := stdhttp.Header{}
++		for key, values := range md {
++			for _, value := range values {
++				headers.Add(key, value)
++			}
++		}
++		forwarded := http_proto.ParseTrustedXForwardedFor(peerAddr, headers, trusted)
++		if len(forwarded) > 0 && forwarded[0].Family().IsIP() {
++			rAddr = &net.TCPAddr{IP: forwarded[0].IP(), Port: 0}
++		} else if !hasTrustedProxyPolicy(trusted) {
++			// Preserve the legacy gRPC X-Real-IP behavior when no proxy CIDR policy
++			// is configured. With a policy, the shared parser validates the peer first.
++			if realIP := net.ParseAddress(headers.Get("X-Real-IP")); realIP.Family().IsIP() {
++				rAddr = &net.TCPAddr{IP: realIP.IP(), Port: 0}
+ 			}
+ 		}
+ 	}
+diff --git a/transport/internet/grpc/encoding/multiconn.go b/transport/internet/grpc/encoding/multiconn.go
+index fa95cba8..657a460c 100644
+--- a/transport/internet/grpc/encoding/multiconn.go
++++ b/transport/internet/grpc/encoding/multiconn.go
+@@ -4,11 +4,13 @@ import (
+ 	"context"
+ 	"io"
+ 	"net"
++	stdhttp "net/http"
+ 
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
+ 	xnet "github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/net/cnc"
++	http_proto "github.com/xtls/xray-core/common/protocol/http"
+ 	"github.com/xtls/xray-core/common/signal/done"
+ 	"google.golang.org/grpc/metadata"
+ 	"google.golang.org/grpc/peer"
+@@ -34,11 +36,13 @@ func NewMultiHunkReadWriter(hc MultiHunkConn, cancel context.CancelFunc) *MultiH
+ 	return &MultiHunkReaderWriter{hc, cancel, done.New(), nil}
+ }
+ 
+-func NewMultiHunkConn(hc MultiHunkConn, cancel context.CancelFunc) net.Conn {
++func NewMultiHunkConn(hc MultiHunkConn, cancel context.CancelFunc, trustedForwardedHeaders ...[]string) net.Conn {
+ 	var rAddr net.Addr
++	peerAddr := "0.0.0.0:0"
+ 	pr, ok := peer.FromContext(hc.Context())
+-	if ok {
++	if ok && pr.Addr != nil {
+ 		rAddr = pr.Addr
++		peerAddr = pr.Addr.String()
+ 	} else {
+ 		rAddr = &net.TCPAddr{
+ 			IP:   []byte{0, 0, 0, 0},
+@@ -46,16 +50,23 @@ func NewMultiHunkConn(hc MultiHunkConn, cancel context.CancelFunc) net.Conn {
+ 		}
+ 	}
+ 
+-	md, ok := metadata.FromIncomingContext(hc.Context())
+-	if ok {
+-		header := md.Get("x-real-ip")
+-		if len(header) > 0 {
+-			realip := xnet.ParseAddress(header[0])
+-			if realip.Family().IsIP() {
+-				rAddr = &net.TCPAddr{
+-					IP:   realip.IP(),
+-					Port: 0,
+-				}
++	var trusted []string
++	if len(trustedForwardedHeaders) > 0 {
++		trusted = trustedForwardedHeaders[0]
++	}
++	if md, ok := metadata.FromIncomingContext(hc.Context()); ok {
++		headers := stdhttp.Header{}
++		for key, values := range md {
++			for _, value := range values {
++				headers.Add(key, value)
++			}
++		}
++		forwarded := http_proto.ParseTrustedXForwardedFor(peerAddr, headers, trusted)
++		if len(forwarded) > 0 && forwarded[0].Family().IsIP() {
++			rAddr = &net.TCPAddr{IP: forwarded[0].IP(), Port: 0}
++		} else if !hasTrustedProxyPolicy(trusted) {
++			if realIP := xnet.ParseAddress(headers.Get("X-Real-IP")); realIP.Family().IsIP() {
++				rAddr = &net.TCPAddr{IP: realIP.IP(), Port: 0}
+ 			}
+ 		}
+ 	}
+diff --git a/transport/internet/grpc/hub.go b/transport/internet/grpc/hub.go
+index 34f8f1c0..ac80413e 100644
+--- a/transport/internet/grpc/hub.go
++++ b/transport/internet/grpc/hub.go
+@@ -19,24 +19,33 @@ import (
+ 
+ type Listener struct {
+ 	encoding.UnimplementedGRPCServiceServer
+-	ctx     context.Context
+-	handler internet.ConnHandler
+-	local   net.Addr
+-	config  *Config
++	ctx            context.Context
++	handler        internet.ConnHandler
++	local          net.Addr
++	config         *Config
++	socketSettings *internet.SocketConfig
+ 
+ 	s *grpc.Server
+ }
+ 
+ func (l Listener) Tun(server encoding.GRPCService_TunServer) error {
+ 	tunCtx, cancel := context.WithCancel(l.ctx)
+-	l.handler(encoding.NewHunkConn(server, cancel))
++	var trustedForwardedHeaders []string
++	if l.socketSettings != nil {
++		trustedForwardedHeaders = l.socketSettings.TrustedXForwardedFor
++	}
++	l.handler(encoding.NewHunkConn(server, cancel, trustedForwardedHeaders))
+ 	<-tunCtx.Done()
+ 	return nil
+ }
+ 
+ func (l Listener) TunMulti(server encoding.GRPCService_TunMultiServer) error {
+ 	tunCtx, cancel := context.WithCancel(l.ctx)
+-	l.handler(encoding.NewMultiHunkConn(server, cancel))
++	var trustedForwardedHeaders []string
++	if l.socketSettings != nil {
++		trustedForwardedHeaders = l.socketSettings.TrustedXForwardedFor
++	}
++	l.handler(encoding.NewMultiHunkConn(server, cancel, trustedForwardedHeaders))
+ 	<-tunCtx.Done()
+ 	return nil
+ }
+@@ -60,7 +69,8 @@ func Listen(ctx context.Context, address net.Address, port net.Port, settings *i
+ 				Name: address.Domain(),
+ 				Net:  "unix",
+ 			},
+-			config: grpcSettings,
++			config:         grpcSettings,
++			socketSettings: settings.SocketSettings,
+ 		}
+ 	} else { // tcp
+ 		listener = &Listener{
+@@ -69,7 +79,8 @@ func Listen(ctx context.Context, address net.Address, port net.Port, settings *i
+ 				IP:   address.IP(),
+ 				Port: int(port),
+ 			},
+-			config: grpcSettings,
++			config:         grpcSettings,
++			socketSettings: settings.SocketSettings,
+ 		}
+ 	}
+ 
+diff --git a/transport/internet/httpupgrade/hub.go b/transport/internet/httpupgrade/hub.go
+index 8e70ad08..a75566b6 100644
+--- a/transport/internet/httpupgrade/hub.go
++++ b/transport/internet/httpupgrade/hub.go
+@@ -80,17 +80,15 @@ func (s *server) upgrade(conn net.Conn) (stat.Connection, error) {
+ 		return nil, err
+ 	}
+ 
+-	var forwardedAddrs []net.Address
+-	if s.socketSettings != nil && len(s.socketSettings.TrustedXForwardedFor) > 0 {
+-		for _, key := range s.socketSettings.TrustedXForwardedFor {
+-			if len(req.Header.Values(key)) > 0 {
+-				forwardedAddrs = http_proto.ParseXForwardedFor(req.Header)
+-				break
+-			}
+-		}
+-	} else {
+-		forwardedAddrs = http_proto.ParseXForwardedFor(req.Header)
++	var trustedForwardedHeaders []string
++	if s.socketSettings != nil {
++		trustedForwardedHeaders = s.socketSettings.TrustedXForwardedFor
+ 	}
++	forwardedAddrs := http_proto.ParseTrustedXForwardedFor(
++		req.RemoteAddr,
++		req.Header,
++		trustedForwardedHeaders,
++	)
+ 	remoteAddr := conn.RemoteAddr()
+ 	if len(forwardedAddrs) > 0 && forwardedAddrs[0].Family().IsIP() {
+ 		remoteAddr = &net.TCPAddr{
+diff --git a/transport/internet/splithttp/hub.go b/transport/internet/splithttp/hub.go
+index 8b281457..04613bd7 100644
+--- a/transport/internet/splithttp/hub.go
++++ b/transport/internet/splithttp/hub.go
+@@ -154,17 +154,15 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
+ 		return
+ 	}
+ 
+-	var forwardedAddrs []net.Address
+-	if h.socketSettings != nil && len(h.socketSettings.TrustedXForwardedFor) > 0 {
+-		for _, key := range h.socketSettings.TrustedXForwardedFor {
+-			if len(request.Header.Values(key)) > 0 {
+-				forwardedAddrs = http_proto.ParseXForwardedFor(request.Header)
+-				break
+-			}
+-		}
+-	} else {
+-		forwardedAddrs = http_proto.ParseXForwardedFor(request.Header)
++	var trustedForwardedHeaders []string
++	if h.socketSettings != nil {
++		trustedForwardedHeaders = h.socketSettings.TrustedXForwardedFor
+ 	}
++	forwardedAddrs := http_proto.ParseTrustedXForwardedFor(
++		request.RemoteAddr,
++		request.Header,
++		trustedForwardedHeaders,
++	)
+ 	var remoteAddr net.Addr
+ 	var err error
+ 	remoteAddr, err = net.ResolveTCPAddr("tcp", request.RemoteAddr)
+diff --git a/transport/internet/websocket/hub.go b/transport/internet/websocket/hub.go
+index 73799174..65d37561 100644
+--- a/transport/internet/websocket/hub.go
++++ b/transport/internet/websocket/hub.go
+@@ -65,17 +65,15 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
+ 		return
+ 	}
+ 
+-	var forwardedAddrs []net.Address
+-	if h.socketSettings != nil && len(h.socketSettings.TrustedXForwardedFor) > 0 {
+-		for _, key := range h.socketSettings.TrustedXForwardedFor {
+-			if len(request.Header.Values(key)) > 0 {
+-				forwardedAddrs = http_proto.ParseXForwardedFor(request.Header)
+-				break
+-			}
+-		}
+-	} else {
+-		forwardedAddrs = http_proto.ParseXForwardedFor(request.Header)
++	var trustedForwardedHeaders []string
++	if h.socketSettings != nil {
++		trustedForwardedHeaders = h.socketSettings.TrustedXForwardedFor
+ 	}
++	forwardedAddrs := http_proto.ParseTrustedXForwardedFor(
++		request.RemoteAddr,
++		request.Header,
++		trustedForwardedHeaders,
++	)
+ 	remoteAddr := conn.RemoteAddr()
+ 	if len(forwardedAddrs) > 0 && forwardedAddrs[0].Family().IsIP() {
+ 		remoteAddr = &net.TCPAddr{

@@ -212,6 +212,26 @@ else
     ok "submodules: skipped, building whatever is checked out"
 fi
 
+# Патч разбора proxy-заголовков хранится в этом репозитории, а не в remote
+# подмодуля Xray. Применяем его и при --skip-core: бинарник панели тоже собирается
+# с пакетами из подмодуля. Скрипт безопасно повторно пропускает уже применённый patch.
+step "trusted forwarded-client-IP patch"
+do_run bash "$REPO_ROOT/build/core/apply-xray-proxy-patch.sh" "$REPO_ROOT/third_party/Xray-core"
+
+# --skip-core не должен незаметно использовать кэш Xray без текущего patch.
+# Обычная сборка учитывает и коммит исходников, и хэш patch-файла.
+if (( SKIP_CORE && !DRY_RUN )); then
+    xray_src="${XRAY_SRC:-$REPO_ROOT/third_party/Xray-core}"
+    xray_commit="$(git -C "$xray_src" rev-parse HEAD 2>/dev/null || echo unknown)"
+    patch_hash="$(sha256sum "$REPO_ROOT/build/core/patches/trusted-forwarded-client-ip.patch" | awk '{print $1}')"
+    expected_core_key="${xray_commit}+trusted-proxy-${patch_hash}"
+    core_marker="$REPO_ROOT/corebundle/core/$ARCH/.xray.commit"
+    if [[ "$xray_commit" == "unknown" || "$(cat "$core_marker" 2>/dev/null)" != "$expected_core_key" ]]; then
+        err "cached Xray core does not include the current trusted-proxy patch; rerun without --skip-core"
+        exit 1
+    fi
+fi
+
 # 1. Xray core (built from the pinned third_party/Xray-core submodule) + latest geo.
 if [[ "$SKIP_CORE" != "1" ]]; then
     step "Xray core (third_party/Xray-core) + geo files"

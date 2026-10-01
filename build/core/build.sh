@@ -18,9 +18,9 @@
 # Usage:
 #   build/core/build.sh [goarch...]        # default: amd64
 #
-# Source of truth is the pinned submodule third_party/Xray-core (@ a fixed
-# commit). It's used automatically when present; the clone path below is only a
-# fallback for checkouts where the submodule wasn't initialised.
+# Источник — зафиксированный коммит подмодуля third_party/Xray-core. Patch для
+# доверенных proxy-заголовков хранится здесь и идемпотентно применяется перед
+# сборкой; clone ниже используется только при неинициализированном подмодуле.
 #
 # Env:
 #   XRAY_SRC   path to a local Xray-core checkout (overrides the submodule)
@@ -219,19 +219,23 @@ prepare_src() {
 build_core() {
     local src
     src="$(prepare_src)"
-    # The commit the source is at. If the cached xray was built from this same
-    # commit, there is nothing to rebuild — skip the (slow) go build. Bump the
-    # submodule/ref to trigger a rebuild, or set CORE_FORCE=1.
-    local srccommit
+    bash "$REPO_ROOT/build/core/apply-xray-proxy-patch.sh" "$src"
+
+    # Ключ кэша включает и ревизию Xray, и хэш patch из основного репозитория.
+    # Поэтому изменение trusted-forwarded-IP patch пересобирает core без смены
+    # зафиксированного коммита подмодуля.
+    local srccommit patch_hash source_key
     srccommit="$(git -C "$src" rev-parse HEAD 2>/dev/null || echo unknown)"
-    info "pinned Xray core source: $src @ ${srccommit:0:12}"
+    patch_hash="$(sha256sum "$REPO_ROOT/build/core/patches/trusted-forwarded-client-ip.patch" | awk '{print $1}')"
+    source_key="${srccommit}+trusted-proxy-${patch_hash}"
+    info "Xray source: $src @ ${srccommit:0:12}; trusted-proxy patch ${patch_hash:0:12}"
     for goarch in "${ARCHES[@]}"; do
         local outdir="$OUT_ROOT/$goarch"
         mkdir -p "$outdir"
         local marker="$outdir/.xray.commit"
         if [[ "${CORE_FORCE:-0}" != "1" && -x "$outdir/xray" && "$srccommit" != "unknown" \
-              && "$(cat "$marker" 2>/dev/null)" == "$srccommit" ]]; then
-            ok "core ($goarch) already built from ${srccommit:0:12} — skipping (CORE_FORCE=1 to rebuild)"
+              && "$(cat "$marker" 2>/dev/null)" == "$source_key" ]]; then
+            ok "core ($goarch) already built from Xray ${srccommit:0:12} and current patch — skipping (CORE_FORCE=1 to rebuild)"
             continue
         fi
         step "go build xray ($goarch, CGO_ENABLED=0, static)"
@@ -239,7 +243,7 @@ build_core() {
           CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
           go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -v -o "$outdir/xray" ./main )
         chmod 0755 "$outdir/xray"
-        echo "$srccommit" > "$marker"
+        echo "$source_key" > "$marker"
         file "$outdir/xray" || true
         ok "core: $(ls -lh "$outdir/xray" | awk '{print $5, $9}')"
     done

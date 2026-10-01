@@ -18,6 +18,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/util/random"
 	"github.com/mhsanaei/3x-ui/v2/util/reflect_util"
 	"github.com/mhsanaei/3x-ui/v2/web/entity"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
 	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
@@ -27,6 +28,8 @@ var xrayTemplateConfig string
 var defaultValueMap = map[string]string{
 	"xrayTemplateConfig":          xrayTemplateConfig,
 	"webListen":                   "",
+	"webTrustedProxies":           proxyip.DefaultTrustedProxyCIDRs,
+	"xrayTrustedProxies":          proxyip.DefaultTrustedProxyCIDRs,
 	"webDomain":                   "",
 	"webPort":                     "2083",
 	"webCertFile":                 "",
@@ -353,6 +356,14 @@ func (s *SettingService) SetXrayOutboundTestUrl(url string) error {
 
 func (s *SettingService) GetListen() (string, error) {
 	return s.getString("webListen")
+}
+
+func (s *SettingService) GetWebTrustedProxies() (string, error) {
+	return s.getString("webTrustedProxies")
+}
+
+func (s *SettingService) GetXrayTrustedProxies() (string, error) {
+	return s.getString("xrayTrustedProxies")
 }
 
 func (s *SettingService) SetListen(ip string) error {
@@ -1132,6 +1143,7 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		return err
 	}
 	oldForumChatID, _ := s.GetTgForumChatId()
+	oldXrayTrustedProxies, _ := s.GetXrayTrustedProxies()
 	topicKeys := []string{"tgTopicLoginSuccess", "tgTopicLoginFailure", "tgTopicCPU", "tgBackupTopicId"}
 	oldTopicIDs := make(map[string]string, len(topicKeys))
 	for _, key := range topicKeys {
@@ -1174,7 +1186,13 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 			}
 		}
 	}
-	return common.Combine(errs...)
+	if err := common.Combine(errs...); err != nil {
+		return err
+	}
+	if oldXrayTrustedProxies != allSetting.XrayTrustedProxies {
+		(&XrayService{}).SetToNeedRestart()
+	}
+	return nil
 }
 
 func (s *SettingService) GetDefaultXrayConfig() (any, error) {

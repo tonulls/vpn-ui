@@ -75,6 +75,7 @@ func (a *IndexController) login(c *gin.Context) {
 
 	user, checkErr := a.userService.CheckUser(form.Username, form.Password, form.TwoFactorCode)
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
+	clientIP := getRemoteIp(c)
 	safeUser := template.HTMLEscapeString(form.Username)
 
 	if user == nil {
@@ -96,20 +97,20 @@ func (a *IndexController) login(c *gin.Context) {
 			return
 		}
 
-		logger.Warningf("wrong username: \"%s\", IP: \"%s\"", safeUser, getRemoteIp(c))
-		a.tgbot.UserLoginNotify(safeUser, getRemoteIp(c), timeStr, 0)
+		logger.Warningf("wrong username: \"%s\", IP: \"%s\"", safeUser, clientIP)
+		a.tgbot.UserLoginNotify(safeUser, clientIP, timeStr, 0)
 		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.wrongUsernameOrPassword"))
 		return
 	}
 
-	logger.Infof("%s logged in successfully, Ip Address: %s\n", safeUser, getRemoteIp(c))
+	logger.Infof("%s logged in successfully, Ip Address: %s\n", safeUser, clientIP)
 
 	session.SetLoginUser(c, user)
 	if err := sessions.Default(c).Save(); err != nil {
 		logger.Warning("Unable to save session: ", err)
 		return
 	}
-	a.tgbot.UserLoginNotify(safeUser, getRemoteIp(c), timeStr, 1)
+	a.tgbot.UserLoginNotify(safeUser, clientIP, timeStr, 1)
 
 	logger.Infof("%s logged in successfully", safeUser)
 	jsonMsg(c, I18nWeb(c, "pages.login.toasts.successLogin"), nil)

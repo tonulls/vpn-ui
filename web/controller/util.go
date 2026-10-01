@@ -8,6 +8,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/web/entity"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 
 	"github.com/gin-gonic/gin"
@@ -15,20 +16,15 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/web/session"
 )
 
-// getRemoteIp extracts the real IP address from the request headers or remote address.
+// getRemoteIp resolves the original client address using forwarding headers only when
+// the immediate TCP peer is in the administrator-configured trusted proxy list.
 func getRemoteIp(c *gin.Context) string {
-	value := c.GetHeader("X-Real-IP")
-	if value != "" {
-		return value
+	trustedProxies, err := (&service.SettingService{}).GetWebTrustedProxies()
+	if err != nil {
+		// If settings cannot be read, fail closed: use the socket peer, not user-supplied headers.
+		trustedProxies = ""
 	}
-	value = c.GetHeader("X-Forwarded-For")
-	if value != "" {
-		ips := strings.Split(value, ",")
-		return ips[0]
-	}
-	addr := c.Request.RemoteAddr
-	ip, _, _ := net.SplitHostPort(addr)
-	return ip
+	return proxyip.Resolve(c.Request.RemoteAddr, c.Request.Header, trustedProxies)
 }
 
 // jsonMsg sends a JSON response with a message and error status.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
 )
 
 // Msg represents a standard API response message with success status, message text, and optional data object.
@@ -22,13 +23,15 @@ type Msg struct {
 // AllSetting contains all configuration settings for the vpn-ui panel including web server, Telegram bot, and subscription settings.
 type AllSetting struct {
 	// Web server settings
-	WebListen     string `json:"webListen" form:"webListen"`         // Web server listen IP address
-	WebDomain     string `json:"webDomain" form:"webDomain"`         // Web server domain for domain validation
-	WebPort       int    `json:"webPort" form:"webPort"`             // Web server port number
-	WebCertFile   string `json:"webCertFile" form:"webCertFile"`     // Path to SSL certificate file for web server
-	WebKeyFile    string `json:"webKeyFile" form:"webKeyFile"`       // Path to SSL private key file for web server
-	WebBasePath   string `json:"webBasePath" form:"webBasePath"`     // Base path for web panel URLs
-	SessionMaxAge int    `json:"sessionMaxAge" form:"sessionMaxAge"` // Session maximum age in minutes
+	WebListen          string `json:"webListen" form:"webListen"`                   // Web server listen IP address
+	WebTrustedProxies  string `json:"webTrustedProxies" form:"webTrustedProxies"`   // Trusted reverse proxies for the panel
+	XrayTrustedProxies string `json:"xrayTrustedProxies" form:"xrayTrustedProxies"` // Trusted reverse proxies for Xray HTTP transports
+	WebDomain          string `json:"webDomain" form:"webDomain"`                   // Web server domain for domain validation
+	WebPort            int    `json:"webPort" form:"webPort"`                       // Web server port number
+	WebCertFile        string `json:"webCertFile" form:"webCertFile"`               // Path to SSL certificate file for web server
+	WebKeyFile         string `json:"webKeyFile" form:"webKeyFile"`                 // Path to SSL private key file for web server
+	WebBasePath        string `json:"webBasePath" form:"webBasePath"`               // Base path for web panel URLs
+	SessionMaxAge      int    `json:"sessionMaxAge" form:"sessionMaxAge"`           // Session maximum age in minutes
 
 	// UI settings
 	PageSize    int    `json:"pageSize" form:"pageSize"`       // Number of items per page in lists
