@@ -6,6 +6,24 @@
   <meta name="renderer" content="webkit">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex,nofollow">
+  <script>
+    // Apply the saved theme before stylesheets can paint the page. Theme is
+    // otherwise initialized with Vue after the document has already rendered.
+    (function () {
+      var theme = 'dark';
+      var ultra = false;
+      try {
+        var darkMode = localStorage.getItem('dark-mode');
+        theme = darkMode === 'false' ? 'light' : 'dark';
+        ultra = localStorage.getItem('isUltraDarkThemeEnabled') === 'true';
+      } catch (_) {}
+      document.documentElement.classList.add(theme);
+      if (ultra) document.documentElement.setAttribute('data-theme', 'ultra-dark');
+      document.addEventListener('DOMContentLoaded', function () {
+        document.body.setAttribute('class', theme);
+      });
+    })();
+  </script>
   <link rel="stylesheet" href="{{ .base_path }}assets/ant-design-vue/antd.min.css">
   <link rel="stylesheet" href="{{ .base_path }}assets/css/tokens.css?{{ .asset_ver }}">
   <link rel="stylesheet" href="{{ .base_path }}assets/css/custom.css?{{ .asset_ver }}">

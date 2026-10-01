@@ -167,6 +167,10 @@ body {
   background-color:#fff;
   font-feature-settings:"tnum";
 }
+html.dark body {
+  background-color:var(--dark-color-background, #0a1222);
+  color:rgb(255 255 255 / .65);
+}
 
 html {
   --antd-wave-shadow-color:var(--color-primary-100);

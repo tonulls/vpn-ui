@@ -139,10 +139,7 @@
             <a-col :xs="24" :sm="22" :md="18" :lg="14" :xl="12">
                 <a-card hoverable class="subscription-card">
                     <template #title>
-                        <a-space>
-                            <span>{{ i18n "subscription.title" }}</span>
-                            <a-tag>{{ .sId }}</a-tag>
-                        </a-space>
+                        <span>{{ i18n "subscription.title" }}</span>
                     </template>
                     <template #extra>
                         <a href="{{ .profile_url }}" target="_blank" rel="noopener noreferrer"

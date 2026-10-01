@@ -6,8 +6,9 @@
  * component. Nothing here can change how the current panel renders.
  *
  * Theme selectors match component/aThemeSwitch.html exactly:
- *   light        :root            (default; body also carries class="light")
- *   dark         body.dark        (localStorage 'dark-mode', defaults to true)
+ *   light        :root            (body/html also carry class="light")
+ *   dark         body.dark        (localStorage 'dark-mode', defaults to true;
+ *                html receives the class in head before first paint)
  *   ultra-dark   html[data-theme='ultra-dark'] body.dark
  *                (localStorage 'isUltraDarkThemeEnabled', independent of the
  *                 dark/light flag, so it is scoped to the dark pairing only)

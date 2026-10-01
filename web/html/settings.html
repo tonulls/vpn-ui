@@ -1407,10 +1407,13 @@
         this.loading(true);
         try {
           const msg = await HttpUtil.post("/panel/setting/restartPanel", null, { timeout: 15000 });
-          if (!msg || !msg.success) return;
+          if (!msg || !msg.success) {
+            this.$message.error(msg && msg.msg ? msg.msg : '{{ i18n "pages.settings.restartPanelTimeout" }}');
+            return;
+          }
 
           const requireRestartGap = target.origin === window.location.origin;
-          const ready = await this.waitForPanelReady(probeUrl, 120000, requireRestartGap);
+          const ready = await this.waitForPanelReady(probeUrl, 30000, requireRestartGap);
           if (!ready) {
             this.$message.error('{{ i18n "pages.settings.restartPanelTimeout" }}');
             return;

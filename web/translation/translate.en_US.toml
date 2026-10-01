@@ -681,6 +681,8 @@
 "ipLimit" = "IP Limit"
 "comment" = "Comment"
 "zeroUnlimited" = "0 = unlimited (unit: GB)"
+"resellerQuotaRequired" = "Enter a traffic limit greater than 0. Unlimited accounts cannot be created from a reseller balance."
+"quotaExceedsBalance" = "The requested limit exceeds the available balance. Available now:"
 "zeroNoExpiry" = "0 = never expires"
 "sameProtocolRefused" = "A client cannot be on two l2tp, pptp or ikev2 inbounds at once. Those protocols share one daemon that does not report which inbound a login belongs to, so the client would always be served by the one with the lower id."
 "denser" = "Denser rows"

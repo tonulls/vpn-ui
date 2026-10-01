@@ -132,9 +132,21 @@
           <a-col :span="12">
             <div class="bo-cf-field">
               <label>{{ i18n "pages.inbounds.totalFlow" }}</label>
-              <a-input-number v-model="clientMembershipModal.totalGb" :min="0"
+              <a-input-number v-model="clientMembershipModal.totalGb"
+                :min="clientMembershipModal.resellerLimited ? 1 : 0"
                 :style="{ width: '100%' }"></a-input-number>
-              <div class="bo-cf-hint">{{ i18n "pages.clients.zeroUnlimited" }}</div>
+              <div class="bo-cf-hint" v-if="!clientMembershipModal.resellerLimited">
+                {{ i18n "pages.clients.zeroUnlimited" }}
+              </div>
+              <div class="bo-cf-hint" v-if="clientMembershipModal.resellerLimited">
+                {{ i18n "pages.clients.resellerQuotaRequired" }}
+                {{ i18n "pages.resellers.available" }}:
+                [[ SizeFormatter.sizeFormat(clientMembershipModal.availableBytes) ]]
+              </div>
+              <div class="bo-cf-hint" v-if="clientMembershipModal.quotaError"
+                :style="{ color: 'var(--error)' }">
+                [[ clientMembershipModal.quotaError ]]
+              </div>
             </div>
           </a-col>
           <a-col :span="12">
@@ -436,6 +448,8 @@
     assignable: [],
     selected: [],
     totalGb: 0,
+    availableBytes: Number(RESELLER.availableBytes) || 0,
+    balanceFresh: false,
     days: 0,
     client: {},
     row: null,
@@ -643,7 +657,9 @@
         this.limitUp = '';
         this.limitDevices = '';
       }
+      this.balanceFresh = false;
       this.visible = true;
+      if (this.resellerLimited) this.refreshResellerBalance();
     },
 
     // A stored override as the box shows it. Absent stays absent; anything else,
@@ -668,6 +684,31 @@
     // On an edit these are the account's real figures; on an add they preview
     // what is being typed, which is the only way the rail earns its space before
     // the account exists.
+    get resellerLimited() { return !!(RESELLER.isReseller && !RESELLER.unlimited); },
+    get quotaError() {
+      if (!this.resellerLimited) return '';
+      if (!(Number(this.totalGb) > 0)) return '{{ i18n "pages.clients.resellerQuotaRequired" }}';
+      if (!this.isEdit && this.balanceFresh && Number(this.totalGb) * 1073741824 > this.availableBytes) {
+        return '{{ i18n "pages.clients.quotaExceedsBalance" }} ' +
+          SizeFormatter.sizeFormat(this.availableBytes);
+      }
+      return '';
+    },
+    async refreshResellerBalance() {
+      if (!this.resellerLimited) return false;
+      try {
+        const resp = await axios.get('/panel/api/inbounds/resellerBalance');
+        const body = resp && resp.data ? resp.data : null;
+        const bal = body && body.obj && typeof body.obj === 'object' ? body.obj : body;
+        if (!bal || bal.availableBytes === undefined) return false;
+        this.availableBytes = Number(bal.availableBytes) || 0;
+        this.balanceFresh = true;
+        return true;
+      } catch (e) {
+        this.balanceFresh = false;
+        return false;
+      }
+    },
     get quotaBytes() { return (this.totalGb || 0) * 1073741824; },
     get usedBytes() { return this.row ? ((this.row.up || 0) + (this.row.down || 0)) : 0; },
     get usedPercent() {
@@ -1021,6 +1062,13 @@
     },
 
     async ok() {
+      // The server remains authoritative, but refresh the visible balance before
+      // validating so an admin's recent recharge is reflected without reopening
+      // the reseller's session. Limited resellers must never submit quota 0: that
+      // value means unlimited in the stored client model.
+      if (this.resellerLimited) await this.refreshResellerBalance();
+      if (this.quotaError) return;
+
       // New accounts need a destination inbound before they can be created. The
       // disabled modal button enforces this in the UI; keep the guard here too so
       // keyboard or programmatic submission cannot bypass it.
