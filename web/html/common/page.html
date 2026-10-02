@@ -200,6 +200,12 @@
     <header class="bo-topbar">
       <div class="bo-topbar-inner">
         <div class="bo-topbar-left">
+          <button type="button" class="bo-mobile-menu-toggle"
+            aria-label='{{ i18n "menu.navigation"}}'
+            title='{{ i18n "menu.navigation"}}'
+            @click="$root.$emit('toggle-mobile-nav')">
+            <a-icon type="menu"></a-icon>
+          </button>
           <h1 class="bo-topbar-title" v-text="pageTitle"></h1>
         </div>
       </div>

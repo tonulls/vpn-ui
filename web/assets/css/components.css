@@ -95,6 +95,12 @@
  * shell: rail nav
  * ================================================================== */
 
+/* The wrapper is transparent on desktop so the rail remains a direct flex item.
+   On mobile it also owns the modal backdrop for the off-canvas navigation. */
+.bo-sidebar-shell { display:contents; }
+.bo-rail-backdrop { display:none; }
+.bo-mobile-menu-toggle { display:none; }
+
 /* height:100% of the fixed-height .bo-shell, not 100vh + sticky as in the
    mockup: the shell is the scroll boundary here, so the rail is simply a
    full-height flex child that scrolls its own overflow. */
@@ -949,16 +955,53 @@ body.dark .bo-theme-toggle .bo-i-moon { display:block; }
 }
 
 /* ================================================================== *
- * narrow screens: rail collapses to icons only
+ * narrow screens: off-canvas navigation and full-width page content
  * ================================================================== */
 
 @media (max-width:560px) {
-  .bo-rail { flex-basis:76px; width:76px; padding:16px 0; gap:20px; }
-  .bo-rail-item { width:64px; }
+  .bo-sidebar-shell { display:contents; }
+  .bo-rail {
+    position:fixed; inset-block:0; inset-inline-start:0;
+    z-index:30; flex:0 0 auto; width:min(288px, calc(100vw - 52px)); height:100dvh;
+    box-sizing:border-box; padding:20px 12px; gap:20px;
+    align-items:stretch; box-shadow:0 12px 40px rgba(0,0,0,.32);
+    transform:translateX(-110%);
+    transition:transform .22s ease;
+  }
+  .bo-rail.bo-rail--mobile-open { transform:translateX(0); }
+  [dir="rtl"] .bo-rail { transform:translateX(110%); }
+  [dir="rtl"] .bo-rail.bo-rail--mobile-open { transform:translateX(0); }
+  .bo-rail-backdrop {
+    display:block; position:fixed; inset:0; z-index:29;
+    width:100%; height:100%; border:0; border-radius:0;
+    background:rgba(3,8,18,.58); cursor:pointer;
+  }
+  .bo-rail-brand { padding-inline:10px; }
+  .bo-rail-brand img { max-width:88px; }
+  .bo-rail-nav { align-items:stretch; overflow-y:auto; }
+  .bo-rail-item,
+  .bo-rail--collapsed .bo-rail-item {
+    width:100%; flex-direction:row; justify-content:flex-start;
+    gap:12px; padding:12px; text-align:start;
+  }
   .bo-rail-item span,
-  .bo-rail-brand span { display:none; }
-  .bo-topbar-inner { padding:12px 16px; }
-  .bo-content { padding:20px 16px 40px; }
+  .bo-rail--collapsed .bo-rail-item span {
+    display:block; text-align:start; -webkit-line-clamp:unset;
+  }
+  .bo-rail--collapsed .bo-rail-brand span { display:block; }
+  .bo-rail-foot { flex-direction:row; justify-content:space-between; padding-inline:10px; }
+  .bo-rail-collapse { display:none; }
+  .bo-mobile-menu-toggle {
+    display:inline-flex; flex:0 0 36px; width:36px; height:36px;
+    align-items:center; justify-content:center;
+    border:1px solid var(--border); border-radius:9px;
+    background:var(--surface-2); color:var(--text-2); cursor:pointer;
+  }
+  .bo-topbar-inner { padding:10px 12px; flex-wrap:nowrap; }
+  .bo-topbar-left { flex-wrap:nowrap; gap:10px; }
+  .bo-topbar-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bo-content { max-width:none; padding:12px 8px 32px; }
+  .clients-page .bo-stat-grid--4 { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
 /* ================================================================== *
@@ -2826,3 +2869,47 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
 .bo-il-exp--error { color:var(--error); }
 .bo-il-inf { font-size:var(--fs-md); line-height:1; color:var(--text-3); }
 .bo-il-none { font-size:var(--fs-base); color:var(--text-3); }
+
+/* Mobile Clients page: keep the primary add action beside one overflow menu,
+   then give the search and account list the full available width. */
+.bo-clients-desktop-actions { display:contents; }
+.bo-clients-mobile-menu,
+.bo-lg-mobile-copy { display:none; }
+
+@media (max-width:560px) {
+  .clients-page .bo-clients-toolbar-card .ant-card-body { padding:10px; }
+  .clients-page .bo-clients-toolbar {
+    display:grid !important;
+    grid-template-columns:minmax(0,1fr) 44px;
+    align-items:stretch !important;
+    gap:8px !important;
+    width:100%;
+  }
+  .clients-page .bo-clients-add { width:100%; height:42px; padding-inline:8px; }
+  .clients-page .bo-clients-desktop-actions { display:none; }
+  .clients-page .bo-clients-mobile-menu { display:block; width:44px; }
+  .clients-page .bo-clients-mobile-menu > .ant-btn { width:44px; height:42px; }
+  .clients-page .bo-clients-search {
+    grid-column:1 / -1; width:100%; max-width:none !important;
+  }
+  .clients-page .bo-clients-search .ant-input-group-wrapper { width:100%; }
+  .clients-page .bo-clients-search .ant-input-group { width:100%; }
+  .clients-page .bo-content { padding-inline:8px; }
+  .clients-page .ant-row { margin-inline:0 !important; }
+  .clients-page .ant-col { padding-inline:0 !important; }
+  .clients-page .ant-card { margin-bottom:10px !important; }
+  .clients-page .bo-lg .ant-card-body { padding:8px; }
+  .clients-page .bo-lg .ant-table { width:100%; table-layout:fixed; }
+  .clients-page .bo-lg .ant-table-tbody > tr.ant-table-row > td { padding:7px 5px !important; }
+  .clients-page .ant-table-expand-icon-th,
+  .clients-page .ant-table-row-expand-icon-cell { width:26px; min-width:26px; }
+  .clients-page .ant-table-selection-column { width:34px; min-width:34px; }
+  .clients-page .bo-lg-who { gap:7px; }
+  .clients-page .bo-lg-names { flex:1 1 auto; }
+  .clients-page .bo-lg-name { white-space:normal; overflow-wrap:anywhere; }
+  .clients-page .bo-lg-mobile-copy {
+    display:inline-flex; flex:0 0 32px; width:32px; height:32px;
+    align-items:center; justify-content:center; padding:0;
+  }
+  .clients-page .bo-lg-mobile-copy .anticon { font-size:17px; }
+}

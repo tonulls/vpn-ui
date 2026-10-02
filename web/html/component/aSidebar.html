@@ -1,7 +1,10 @@
 {{define "component/sidebar/content"}}
 <template>
-    <nav class="bo-rail" :class="{ 'bo-rail--collapsed': collapsed }"
-        aria-label='{{ i18n "menu.navigation"}}'>
+    <div class="bo-sidebar-shell">
+      <button v-if="mobileOpen" type="button" class="bo-rail-backdrop"
+          aria-label='{{ i18n "menu.navigation"}}' @click="closeMobileNav"></button>
+      <nav class="bo-rail" :class="{ 'bo-rail--collapsed': collapsed, 'bo-rail--mobile-open': mobileOpen }"
+          aria-label='{{ i18n "menu.navigation"}}'>
         <div class="bo-rail-brand">
             <a href="{{ .base_path }}panel/" aria-label="VPN-UI">
                 <img src="{{ .base_path }}assets/img/logo.png" alt="VPN-UI" />
@@ -27,7 +30,8 @@
                 <a-icon :type="collapsed ? 'right' : 'left'"></a-icon>
             </button>
         </div>
-    </nav>
+      </nav>
+    </div>
 </template>
 {{end}}
 
@@ -114,9 +118,17 @@
                 ],
                 requestUri: '{{ .request_uri }}',
                 collapsed: JSON.parse(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)) === true,
+                mobileOpen: false,
                 collapseLabel: '{{ i18n "menu.collapse"}}',
                 expandLabel: '{{ i18n "menu.expand"}}',
             }
+        },
+        created() {
+            this.onMobileNavToggle = () => { this.mobileOpen = !this.mobileOpen; };
+            this.$root.$on('toggle-mobile-nav', this.onMobileNavToggle);
+        },
+        beforeDestroy() {
+            this.$root.$off('toggle-mobile-nav', this.onMobileNavToggle);
         },
         methods: {
             // The active tab used to be handed to ant's a-menu as selected-keys.
@@ -128,9 +140,13 @@
                 return norm(key) === norm(this.requestUri);
             },
             openLink(key) {
+                this.mobileOpen = false;
                 return key.startsWith('http') ?
                     window.open(key) :
                     location.href = key
+            },
+            closeMobileNav() {
+                this.mobileOpen = false;
             },
             toggleCollapse() {
                 this.collapsed = !this.collapsed;

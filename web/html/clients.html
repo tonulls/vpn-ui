@@ -47,12 +47,13 @@
                    one account could be on several inbounds. Every write goes back
                    through the inbounds client routes with an inboundIds set, so
                    there is still one write path. -->
-              <a-card hoverable :style="{ marginBottom: '16px' }">
-                <div :style="{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }">
-                  <a-button type="primary" icon="plus" @click="openAdd()">
+              <a-card hoverable class="bo-clients-toolbar-card" :style="{ marginBottom: '16px' }">
+                <div class="bo-clients-toolbar" :style="{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }">
+                  <a-button class="bo-clients-add" type="primary" icon="plus" @click="openAdd()">
                     {{ i18n "pages.clients.add" }}
                   </a-button>
 
+                  <div class="bo-clients-desktop-actions">
                   <!-- One button, no menu. The inbounds are picked INSIDE the form,
                        on the same checklist the single-client form uses, so a bulk
                        add is the same act as a single add repeated - including
@@ -138,8 +139,56 @@
                       </a-menu-item>
                     </a-menu>
                   </a-dropdown>
+                  </div>
 
-                  <a-input-search
+                  <a-dropdown class="bo-clients-mobile-menu" :trigger="['click']">
+                    <a-button icon="down" aria-label='{{ i18n "actions" }}'></a-button>
+                    <a-menu slot="overlay" :class="themeSwitcher.currentTheme"
+                      :selected-keys="density === 'compact' ? ['density'] : []"
+                      @click="handleMobileToolbarAction">
+                      <a-menu-item key="bulkAdd" v-if="assignable.length">
+                        <a-icon type="usergroup-add"></a-icon>
+                        {{ i18n "pages.client.bulk" }}
+                      </a-menu-item>
+                      <a-menu-item key="density">
+                        <a-icon type="column-height"></a-icon>
+                        [[ density === 'compact' ? '{{ i18n "pages.clients.roomier" }}' : '{{ i18n "pages.clients.denser" }}' ]]
+                      </a-menu-item>
+                      <a-menu-item key="refresh">
+                        <a-icon type="sync"></a-icon>
+                        {{ i18n "refresh" }}
+                      </a-menu-item>
+                      <a-sub-menu key="autoRefresh" :title="'{{ i18n "pages.inbounds.autoRefresh" }}'">
+                        <a-menu-item key="refreshToggle">
+                          <a-icon :type="isRefreshEnabled ? 'pause' : 'play-circle'"></a-icon>
+                          [[ isRefreshEnabled ? '{{ i18n "disabled" }}' : '{{ i18n "enabled" }}' ]]
+                        </a-menu-item>
+                        <a-menu-divider></a-menu-divider>
+                        <a-menu-item v-for="seconds in [5, 10, 30, 60]"
+                          :key="'refreshInterval:' + seconds"
+                          :class="refreshInterval === seconds * 1000 ? 'ant-menu-item-selected' : ''">
+                          [[ seconds ]]s
+                        </a-menu-item>
+                      </a-sub-menu>
+                      <a-sub-menu key="sort" :title="'{{ i18n "pages.clients.sortBy" }}'">
+                        <a-menu-item v-for="o in sortOptions" :key="'sort:' + o.key"
+                          :class="sortKey === o.key ? 'ant-menu-item-selected' : ''">
+                          [[ o.label ]]
+                        </a-menu-item>
+                      </a-sub-menu>
+                      <a-menu-divider></a-menu-divider>
+                      <a-menu-item key="resetClients" v-if="!RESELLER.isReseller">
+                        <a-icon type="file-done"></a-icon>
+                        {{ i18n "pages.inbounds.resetAllClientTraffics" }}
+                      </a-menu-item>
+                      <a-menu-item key="delDepletedClients" :style="{ color: 'var(--error)' }">
+                        <a-icon type="rest"></a-icon>
+                        {{ i18n "pages.inbounds.delDepletedClients" }}
+                      </a-menu-item>
+                    </a-menu>
+                  </a-dropdown>
+
+                  <a-input-search class="bo-clients-search"
                     v-model="search"
                     placeholder='{{ i18n "pages.clients.searchPlaceholder" }}'
                     :style="{ maxWidth: '280px' }"
@@ -176,7 +225,7 @@
                   :row-key="r => r.email"
                   :row-selection="{ selectedRowKeys: selectedEmails, onChange: onSelectChange, columnWidth: 42 }"
                   :pagination="pagination"
-                  :scroll="{ x: 980 }"
+                  :scroll="tableScroll"
                   :expanded-row-keys="expandedRowKeys"
                   :expand-row-by-click="true"
                   v-on="{ expandedRowsChange: keys => { expandedRowKeys = keys; } }"
@@ -190,6 +239,12 @@
                        of twelve identical ones. -->
                   <template slot="accountCol" slot-scope="text, row">
                     <div class="bo-lg-who">
+                       <a-tooltip v-if="subSettings.enable && row.subId">
+                         <template slot="title">{{ i18n "copy" }} · {{ i18n "subscription.title" }}</template>
+                         <a-button class="bo-lg-mobile-copy" type="link" icon="copy"
+                           :aria-label="'{{ i18n "copy" }} ' + row.email"
+                           @click.stop="copyText(subscriptionValue(row))"></a-button>
+                       </a-tooltip>
                       <a-tooltip>
                         <template slot="title">[[ stateLabel(row) ]]</template>
                         <span class="bo-lamp" :class="lampClass(row)"></span>
@@ -503,6 +558,7 @@
 {{template "modals/clientMembershipModal" .}}
 
 <script>
+  const CLIENTS_MOBILE_QUERY = '(max-width: 560px)';
   const app = new Vue({
     delimiters: ['[[', ']]'],
     el: '#app',
@@ -539,7 +595,13 @@
       refreshing: false,
       // Comfortable or compact rows. Remembered, because an operator running a
       // fleet of several hundred sets this once and means it.
-      density: localStorage.getItem("clientsDensity") === "compact" ? "compact" : "comfortable",
+      isMobile: window.matchMedia ? window.matchMedia(CLIENTS_MOBILE_QUERY).matches : window.innerWidth <= 560,
+      density: (() => {
+        const mobile = window.matchMedia ? window.matchMedia(CLIENTS_MOBILE_QUERY).matches : window.innerWidth <= 560;
+        if (mobile) return localStorage.getItem('clientsDensity:mobile') || 'compact';
+        return localStorage.getItem('clientsDensity:desktop') ||
+          (localStorage.getItem('clientsDensity') === 'compact' ? 'compact' : 'comfortable');
+      })(),
       isRefreshEnabled: localStorage.getItem("isRefreshEnabled") === "true",
       refreshInterval: Number(localStorage.getItem("refreshInterval")) || 5000,
       onlineClients: [],
@@ -606,8 +668,11 @@
         const col = (key, title, slot, extra) => Object.assign({
           title, key, scopedSlots: { customRender: slot },
         }, extra || {});
+        const account = col('email', '{{ i18n "pages.clients.email" }}', 'accountCol',
+          this.isMobile ? {} : { width: 150 });
+        if (this.isMobile) return [account];
         return [
-          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', { width: 150 }),
+          account,
           col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 127 }),
           col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 93 }),
           col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 169 }),
@@ -619,6 +684,7 @@
           { title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' }, width: 110, align: 'right' },
         ];
       },
+      tableScroll() { return this.isMobile ? undefined : { x: 980 }; },
     },
     methods: {
       sizeFormat(b) { return SizeFormatter.sizeFormat(b || 0); },
@@ -766,7 +832,33 @@
       },
       toggleDensity() {
         this.density = this.density === 'compact' ? 'comfortable' : 'compact';
-        localStorage.setItem('clientsDensity', this.density);
+        const mobile = window.matchMedia ? window.matchMedia(CLIENTS_MOBILE_QUERY).matches : window.innerWidth <= 560;
+        localStorage.setItem(mobile ? 'clientsDensity:mobile' : 'clientsDensity:desktop', this.density);
+        if (!mobile) localStorage.setItem('clientsDensity', this.density);
+      },
+      onViewportResize() {
+        const mobile = window.matchMedia ? window.matchMedia(CLIENTS_MOBILE_QUERY).matches : window.innerWidth <= 560;
+        if (mobile === this.isMobile) return;
+        this.isMobile = mobile;
+        this.density = mobile
+          ? (localStorage.getItem('clientsDensity:mobile') || 'compact')
+          : (localStorage.getItem('clientsDensity:desktop') ||
+             (localStorage.getItem('clientsDensity') === 'compact' ? 'compact' : 'comfortable'));
+      },
+      handleMobileToolbarAction({ key }) {
+        if (key === 'bulkAdd') return this.openBulkAdd();
+        if (key === 'density') return this.toggleDensity();
+        if (key === 'refresh') return this.manualRefresh();
+        if (key === 'refreshToggle') {
+          this.isRefreshEnabled = !this.isRefreshEnabled;
+          return this.toggleRefresh();
+        }
+        if (key.startsWith('refreshInterval:')) {
+          this.refreshInterval = Number(key.split(':')[1]) * 1000;
+          return this.changeRefreshInterval();
+        }
+        if (key.startsWith('sort:')) return this.pickSort(key.slice(5));
+        return this.clickPageAction({ key });
       },
       // The row menu. Reset and delete confirm here rather than in the markup: a
       // menu item cannot host a popconfirm the way a button could, and both are
@@ -1338,9 +1430,14 @@
       },
     },
     async mounted() {
+      this._boundViewportResize = this.onViewportResize.bind(this);
+      window.addEventListener('resize', this._boundViewportResize, { passive: true });
       await this.getDefaultSettings();
       await this.reload(true);
       if (this.isRefreshEnabled) this.startDataRefreshLoop();
+    },
+    beforeDestroy() {
+      if (this._boundViewportResize) window.removeEventListener('resize', this._boundViewportResize);
     },
   });
 </script>
