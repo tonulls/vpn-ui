@@ -877,13 +877,15 @@ func (s *ResellerService) RefundDeleted(email string, allTimeAtDelete int64, kno
 	// taking it off the first of three inbounds leaves the other two serving it
 	// against that same charge. Refunding there hands the reseller back the unused
 	// part of a quota that is still being sold, and dropping the ledger row is worse
-	// than the refund: absence of a row IS "the house owns this", so the account
-	// would go on running with nobody billed for it and no page showing whose it is.
+	// than the refund: absence of a row IS "the house owns this". The settings blobs
+	// are the live serving source of truth; account_inbounds is a repairable mirror
+	// and can retain a stale membership after a successful delete.
 	//
 	// Asked AFTER the delete deliberately, which is the only moment the answer is
 	// the one that matters: what is left. The consumption figure is the only thing
 	// that has to be carried across, and it already is.
-	ids, err := servingInboundIds(database.GetDB(), email)
+	var inboundService InboundService
+	ids, err := inboundService.inboundIdsServingEmails(database.GetDB(), []string{email})
 	if err != nil {
 		return err
 	}
@@ -900,7 +902,7 @@ func (s *ResellerService) RefundDeleted(email string, allTimeAtDelete int64, kno
 	// record of it. The ownership row still goes, so the account is forgotten
 	// either way.
 	if !known {
-		return database.GetDB().Where("email = ?", email).
+		return database.GetDB().Where("email = ?", owner.Email).
 			Delete(&model.ResellerClient{}).Error
 	}
 	consumed := allTimeAtDelete - owner.AllTimeBase
@@ -915,7 +917,7 @@ func (s *ResellerService) RefundDeleted(email string, allTimeAtDelete int64, kno
 		if err := addSpent(tx, owner.UserId, -refund); err != nil {
 			return err
 		}
-		return tx.Where("email = ?", email).Delete(&model.ResellerClient{}).Error
+		return tx.Where("email = ?", owner.Email).Delete(&model.ResellerClient{}).Error
 	})
 }
 

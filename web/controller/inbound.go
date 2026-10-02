@@ -744,31 +744,39 @@ func (a *InboundController) delInbound(c *gin.Context) {
 		resellerOwned []string
 		resellerUsage map[string]int64
 	)
-	if owned, oerr := resellerService.OwnedEmailsOnInbound(id); oerr != nil {
-		logger.Warning("listing reseller accounts before an inbound delete: ", oerr)
-	} else if len(owned) > 0 {
-		resellerOwned = owned
-		if resellerUsage, oerr = resellerService.UsageSnapshot(owned); oerr != nil {
-			logger.Warning("reading traffic before an inbound delete: ", oerr)
-		}
-	}
-	needRestart, err := a.inboundService.DelInbound(id)
-	if err == nil {
-		// The inbound is gone, so every membership pointing at it must go too.
-		a.syncInboundAccounts(id)
-	}
+	resellerOwned, err = resellerService.OwnedEmailsOnInbound(id)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	// The mirror of the grant revocation DelInbound already does: settle the ledger
-	// for the accounts this inbound served, refunding the ones it was the LAST
-	// inbound for. An account still served elsewhere keeps its row and its charge,
-	// because it is still selling.
-	if rerr := resellerService.DropInbound(id, resellerOwned, resellerUsage); rerr != nil {
-		logger.Warning("settling reseller ownership after an inbound delete: ", rerr)
+	if len(resellerOwned) > 0 {
+		resellerUsage, err = resellerService.UsageSnapshot(resellerOwned)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
 	}
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundDeleteSuccess"), id, nil)
+	needRestart, err := a.inboundService.DelInbound(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	// The inbound is gone, so reconcile every surviving membership mirror too; this
+	// also repairs stale rows left by older delete sequences. Attempt settlement even
+	// if mirroring fails: DropInbound checks live settings, so the ledger must not be
+	// stranded after the data-plane delete.
+	syncErr := a.syncInboundAccountsAll(-1)
+	var postErr error
+	if rerr := resellerService.DropInbound(id, resellerOwned, resellerUsage); rerr != nil {
+		postErr = fmt.Errorf("inbound was deleted but reseller settlement failed: %w", rerr)
+	} else if syncErr != nil {
+		postErr = fmt.Errorf("inbound was deleted but account membership synchronization failed: %w", syncErr)
+	}
+	if postErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), postErr)
+	} else {
+		jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundDeleteSuccess"), id, nil)
+	}
 	if isL2tp {
 		a.onL2tpChanged()
 	} else if isPptp {
@@ -862,13 +870,46 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
+	// A whole-inbound save replaces settings.clients. Snapshot reseller ownership and
+	// usage before UpdateInbound can remove traffic rows; after the accounts mirror is
+	// reconciled, RefundDeleted settles only accounts no longer present in live settings.
+	resellerOwned, err := resellerService.OwnedEmailsOnInbound(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	var resellerUsage map[string]int64
+	if len(resellerOwned) > 0 {
+		resellerUsage, err = resellerService.UsageSnapshot(resellerOwned)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
+	}
 	inbound, needRestart, err := a.inboundService.UpdateInbound(inbound)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	a.syncInboundAccounts(inbound.Id, service.AccountCreatorFromUser(session.GetLoginUser(c)))
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), inbound, nil)
+	syncErr := a.syncInboundAccounts(inbound.Id, service.AccountCreatorFromUser(session.GetLoginUser(c)))
+	if err := a.syncInboundAccountsAll(-1); err != nil && syncErr == nil {
+		syncErr = err
+	}
+	var postErr error
+	for _, email := range resellerOwned {
+		u, known := resellerUsage[strings.ToLower(strings.TrimSpace(email))]
+		if err := a.refundDeletedClient(email, u, known); err != nil && postErr == nil {
+			postErr = fmt.Errorf("inbound was updated but reseller settlement failed: %w", err)
+		}
+	}
+	if postErr == nil && syncErr != nil {
+		postErr = fmt.Errorf("inbound was updated but account membership synchronization failed: %w", syncErr)
+	}
+	if postErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), postErr)
+	} else {
+		jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), inbound, nil)
+	}
 	if inbound.Protocol == model.L2TP {
 		a.onL2tpChanged()
 	} else if inbound.Protocol == model.PPTP {
@@ -1199,7 +1240,10 @@ func (a *InboundController) delAccountClient(c *gin.Context) {
 	// This route is for accounts with no memberships, but a reseller-owned parked
 	// account still has a charge. Snapshot before DeleteAccountWithoutInbound removes
 	// its traffic row, then settle it just like the final inbound membership delete.
-	a.refundDeletedClient(email, used, usedKnown)
+	if err := a.refundDeletedClient(email, used, usedKnown); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("account was deleted but reseller settlement failed: %w", err))
+		return
+	}
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
 }
 
@@ -1310,19 +1354,23 @@ func (a *InboundController) delInboundClient(c *gin.Context) {
 	// charge.
 	used, usedKnown := a.usageBeforeDelete(email)
 	needRestart, err := a.inboundService.DelInboundClient(id, clientId)
-	if err == nil {
-		a.syncInboundAccounts(id)
-	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
+	syncErr := a.syncInboundAccountsAll(-1)
 	// Refund AFTER the delete, the opposite order to a create, and for the same
 	// reason: a refund that never runs leaves balance an admin can hand back, where a
 	// refund that ran before a delete which then failed would be balance paid out for
 	// an account still live and still selling. A no-op for a house-owned account.
-	a.refundDeletedClient(email, used, usedKnown)
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
+	settlementErr := a.refundDeletedClient(email, used, usedKnown)
+	if settlementErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("account was deleted but reseller settlement failed: %w", settlementErr))
+	} else if syncErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("account was deleted but account membership synchronization failed: %w", syncErr))
+	} else {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
+	}
 	if oldInbound != nil && oldInbound.Protocol == model.L2TP {
 		a.onL2tpChanged()
 	} else if oldInbound != nil && oldInbound.Protocol == model.PPTP {
@@ -1599,12 +1647,6 @@ func (a *InboundController) bulkUpdateClients(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	// Deletes are refunded after the fact, like every other delete path: a refund
-	// that never runs leaves balance an admin can hand back, where one that ran
-	// ahead of a failed delete would be balance paid out for a live account.
-	if req.Op == "delete" {
-		a.refundBulkDeleted(req.Targets, usage)
-	}
 	// The applier above works one (inbound, email) target at a time and moves
 	// traffic alone. This writes back what the quote actually decided: the priced
 	// quota onto every inbound serving the account (charged once, so it must land
@@ -1618,10 +1660,33 @@ func (a *InboundController) bulkUpdateClients(c *gin.Context) {
 	// this the accounts layer kept the OLD quota, expiry and enable bit. The Clients
 	// page reads those three off the account row, so a bulk top-up applied to the
 	// data plane and then showed the previous figure.
+	var syncErr error
 	for _, id := range distinctInboundIds(req.Targets) {
-		a.syncInboundAccounts(id)
+		if err := a.syncInboundAccounts(id); err != nil && syncErr == nil {
+			syncErr = err
+		}
 	}
-	jsonObj(c, result, nil)
+	var postErr error
+	if req.Op == "delete" {
+		// Reconcile unmentioned inbounds too: an older stale mirror row elsewhere
+		// must not preserve either an account slot or an orphaned Account row.
+		if err := a.syncInboundAccountsAll(-1); err != nil && syncErr == nil {
+			syncErr = err
+		}
+		// RefundDeleted checks live settings rather than trusting account_inbounds,
+		// which is a repairable mirror and may still contain a stale membership.
+		if err := a.refundBulkDeleted(req.Targets, usage); err != nil {
+			postErr = fmt.Errorf("clients were deleted but reseller settlement failed: %w", err)
+		}
+	}
+	if postErr == nil && syncErr != nil {
+		postErr = fmt.Errorf("clients changed but account memberships could not be synchronized: %w", syncErr)
+	}
+	if postErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), postErr)
+	} else {
+		jsonObj(c, result, nil)
+	}
 
 	xrayRestart := false
 	for proto := range touched {
@@ -2129,57 +2194,99 @@ func (a *InboundController) delDepletedClients(c *gin.Context) {
 		return
 	}
 
-	// "Every depleted client on this inbound" is defined over accounts a reseller
-	// does not own: deleteClient plus the inbound grant is all this route checks,
-	// and both hold for a reseller on an inbound they share with the admin and
-	// with other resellers. So the sweep is narrowed to their own accounts rather
-	// than refused, and each one it removes is refunded, exactly as a one-by-one
-	// delete would have been. A depleted account refunds nothing in practice, but
-	// the ledger row still has to go or a recycled email inherits it.
 	user := session.GetLoginUser(c)
+	var inboundIdsBefore []int
+	if id < 0 {
+		inbounds, err := a.inboundService.GetAllInbounds()
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
+		for _, inbound := range inbounds {
+			inboundIdsBefore = append(inboundIdsBefore, inbound.Id)
+		}
+	}
+	var onlyOwned map[string]bool
 	if user != nil && user.IsReseller {
-		owned, oerr := resellerService.OwnedEmails(user.Id)
-		if oerr != nil {
-			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), oerr)
+		// A reseller holds delete permission on shared inbounds too, so narrow the
+		// sweep to their own accounts rather than deleting other sellers' clients.
+		onlyOwned, err = resellerService.OwnedEmails(user.Id)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 			return
 		}
-		// Snapshot every account this sweep could remove BEFORE it runs. These are
-		// depleted accounts, so their refunds should be nil; priced after the
-		// delete they would each return their whole charge instead.
-		ownedList := make([]string, 0, len(owned))
-		for e := range owned {
-			ownedList = append(ownedList, e)
-		}
-		usage, uerr := resellerService.UsageSnapshot(ownedList)
-		if uerr != nil {
-			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), uerr)
-			return
-		}
-		deleted, derr := a.inboundService.DelDepletedClientsScoped(id, owned)
-		if derr != nil {
-			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), derr)
-			return
-		}
-		for _, email := range deleted {
-			u, known := usage[strings.ToLower(strings.TrimSpace(email))]
-			a.refundDeletedClient(email, u, known)
-		}
-		// -1, not id. The sweep follows a depleted account onto EVERY inbound serving
-		// it (its quota is account-wide, so removing it from one and deleting its
-		// counter row would leave it live and unmetered on the rest), so reconciling
-		// only the inbound named in the route leaves the mirror stale on the others.
-		a.syncInboundAccountsAll(-1)
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.delDepletedClientsSuccess"), nil)
-		return
 	}
 
-	err = a.inboundService.DelDepletedClients(id)
+	// Snapshot reseller-owned accounts before the sweep removes their traffic rows.
+	// A negative id means panel-wide; otherwise resolve only the requested inbound.
+	var owned []string
+	if id < 0 {
+		owned, err = resellerService.AllOwnedEmails()
+	} else {
+		owned, err = resellerService.OwnedEmailsOnInbound(id)
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	// -1 for the same reason as the reseller branch above.
-	a.syncInboundAccountsAll(-1)
+	usage, err := resellerService.UsageSnapshot(owned)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	ownedByKey := make(map[string]string, len(owned))
+	for _, email := range owned {
+		ownedByKey[strings.ToLower(strings.TrimSpace(email))] = email
+	}
+
+	// DelDepletedClientsScoped removes the account from every serving inbound, not
+	// just the one in the URL. Both roles use it: the reseller branch is scoped to
+	// their own accounts, while an admin can settle any reseller-owned account it
+	// swept. Its returned list is needed because the old unscoped wrapper discarded
+	// exactly the identities whose ledger rows must be released.
+	deleted, sweepErr := a.inboundService.DelDepletedClientsScoped(id, onlyOwned)
+
+	// The admin sweep can remove empty inbounds, so sync their ids explicitly too.
+	// Try every mirror reconciliation even when one fails: settlement itself uses
+	// settings as the live source, not potentially stale account_inbounds rows.
+	var syncErr error
+	if id >= 0 {
+		syncErr = a.syncInboundAccounts(id)
+	} else {
+		// A panel-wide admin sweep can delete several now-empty inbounds. Sync their
+		// pre-sweep ids too, so Account rows with no surviving memberships are pruned.
+		for _, inboundId := range inboundIdsBefore {
+			if err := a.syncInboundAccounts(inboundId); err != nil && syncErr == nil {
+				syncErr = err
+			}
+		}
+	}
+	if err := a.syncInboundAccountsAll(-1); err != nil && syncErr == nil {
+		syncErr = err
+	}
+	var settlementErr error
+	for _, email := range deleted {
+		key := strings.ToLower(strings.TrimSpace(email))
+		if canonical, ok := ownedByKey[key]; ok {
+			email = canonical
+		}
+		u, known := usage[key]
+		if err := a.refundDeletedClient(email, u, known); err != nil && settlementErr == nil {
+			settlementErr = err
+		}
+	}
+	if settlementErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("clients were deleted but reseller settlement failed: %w", settlementErr))
+		return
+	}
+	if syncErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("depleted accounts were removed but account membership synchronization failed: %w", syncErr))
+		return
+	}
+	if sweepErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("depleted accounts were removed but inbound cleanup failed: %w", sweepErr))
+		return
+	}
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.delDepletedClientsSuccess"), nil)
 }
 
@@ -2789,18 +2896,21 @@ func (a *InboundController) delInboundClientByEmail(c *gin.Context) {
 
 	used, usedKnown := a.usageBeforeDelete(email)
 	needRestart, err := a.inboundService.DelInboundClientByEmail(inboundId, email)
-	if err == nil {
-		a.syncInboundAccounts(inboundId)
-	}
 	if err != nil {
 		jsonMsg(c, "Failed to delete client by email", err)
 		return
 	}
+	syncErr := a.syncInboundAccountsAll(-1)
 	// After the delete, never before; see delInboundClient. The consumption it is
 	// priced against had to be read before, for the same reason.
-	a.refundDeletedClient(email, used, usedKnown)
-
-	jsonMsg(c, "Client deleted successfully", nil)
+	settlementErr := a.refundDeletedClient(email, used, usedKnown)
+	if settlementErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("account was deleted but reseller settlement failed: %w", settlementErr))
+	} else if syncErr != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("account was deleted but account membership synchronization failed: %w", syncErr))
+	} else {
+		jsonMsg(c, "Client deleted successfully", nil)
+	}
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
@@ -2900,20 +3010,24 @@ func isTruthyForm(value string) bool {
 }
 
 // syncInboundAccountsAll reconciles one inbound, or every inbound when the route
-// was given the -1 that both client sweeps use for "panel-wide".
-func (a *InboundController) syncInboundAccountsAll(inboundId int) {
+// was given the -1 that both client sweeps use for "panel-wide". It returns errors
+// so settlement paths can avoid treating stale membership rows as live accounts.
+func (a *InboundController) syncInboundAccountsAll(inboundId int) error {
 	if inboundId >= 0 {
-		a.syncInboundAccounts(inboundId)
-		return
+		return a.syncInboundAccounts(inboundId)
 	}
 	inbounds, err := a.inboundService.GetAllInbounds()
 	if err != nil {
 		logger.Warning("listing inbounds to sync the accounts layer: ", err)
-		return
+		return err
 	}
+	var firstErr error
 	for _, inbound := range inbounds {
-		a.syncInboundAccounts(inbound.Id)
+		if err := a.syncInboundAccounts(inbound.Id); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
 // distinctInboundIds reduces a bulk target list to the inbounds it touches, in the
@@ -2956,10 +3070,12 @@ func distinctInboundIds(targets []service.BulkClientTarget) []int {
 // no membership, so one call is correct for all of them, including the removal of
 // the inbound itself (where it drops every membership pointing at an id that is
 // gone).
-func (a *InboundController) syncInboundAccounts(inboundId int, creator ...service.AccountCreator) {
+func (a *InboundController) syncInboundAccounts(inboundId int, creator ...service.AccountCreator) error {
 	if err := accountService.SyncInboundAccounts(database.GetDB(), inboundId, creator...); err != nil {
 		logger.Warning("syncing the accounts layer for inbound ", inboundId, ": ", err)
+		return err
 	}
+	return nil
 }
 
 // applyClientMemberships puts an account on exactly the given inbounds and
@@ -3160,51 +3276,31 @@ func (a *InboundController) callerMayTouchClient(c *gin.Context, email string) b
 	return err == nil && owns
 }
 
-// refundBulkDeleted credits back the accounts a bulk delete really removed.
+// refundBulkDeleted settles every email the bulk operation targeted. The delete
+// applier may skip a target or retain it; RefundDeleted checks all surviving
+// memberships and is the authoritative decision about whether the account still
+// exists. The accounts mirror must be synchronized before this runs, because its
+// stale membership rows otherwise make a fully deleted account look live.
 //
-// Not every target is one. The applier honours the skip toggles, and it always
-// RETAINS one client so an inbound is never emptied, so a target can come back
-// still live. Refunding one of those would hand a reseller balance for an account
-// that is still selling, which is why this asks the inbound what survived rather
-// than assuming the request got what it asked for.
-//
-// Run for admins too: an admin deleting a reseller's accounts refunds them, since
-// they did not choose it, and the refund is a no-op for house-owned ones.
-//
-// usage is the pre-delete consumption snapshot. It has to be passed in rather than
-// looked up here, because the delete has already destroyed what it measures; see
-// ResellerService.RefundDeleted.
-func (a *InboundController) refundBulkDeleted(targets []service.BulkClientTarget, usage map[string]int64) {
-	survivors := map[int]map[string]bool{}
+// Run for admins too: an admin deleting a reseller's accounts refunds them, while
+// house-owned accounts are a no-op. usage is the pre-delete snapshot because the
+// delete removes the traffic rows that prove consumption.
+func (a *InboundController) refundBulkDeleted(targets []service.BulkClientTarget, usage map[string]int64) error {
+	var firstErr error
 	for _, t := range targets {
-		if t.Email == "" {
+		if strings.TrimSpace(t.Email) == "" {
 			continue
-		}
-		left, ok := survivors[t.InboundId]
-		if !ok {
-			inbound, err := a.inboundService.GetInbound(t.InboundId)
-			if err != nil || inbound == nil {
-				continue // cannot prove the account went, so it keeps its charge
-			}
-			clients, cerr := a.inboundService.GetClients(inbound)
-			if cerr != nil {
-				continue
-			}
-			left = make(map[string]bool, len(clients))
-			for _, cl := range clients {
-				left[strings.ToLower(strings.TrimSpace(cl.Email))] = true
-			}
-			survivors[t.InboundId] = left
 		}
 		key := strings.ToLower(strings.TrimSpace(t.Email))
-		if left[key] {
-			continue
-		}
 		u, known := usage[key]
 		if err := resellerService.RefundDeleted(t.Email, u, known); err != nil {
 			logger.Warning("refunding a reseller for a bulk-deleted account: ", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
 // resellerBalance reports what the caller has left to sell, so the page can show
@@ -3219,13 +3315,15 @@ func (a *InboundController) resellerBalance(c *gin.Context) {
 // every delete path can call it unconditionally.
 //
 // An admin deleting a reseller's account refunds them too: they did not choose it.
-func (a *InboundController) refundDeletedClient(email string, allTimeAtDelete int64, known bool) {
+func (a *InboundController) refundDeletedClient(email string, allTimeAtDelete int64, known bool) error {
 	if email == "" {
-		return
+		return nil
 	}
 	if err := resellerService.RefundDeleted(email, allTimeAtDelete, known); err != nil {
 		logger.Warning("refunding a reseller for a deleted account: ", err)
+		return err
 	}
+	return nil
 }
 
 // usageBeforeDelete captures how much an account has moved in its lifetime,

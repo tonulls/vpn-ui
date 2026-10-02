@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/mhsanaei/3x-ui/v2/backend"
+	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 )
 
@@ -126,6 +127,8 @@ func (s *CoreService) deleteCoreInbounds(names []string) (int, error) {
 		wanted[n] = true
 	}
 	var inboundService InboundService
+	var accountService AccountService
+	var resellerService ResellerService
 	all, err := inboundService.GetAllInbounds()
 	if err != nil {
 		return 0, err
@@ -135,10 +138,40 @@ func (s *CoreService) deleteCoreInbounds(names []string) (int, error) {
 		if !wanted[protocolCoreName(string(in.Protocol))] {
 			continue
 		}
+		emails, err := resellerService.OwnedEmailsOnInbound(in.Id)
+		if err != nil {
+			return removed, fmt.Errorf("reading reseller clients on inbound %q: %w", in.Remark, err)
+		}
+		usage, err := resellerService.UsageSnapshot(emails)
+		if err != nil {
+			return removed, fmt.Errorf("snapshotting reseller traffic on inbound %q: %w", in.Remark, err)
+		}
 		if _, err := inboundService.DelInbound(in.Id); err != nil {
 			return removed, fmt.Errorf("deleting inbound %q: %w", in.Remark, err)
 		}
+		// DelInbound is also used by lower-level callers that cannot settle the
+		// reseller ledger. Do both pieces here before advancing the uninstall: the
+		// membership mirror is needed to distinguish the last membership from an
+		// account still served by an inbound whose core is being kept.
+		if err := accountService.SyncInboundAccounts(database.GetDB(), in.Id); err != nil {
+			return removed, fmt.Errorf("syncing accounts after deleting inbound %q: %w", in.Remark, err)
+		}
+		if err := resellerService.DropInbound(in.Id, emails, usage); err != nil {
+			return removed, fmt.Errorf("settling reseller accounts after deleting inbound %q: %w", in.Remark, err)
+		}
 		removed++
+	}
+	// Older runs can have stale account_inbounds rows on untouched inbounds. Reconcile
+	// the survivors once after all selected inbounds are gone so the global account
+	// count does not retain orphan rows.
+	remaining, err := inboundService.GetAllInbounds()
+	if err != nil {
+		return removed, err
+	}
+	for _, in := range remaining {
+		if err := accountService.SyncInboundAccounts(database.GetDB(), in.Id); err != nil {
+			return removed, fmt.Errorf("syncing surviving inbound %q after core uninstall: %w", in.Remark, err)
+		}
 	}
 	return removed, nil
 }

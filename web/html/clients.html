@@ -35,7 +35,7 @@
                     <span class="bo-stat-cell-label">Клиенты</span>
                     <span class="bo-stat-cell-label bo-stat-cell-sublabel">Доступно / использовано</span>
                     <span class="bo-stat-cell-value num">
-                      [[ RESELLER.subscriptionLimit > 0 ? RESELLER.subscriptionLimit : '∞' ]] / [[ clientStats.total ]]
+                      [[ RESELLER.subscriptionLimit > 0 ? RESELLER.subscriptionLimit : '∞' ]] / [[ RESELLER.subscriptionLimit > 0 ? clientStats.subscriptionCount : clientStats.total ]]
                     </span>
                   </div>
                 </div>
@@ -528,7 +528,7 @@
       // are needed: the rows carry the account-level totals the server computed,
       // the inbounds carry the per-protocol client objects every action works on.
       clients: [],
-      clientStats: { up: 0, down: 0, allTime: 0, connections: 0, total: 0 },
+      clientStats: { up: 0, down: 0, allTime: 0, connections: 0, total: 0, subscriptionCount: 0 },
       dbInbounds: [],
       inbounds: [],
       assignable: [],

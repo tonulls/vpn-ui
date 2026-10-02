@@ -5,6 +5,7 @@ import (
 
 	"strings"
 
+	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	ldaputil "github.com/mhsanaei/3x-ui/v2/util/ldap"
@@ -246,6 +247,13 @@ func (j *LdapSyncJob) deleteClientsNotInLDAP(inboundTag string, ldapEmails map[s
 
 	batchSize := 50 //  clients in 1 batch
 	restartNeeded := false
+	var resellerService service.ResellerService
+	type deletedSnapshot struct {
+		email string
+		used  int64
+		known bool
+	}
+	var deletedForSettlement []deletedSnapshot
 
 	for _, ib := range inbounds {
 		if ib.Tag != inboundTag {
@@ -285,15 +293,40 @@ func (j *LdapSyncJob) deleteClientsNotInLDAP(inboundTag string, ldapEmails map[s
 					clientKey = c.ID
 				}
 
+				used, known, usageErr := resellerService.UsageOf(c.Email)
+				if usageErr != nil {
+					logger.Warningf("Failed to snapshot reseller usage for client %s before LDAP delete: %v", c.Email, usageErr)
+					known = false
+				}
 				if _, err := j.inboundService.DelInboundClient(ib.Id, clientKey); err != nil {
 					logger.Warningf("Failed to delete client %s from inbound id=%d(tag=%s): %v",
 						c.Email, ib.Id, ib.Tag, err)
 				} else {
+					deletedForSettlement = append(deletedForSettlement, deletedSnapshot{email: c.Email, used: used, known: known})
 					logger.Infof("Deleted client %s from inbound id=%d(tag=%s)",
 						c.Email, ib.Id, ib.Tag)
 					// do not restart here
 					restartNeeded = true
 				}
+			}
+		}
+	}
+
+	// Reconcile the accounts mirror once after the batch, then settle every deletion
+	// against the pre-delete usage snapshot. Settings are the live serving source, so
+	// a mirror error cannot strand reseller ownership, but it must be logged for the
+	// admin account count to be repaired.
+	if len(deletedForSettlement) > 0 {
+		var accountService service.AccountService
+		for _, ib := range inbounds {
+			if err := accountService.SyncInboundAccounts(database.GetDB(), ib.Id); err != nil {
+				logger.Warningf("Failed to synchronize account memberships after LDAP deletions: %v", err)
+				break
+			}
+		}
+		for _, deleted := range deletedForSettlement {
+			if err := resellerService.RefundDeleted(deleted.email, deleted.used, deleted.known); err != nil {
+				logger.Warningf("Failed to settle reseller ownership for LDAP-deleted client %s: %v", deleted.email, err)
 			}
 		}
 	}

@@ -343,9 +343,13 @@ func (s *ResellerService) OwnedEmails(userId int) (map[string]bool, error) {
 // ClientOwner returns the reseller row for an account, or nil when the house
 // owns it. Absence is the admin case and is not an error.
 func (s *ResellerService) ClientOwner(email string) (*model.ResellerClient, error) {
+	key := emailKey(email)
+	if key == "" {
+		return nil, nil
+	}
 	rc := &model.ResellerClient{}
 	err := database.GetDB().Model(&model.ResellerClient{}).
-		Where("email = ?", email).First(rc).Error
+		Where("LOWER(TRIM(email)) = ?", key).First(rc).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -416,8 +420,9 @@ func (s *ResellerService) DropInbound(inboundId int, emails []string, usage map[
 		add(email)
 	}
 
+	var inboundService InboundService
 	for _, email := range candidates {
-		ids, err := servingInboundIds(db, email)
+		ids, err := inboundService.inboundIdsServingEmails(db, []string{email})
 		if err != nil {
 			return err
 		}
@@ -878,7 +883,9 @@ func (s *ResellerService) reserve(t ChargeTicket) error {
 			}
 			if limit > 0 {
 				var count int64
-				if err := tx.Model(&model.ResellerClient{}).Where("user_id = ?", t.UserId).Count(&count).Error; err != nil {
+				if err := tx.Model(&model.ResellerClient{}).
+					Where("user_id = ?", t.UserId).
+					Select("COUNT(DISTINCT LOWER(TRIM(email)))").Scan(&count).Error; err != nil {
 					return err
 				}
 				if count >= int64(limit) {
@@ -996,6 +1003,14 @@ func (s *ResellerService) UsageOf(email string) (int64, bool, error) {
 // here (their home is elsewhere, so their usage was never snapshotted and their
 // refund was silently withheld) and listed accounts that are not.
 //
+// AllOwnedEmails returns the ledger's spelling of every reseller-owned account.
+// Used by panel-wide sweeps, which have no single inbound to resolve first.
+func (s *ResellerService) AllOwnedEmails() ([]string, error) {
+	var emails []string
+	err := database.GetDB().Model(&model.ResellerClient{}).Order("email").Pluck("email", &emails).Error
+	return emails, err
+}
+
 // Returns the LEDGER's spelling of each email, because that is what ClientOwner and
 // the refund path match on.
 func (s *ResellerService) OwnedEmailsOnInbound(inboundId int) ([]string, error) {
@@ -1740,6 +1755,19 @@ func (s *ResellerService) cascadeClients(rows []model.ResellerClient) (DeleteRes
 			continue
 		}
 		res.Deleted++
+	}
+	// Deleting the reseller's clients may have touched many memberships; reconcile
+	// the remaining account mirror once so orphan Account rows do not continue to
+	// consume an admin subscription slot after the cascade.
+	all, err := inboundService.GetAllInbounds()
+	if err != nil {
+		return res, err
+	}
+	var accountService AccountService
+	for _, inbound := range all {
+		if err := accountService.SyncInboundAccounts(db, inbound.Id); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
 }

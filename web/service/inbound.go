@@ -1559,13 +1559,28 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 	if err := db.Where("inbound_id = ?", id).Delete(xray.ClientTraffic{}).Error; err != nil {
 		return false, err
 	}
-	// Drop this inbound's membership records too. SyncInboundAccounts does so when
-	// the controller reaches it, but not every caller of DelInbound does.
-	if err := db.Where("inbound_id = ?", id).Delete(&model.AccountInbound{}).Error; err != nil {
-		return false, err
-	}
-
-	return needRestart, db.Delete(model.Inbound{}, id).Error
+	// Remove this inbound's account memberships and prune accounts that have no
+	// other surviving membership. Deleting the membership rows without first
+	// remembering their account IDs made the later controller sync unable to find
+	// the newly orphaned accounts, so CountAccounts kept charging admin subscription
+	// slots after an inbound was deleted. Keep these final writes atomic: on an error,
+	// the inbound and its memberships remain available for a safe retry.
+	var accountService AccountService
+	err = db.Transaction(func(tx *gorm.DB) error {
+		var orphanedAccountIds []int
+		if err := tx.Model(&model.AccountInbound{}).
+			Where("inbound_id = ?", id).Distinct().Pluck("account_id", &orphanedAccountIds).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("inbound_id = ?", id).Delete(&model.AccountInbound{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(model.Inbound{}, id).Error; err != nil {
+			return err
+		}
+		return accountService.pruneOrphanAccounts(tx, orphanedAccountIds)
+	})
+	return needRestart, err
 }
 
 // LoadClientStats fills in an inbound's traffic rows, for the callers that fetched the
@@ -1933,6 +1948,26 @@ func (s *InboundService) updateClientTraffics(tx *gorm.DB, oldInbound *model.Inb
 			}
 		}
 		if !emailExists {
+			// ClientTraffic and its IP bindings are account-wide. Removing one
+			// membership through a whole-inbound save must keep them while another
+			// inbound still serves the account, just like DelInboundClient does.
+			otherInboundIds, err := s.membershipInboundIdsOutside(tx, oldInbound.Id, oldClient.Email)
+			if err != nil {
+				return err
+			}
+			if len(otherInboundIds) > 0 {
+				if err := tx.Model(&xray.ClientTraffic{}).
+					Where("LOWER(TRIM(email)) = ?", accountKey(oldClient.Email)).
+					Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&model.ResellerClient{}).
+					Where("LOWER(TRIM(email)) = ? AND inbound_id = ?", accountKey(oldClient.Email), oldInbound.Id).
+					Update("inbound_id", otherInboundIds[0]).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			err = s.DelClientStat(tx, oldClient.Email)
 			if err != nil {
 				return err
@@ -3050,6 +3085,7 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 			tx.Commit()
 		}
 	}()
+	deletedEmails := map[string]string{}
 
 	for inboundId, emails := range byInbound {
 		var inbound *model.Inbound
@@ -3067,9 +3103,11 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 		}
 		changed := false
 		if req.Op == "delete" {
-			// Delete removes targeted clients entirely (honouring the skip toggles) and
-			// cleans up their stats + saved IPs. Never empty an inbound — an inbound must
-			// keep >=1 client — so if every client is targeted, one is retained (skipped).
+			// Delete removes targeted memberships (honouring the skip toggles). Account-
+			// wide stats/IPs are settled only after every inbound's settings have changed,
+			// so a multi-inbound account is not mistaken for a fully deleted one midway.
+			// Never empty an inbound — an inbound must keep >=1 client — so if every
+			// client is targeted, one is retained (skipped).
 			del := map[string]bool{}
 			total := 0
 			for i := range clientsAny {
@@ -3094,12 +3132,7 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 				cm, _ := clientsAny[i].(map[string]any)
 				email, _ := cm["email"].(string)
 				if email != "" && del[email] {
-					if err = s.DelClientStat(tx, email); err != nil {
-						return result, touched, err
-					}
-					if err = s.DelClientIPs(tx, email); err != nil {
-						return result, touched, err
-					}
+					deletedEmails[accountKey(email)] = email
 					result.Applied++
 					changed = true
 				} else {
@@ -3163,6 +3196,37 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 			return result, touched, err
 		}
 		touched[string(inbound.Protocol)] = true
+	}
+	if req.Op == "delete" {
+		// All affected settings are now visible through tx. Resolve the final account
+		// memberships from that source of truth, not account_inbounds, whose mirror is
+		// intentionally synchronized by the controller only after this transaction.
+		for _, email := range deletedEmails {
+			ids, err := s.inboundIdsServingEmails(tx, []string{email})
+			if err != nil {
+				return result, touched, err
+			}
+			key := accountKey(email)
+			if len(ids) > 0 {
+				if err := tx.Model(&xray.ClientTraffic{}).
+					Where("LOWER(TRIM(email)) = ?", key).
+					Update("inbound_id", ids[0]).Error; err != nil {
+					return result, touched, err
+				}
+				if err := tx.Model(&model.ResellerClient{}).
+					Where("LOWER(TRIM(email)) = ?", key).
+					Update("inbound_id", ids[0]).Error; err != nil {
+					return result, touched, err
+				}
+				continue
+			}
+			if err := s.DelClientStat(tx, email); err != nil {
+				return result, touched, err
+			}
+			if err := s.DelClientIPs(tx, email); err != nil {
+				return result, touched, err
+			}
+		}
 	}
 	return result, touched, nil
 }
@@ -4331,11 +4395,11 @@ func (s *InboundService) UpdateClientIPs(tx *gorm.DB, oldEmail string, newEmail 
 }
 
 func (s *InboundService) DelClientStat(tx *gorm.DB, email string) error {
-	return tx.Where("email = ?", email).Delete(xray.ClientTraffic{}).Error
+	return tx.Where("LOWER(TRIM(email)) = ?", accountKey(email)).Delete(xray.ClientTraffic{}).Error
 }
 
 func (s *InboundService) DelClientIPs(tx *gorm.DB, email string) error {
-	return tx.Where("client_email = ?", email).Delete(model.InboundClientIps{}).Error
+	return tx.Where("LOWER(TRIM(client_email)) = ?", accountKey(email)).Delete(model.InboundClientIps{}).Error
 }
 
 func (s *InboundService) GetClientInboundByTrafficID(trafficId int) (traffic *xray.ClientTraffic, inbound *model.Inbound, err error) {
@@ -4889,13 +4953,18 @@ func (s *InboundService) DelDepletedClients(id int) error {
 func (s *InboundService) DelDepletedClientsScoped(id int, onlyEmails map[string]bool) (deleted []string, err error) {
 	db := database.GetDB()
 	tx := db.Begin()
+	committed := false
 	defer func() {
+		if committed {
+			return
+		}
 		if err == nil {
 			tx.Commit()
 		} else {
 			tx.Rollback()
 		}
 	}()
+	deleteInboundSettings := map[int]string{}
 
 	// The predicate is panel-wide and no longer carries `inbound_id <op> ?`.
 	//
@@ -5005,7 +5074,12 @@ func (s *InboundService) DelDepletedClientsScoped(id int, onlyEmails map[string]
 		// of inbound 3 could destroy inbound 5 - port, certificates, daemon config and
 		// all - because one expired customer happened to be its only client.
 		if len(newClients) == 0 && onlyEmails == nil && (id < 0 || inboundId == id) {
-			s.DelInbound(inboundId)
+			oldSettings["clients"] = []any{}
+			settingsJSON, merr := json.MarshalIndent(oldSettings, "", "  ")
+			if merr != nil {
+				return nil, merr
+			}
+			deleteInboundSettings[inboundId] = string(settingsJSON)
 			continue
 		}
 		if newClients == nil {
@@ -5030,6 +5104,30 @@ func (s *InboundService) DelDepletedClientsScoped(id int, onlyEmails map[string]
 	if len(deleted) > 0 {
 		if err = tx.Where("email IN ?", deleted).Delete(xray.ClientTraffic{}).Error; err != nil {
 			return nil, err
+		}
+	}
+	if err = tx.Commit().Error; err != nil {
+		return nil, err
+	}
+	committed = true
+
+	// Deleting an empty inbound calls a service that performs its own database
+	// writes and data-plane teardown. Run it only after this transaction commits;
+	// otherwise a panel-wide sweep can deadlock once an earlier inbound was saved.
+	for _, inboundId := range inboundIds {
+		settings, shouldDelete := deleteInboundSettings[inboundId]
+		if !shouldDelete {
+			continue
+		}
+		if _, derr := s.DelInbound(inboundId); derr != nil {
+			// The traffic rows were removed by the committed sweep. If inbound teardown
+			// fails, leave it empty in the database rather than serving an unmetered
+			// depleted client, and let the controller reconcile its membership/ledger.
+			if uerr := db.Model(&model.Inbound{}).Where("id = ?", inboundId).
+				Update("settings", settings).Error; uerr != nil {
+				return deleted, fmt.Errorf("deleting empty inbound %d failed (%v), and clearing its depleted clients failed: %w", inboundId, derr, uerr)
+			}
+			return deleted, fmt.Errorf("deleting empty inbound %d: %w", inboundId, derr)
 		}
 	}
 
@@ -5578,14 +5676,40 @@ func (s *InboundService) MigrationSubIds() {
 // caller owns, how many are connected right now, how many have run out of traffic
 // or time, and how many are close to it.
 type ClientStatsSummary struct {
-	Up          int64 `json:"up"`
-	Down        int64 `json:"down"`
-	AllTime     int64 `json:"allTime"`
-	Connections int   `json:"connections"`
-	Total       int   `json:"total"`
-	Online      int   `json:"online"`
-	Depleted    int   `json:"depleted"`
-	Expiring    int   `json:"expiring"`
+	Up                int64 `json:"up"`
+	Down              int64 `json:"down"`
+	AllTime           int64 `json:"allTime"`
+	Connections       int   `json:"connections"`
+	Total             int   `json:"total"`
+	SubscriptionCount int   `json:"subscriptionCount"`
+	Online            int   `json:"online"`
+	Depleted          int   `json:"depleted"`
+	Expiring          int   `json:"expiring"`
+}
+
+// subscriptionUsageFor returns the count used by the create-time subscription
+// limit. Resellers are capped by their ownership ledger; admins use the same account
+// list count as the add-client guard. This is intentionally separate from Total,
+// which only counts accounts currently served by accessible inbounds.
+func subscriptionUsageFor(user *model.User) (int, error) {
+	if user == nil {
+		return 0, nil
+	}
+	if user.IsReseller {
+		// A reseller's limit is in ResellerProfile, not User.SubscriptionLimit.
+		// Count the ledger regardless of the legacy User field's zero value.
+		var resellerService ResellerService
+		owned, err := resellerService.OwnedEmails(user.Id)
+		if err != nil {
+			return 0, err
+		}
+		return len(owned), nil
+	}
+	if user.SubscriptionLimit <= 0 {
+		return 0, nil
+	}
+	var accountService AccountService
+	return accountService.CountAccounts(user)
 }
 
 // GetClientStatsFor counts the caller's accounts by state. It is the server-side
@@ -5624,7 +5748,14 @@ func (s *InboundService) GetClientStatsFor(user *model.User) (*ClientStatsSummar
 		online[email] = true
 	}
 
-	summary := &ClientStatsSummary{Connections: len(inbounds)}
+	subscriptionCount, err := subscriptionUsageFor(user)
+	if err != nil {
+		return nil, err
+	}
+	summary := &ClientStatsSummary{
+		Connections:       len(inbounds),
+		SubscriptionCount: subscriptionCount,
+	}
 	now := time.Now().UnixMilli()
 	countedTraffic := make(map[string]bool)
 	countedTotal := make(map[string]bool)
