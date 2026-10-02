@@ -141,9 +141,15 @@
                   </a-dropdown>
                   </div>
 
-                  <a-dropdown class="bo-clients-mobile-menu" :trigger="['click']">
-                    <a-button icon="down" aria-label='{{ i18n "pages.inbounds.generalActions" }}'></a-button>
-                    <a-menu slot="overlay" :class="themeSwitcher.currentTheme"
+                  <a-dropdown class="bo-clients-mobile-menu" placement="bottomRight"
+                    :trigger="['click']"
+                    :overlay-class-name="themeSwitcher.currentTheme + ' bo-clients-mobile-overlay'">
+                    <a-button class="bo-clients-mobile-trigger"
+                      aria-label='{{ i18n "pages.inbounds.generalActions" }}'>
+                      <span class="bo-clients-mobile-more-icon" aria-hidden="true">⏬</span>
+                    </a-button>
+                    <a-menu slot="overlay" class="bo-clients-mobile-actions"
+                      :theme="themeSwitcher.currentTheme"
                       :selected-keys="density === 'compact' ? ['density'] : []"
                       @click="handleMobileToolbarAction">
                       <a-menu-item key="bulkAdd" v-if="assignable.length">
@@ -237,14 +243,19 @@
                        the label it used to spell out lives in its tooltip, which is
                        where a glyph's meaning belongs when the glyph is in a column
                        of twelve identical ones. -->
+                  <template slot="subscriptionCopyCol" slot-scope="text, row">
+                    <a-tooltip v-if="subSettings.enable && row.subId">
+                      <template slot="title">{{ i18n "copy" }} · {{ i18n "subscription.title" }}</template>
+                      <span class="bo-lg-copy-cell">
+                        <a-button class="bo-lg-mobile-copy bo-lg-mobile-copy--column" type="link" icon="copy"
+                          :aria-label="'{{ i18n "copy" }} ' + row.email"
+                          @click.stop="copyText(subscriptionValue(row))"></a-button>
+                      </span>
+                    </a-tooltip>
+                  </template>
+
                   <template slot="accountCol" slot-scope="text, row">
                     <div class="bo-lg-who">
-                       <a-tooltip v-if="subSettings.enable && row.subId">
-                         <template slot="title">{{ i18n "copy" }} · {{ i18n "subscription.title" }}</template>
-                         <a-button class="bo-lg-mobile-copy" type="link" icon="copy"
-                           :aria-label="'{{ i18n "copy" }} ' + row.email"
-                           @click.stop="copyText(subscriptionValue(row))"></a-button>
-                       </a-tooltip>
                       <a-tooltip>
                         <template slot="title">[[ stateLabel(row) ]]</template>
                         <span class="bo-lamp" :class="lampClass(row)"></span>
@@ -668,28 +679,35 @@
         const col = (key, title, slot, extra) => Object.assign({
           title, key, scopedSlots: { customRender: slot },
         }, extra || {});
-        const hidden = this.isMobile ? { className: 'bo-clients-mobile-hide' } : null;
-        const account = col('email', '{{ i18n "pages.clients.email" }}', 'accountCol',
-          this.isMobile ? { width: 280 } : { width: 150 });
-        return [
-          account,
-          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol',
-            this.isMobile ? hidden : { width: 127 }),
-          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol',
-            this.isMobile ? hidden : { width: 93 }),
-          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol',
-            this.isMobile ? hidden : { width: 169 }),
-          col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol',
-            this.isMobile ? hidden : { width: 100 }),
+        const columns = [
+          col('email', '{{ i18n "pages.clients.email" }}', 'accountCol', {
+            width: 150, className: 'bo-lg-email-column',
+          }),
+          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', {
+            width: 127, className: 'bo-lg-used-column',
+          }),
+          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 93 }),
+          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 169 }),
+          col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol', { width: 100 }),
           // 104 fitted a switch and a menu button. The Account Info button made three
           // controls, which overflowed the cell and gave the whole table a horizontal
           // scrollbar. Measured, not guessed: switch 28 + gap 6 + button 24 + gap 6 +
           // button 24 = 88, plus the cell's own padding.
-          Object.assign({ title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' } },
-            this.isMobile ? hidden : { width: 110, align: 'right' }),
+          { title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' }, width: 110, align: 'right' },
         ];
+        if (this.isMobile) {
+          // Replaces the expander column, which is hidden on phones; this keeps the
+          // copy action between selection and account without shifting data columns.
+          columns.unshift(col('subscriptionCopy', '', 'subscriptionCopyCol', {
+            width: 30, className: 'bo-lg-copy-column',
+          }));
+        }
+        return columns;
       },
-      tableScroll() { return this.isMobile ? { x: 360 } : { x: 980 }; },
+      // On phones the explicit widths add up to 821px including selection and
+      // copy; do not give the table spare width that makes Ant stretch the email
+      // cell and breaks the link-to-traffic alignment.
+      tableScroll() { return this.isMobile ? { x: 821 } : { x: 980 }; },
     },
     methods: {
       sizeFormat(b) { return SizeFormatter.sizeFormat(b || 0); },

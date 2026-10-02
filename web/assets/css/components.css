@@ -2873,8 +2873,12 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
 /* Mobile Clients page: keep the primary add action beside one overflow menu,
    then give the search and account list the full available width. */
 .bo-clients-desktop-actions { display:contents; }
-.bo-clients-mobile-menu,
-.bo-lg-mobile-copy { display:none; }
+.bo-clients-mobile-menu { display:none; }
+.bo-lg-mobile-copy {
+  display:inline-flex; flex:0 0 32px; width:32px; height:32px;
+  align-items:center; justify-content:center; padding:0;
+}
+.bo-lg-mobile-copy .anticon { font-size:17px; }
 
 @media (max-width:560px) {
   .clients-page .bo-clients-toolbar-card .ant-card-body { padding:10px; }
@@ -2888,12 +2892,54 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   .clients-page .bo-clients-add { width:100%; height:42px; padding-inline:8px; }
   .clients-page .bo-clients-desktop-actions { display:none; }
   .clients-page .bo-clients-mobile-menu {
-    display:flex; align-items:stretch; width:44px; height:42px;
+    display:inline-flex; align-items:center; justify-content:center;
+    flex:0 0 44px; width:44px; height:42px;
   }
-  .clients-page .bo-clients-mobile-menu .ant-btn {
-    width:44px; height:42px !important; min-height:42px;
-    padding:0; display:inline-flex; align-items:center; justify-content:center;
+  .clients-page .bo-clients-mobile-menu.bo-clients-mobile-trigger {
+    box-sizing:border-box; width:44px !important; height:42px !important;
+    min-height:42px; padding:0 !important;
+    align-items:center; justify-content:center;
+    border-radius:9px; border-color:var(--accent); color:var(--accent);
+    background:var(--surface-2); line-height:1;
   }
+  .clients-page .bo-clients-mobile-more-icon {
+    display:flex; align-items:center; justify-content:center;
+    width:100%; height:100%; margin:0 auto;
+    font-family:system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+    font-size:18px; line-height:1; text-align:center;
+  }
+  .clients-page .ant-table-expand-icon-th,
+  .clients-page .ant-table-row-expand-icon-cell {
+    visibility:hidden !important; width:0 !important; min-width:0 !important;
+    max-width:0 !important; padding:0 !important; border:0 !important;
+    overflow:hidden !important; pointer-events:none !important;
+  }
+  .clients-page .bo-lg .bo-lg-copy-column {
+    width:30px !important; min-width:30px !important; max-width:30px !important;
+    padding:0 !important; text-align:center; vertical-align:middle;
+  }
+  .clients-page .bo-lg .bo-lg-email-column {
+    width:150px !important; min-width:150px !important; max-width:150px !important;
+  }
+  .clients-page .bo-lg .bo-lg-used-column {
+    width:127px !important; min-width:127px !important; max-width:127px !important;
+  }
+  .clients-page .bo-lg .bo-lg-copy-column .bo-lg-copy-cell {
+    display:flex; align-items:center; justify-content:center;
+    width:100%; height:100%;
+  }
+  .clients-page .bo-lg .bo-lg-copy-column .bo-lg-mobile-copy--column {
+    display:inline-flex; flex:0 0 24px; width:24px; height:24px;
+    align-items:center; justify-content:center; margin:0 auto !important;
+    padding:0 !important;
+  }
+  .clients-page .bo-lg .bo-lg-copy-column .anticon { font-size:15px; }
+  /* With the email column back at 150px, move the shared URL/credential start
+     left by 22px to line up with the fixed `used` column. */
+  .clients-page .bo-lg .bo-mb.bo-mb-sub {
+    grid-template-columns:minmax(0,194px) minmax(0,1fr);
+  }
+  .clients-page .bo-lg .bo-mb--cred-aligned .bo-mb-id { flex:0 0 194px; }
   .clients-page .bo-clients-search {
     grid-column:1 / -1; width:100%; max-width:none !important;
   }
@@ -2902,10 +2948,6 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   .clients-page .bo-content { padding-inline:8px; }
   .clients-page .ant-row { margin-inline:0 !important; }
   .clients-page .ant-col { padding-inline:0 !important; }
-  .clients-page .ant-card { margin-bottom:10px !important; }
-  .clients-page .bo-lg > .ant-card-body { padding:8px; }
-  .clients-page .bo-lg .ant-table { width:100%; table-layout:fixed; }
-  .clients-page .bo-clients-mobile-hide { display:none !important; }
   .clients-page .ant-alert-message,
   .clients-page .ant-alert-message .ant-space {
     display:flex; flex-wrap:wrap; gap:8px; width:100%; max-width:100%; min-width:0;
@@ -2914,16 +2956,38 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   .clients-page .ant-alert-message .ant-btn {
     max-width:100%; height:auto; min-height:24px; white-space:normal;
   }
-  .clients-page .bo-lg .ant-table-tbody > tr.ant-table-row > td { padding:7px 5px !important; }
-  .clients-page .ant-table-expand-icon-th,
-  .clients-page .ant-table-row-expand-icon-cell { width:26px; min-width:26px; }
-  .clients-page .ant-table-selection-column { width:34px; min-width:34px; }
-  .clients-page .bo-lg-who { gap:7px; }
-  .clients-page .bo-lg-names { flex:1 1 auto; }
-  .clients-page .bo-lg-name { white-space:normal; overflow-wrap:anywhere; }
-  .clients-page .bo-lg-mobile-copy {
-    display:inline-flex; flex:0 0 32px; width:32px; height:32px;
-    align-items:center; justify-content:center; padding:0;
-  }
-  .clients-page .bo-lg-mobile-copy .anticon { font-size:17px; }
+}
+
+/* The overflow menu is portalled to body, so theme it explicitly rather than
+   relying on the trigger's page class to reach the popup. */
+.bo-clients-mobile-overlay .bo-clients-mobile-actions,
+.bo-clients-mobile-actions.ant-menu {
+  min-width:256px; max-width:calc(100vw - 24px); padding:6px;
+  color:var(--text); background:var(--surface) !important;
+  border:1px solid var(--border); border-radius:12px;
+  box-shadow:var(--shadow-md);
+}
+.bo-clients-mobile-actions .ant-menu-item,
+.bo-clients-mobile-actions .ant-menu-submenu-title {
+  min-height:40px; height:auto !important; line-height:1.35 !important;
+  padding-block:10px !important; padding-inline:12px !important;
+  margin:2px 0 !important; border-radius:8px;
+  color:var(--text-2) !important; white-space:normal; overflow-wrap:anywhere;
+}
+.bo-clients-mobile-actions .ant-menu-item {
+  display:flex; align-items:center; gap:10px;
+}
+.bo-clients-mobile-actions .ant-menu-item .anticon,
+.bo-clients-mobile-actions .ant-menu-submenu-title .anticon {
+  flex:0 0 16px; width:16px; margin:0 !important;
+  color:var(--text-3);
+}
+.bo-clients-mobile-actions .ant-menu-submenu-arrow { color:var(--text-3) !important; }
+.bo-clients-mobile-actions .ant-menu-item-selected,
+.bo-clients-mobile-actions .ant-menu-item-selected:hover {
+  color:var(--accent) !important; background:var(--accent-weak) !important;
+  font-weight:var(--fw-semibold);
+}
+.bo-clients-mobile-actions .ant-menu-item-divider {
+  margin:6px 4px !important; background:var(--border);
 }
