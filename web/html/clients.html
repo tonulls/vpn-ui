@@ -142,7 +142,7 @@
                   </div>
 
                   <a-dropdown class="bo-clients-mobile-menu" :trigger="['click']">
-                    <a-button icon="down" aria-label='{{ i18n "actions" }}'></a-button>
+                    <a-button icon="down" aria-label='{{ i18n "pages.inbounds.generalActions" }}'></a-button>
                     <a-menu slot="overlay" :class="themeSwitcher.currentTheme"
                       :selected-keys="density === 'compact' ? ['density'] : []"
                       @click="handleMobileToolbarAction">
@@ -156,7 +156,7 @@
                       </a-menu-item>
                       <a-menu-item key="refresh">
                         <a-icon type="sync"></a-icon>
-                        {{ i18n "refresh" }}
+                        {{ i18n "update" }}
                       </a-menu-item>
                       <a-sub-menu key="autoRefresh" :title="'{{ i18n "pages.inbounds.autoRefresh" }}'">
                         <a-menu-item key="refreshToggle">
@@ -668,23 +668,28 @@
         const col = (key, title, slot, extra) => Object.assign({
           title, key, scopedSlots: { customRender: slot },
         }, extra || {});
+        const hidden = this.isMobile ? { className: 'bo-clients-mobile-hide' } : null;
         const account = col('email', '{{ i18n "pages.clients.email" }}', 'accountCol',
-          this.isMobile ? {} : { width: 150 });
-        if (this.isMobile) return [account];
+          this.isMobile ? { width: 280 } : { width: 150 });
         return [
           account,
-          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol', { width: 127 }),
-          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol', { width: 93 }),
-          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol', { width: 169 }),
-          col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol', { width: 100 }),
+          col('used', '{{ i18n "pages.clients.quota" }}', 'dataCol',
+            this.isMobile ? hidden : { width: 127 }),
+          col('expiry', '{{ i18n "pages.clients.expiry" }}', 'expiresCol',
+            this.isMobile ? hidden : { width: 93 }),
+          col('inbounds', '{{ i18n "pages.clients.inbounds" }}', 'servingCol',
+            this.isMobile ? hidden : { width: 169 }),
+          col('lastOnline', '{{ i18n "lastOnline" }}', 'seenCol',
+            this.isMobile ? hidden : { width: 100 }),
           // 104 fitted a switch and a menu button. The Account Info button made three
           // controls, which overflowed the cell and gave the whole table a horizontal
           // scrollbar. Measured, not guessed: switch 28 + gap 6 + button 24 + gap 6 +
           // button 24 = 88, plus the cell's own padding.
-          { title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' }, width: 110, align: 'right' },
+          Object.assign({ title: '', key: 'actions', scopedSlots: { customRender: 'rowCol' } },
+            this.isMobile ? hidden : { width: 110, align: 'right' }),
         ];
       },
-      tableScroll() { return this.isMobile ? undefined : { x: 980 }; },
+      tableScroll() { return this.isMobile ? { x: 360 } : { x: 980 }; },
     },
     methods: {
       sizeFormat(b) { return SizeFormatter.sizeFormat(b || 0); },
