@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.Use(requirePerm(model.PermPanelSettings))
 
 	g.POST("/all", a.getAllSetting)
+	g.GET("/telegramXrayRoutingOptions", a.telegramXrayRoutingOptions)
 	g.POST("/update", a.updateSetting)
 	g.POST("/updateUser", a.updateUser)
 	g.POST("/twoFactor", a.updateTwoFactor)
@@ -140,6 +142,46 @@ func (a *SettingController) getAllSetting(c *gin.Context) {
 	jsonObj(c, allSetting, nil)
 }
 
+func (a *SettingController) telegramXrayRoutingOptions(c *gin.Context) {
+	raw, err := a.settingService.GetXrayConfigTemplate()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
+		return
+	}
+	raw = service.UnwrapXrayTemplateConfig(raw)
+	var config struct {
+		Outbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"outbounds"`
+		Routing struct {
+			Balancers []struct {
+				Tag string `json:"tag"`
+			} `json:"balancers"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
+		return
+	}
+	outbounds := make([]string, 0, len(config.Outbounds))
+	for _, outbound := range config.Outbounds {
+		if outbound.Tag != "" {
+			outbounds = append(outbounds, outbound.Tag)
+		}
+	}
+	balancers := make([]string, 0, len(config.Routing.Balancers))
+	for _, balancer := range config.Routing.Balancers {
+		if balancer.Tag != "" {
+			balancers = append(balancers, balancer.Tag)
+		}
+	}
+	jsonObj(c, gin.H{
+		"inboundTags":  []string{service.TelegramBotXrayInboundTag()},
+		"outboundTags": outbounds,
+		"balancerTags": balancers,
+	}, nil)
+}
+
 // getDefaultSettings retrieves the default settings based on the host.
 func (a *SettingController) getDefaultSettings(c *gin.Context) {
 	// Panel-settings holders get the whole map; everyone else gets it minus the
@@ -155,14 +197,35 @@ func (a *SettingController) getDefaultSettings(c *gin.Context) {
 
 // updateSetting updates all settings with the provided data.
 func (a *SettingController) updateSetting(c *gin.Context) {
-	allSetting := &entity.AllSetting{}
-	err := c.ShouldBind(allSetting)
+	previous, err := a.settingService.GetAllSetting()
 	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
+		return
+	}
+	allSetting := &entity.AllSetting{}
+	if err := c.ShouldBind(allSetting); err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 		return
 	}
-	err = a.settingService.UpdateAllSetting(allSetting)
-	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+	if err := a.settingService.UpdateAllSetting(allSetting); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+		return
+	}
+	botSettingsChanged := previous.TgBotEnable != allSetting.TgBotEnable ||
+		previous.TgBotToken != allSetting.TgBotToken ||
+		previous.TgBotProxy != allSetting.TgBotProxy ||
+		previous.TgBotAPIServer != allSetting.TgBotAPIServer ||
+		previous.TgBotXrayRoutingEnabled != allSetting.TgBotXrayRoutingEnabled ||
+		previous.TgBotXrayInboundTag != allSetting.TgBotXrayInboundTag ||
+		previous.TgBotXrayOutboundTag != allSetting.TgBotXrayOutboundTag ||
+		previous.TgBotXrayBalancerTag != allSetting.TgBotXrayBalancerTag
+	if botSettingsChanged {
+		if err := service.RestartTelegramBot(); err != nil {
+			jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+			return
+		}
+	}
+	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), nil)
 }
 
 // setLegacyInboundForm switches the panel between the old inbound dialog and the

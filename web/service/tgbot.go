@@ -40,7 +40,9 @@ import (
 )
 
 var (
-	bot *telego.Bot
+	bot                      *telego.Bot
+	telegramBotRestartHookMu sync.RWMutex
+	telegramBotRestartHook   func() error
 
 	// botCancel stores the function to cancel the context, stopping Long Polling gracefully.
 	botCancel context.CancelFunc
@@ -95,6 +97,25 @@ var (
 )
 
 var userStates = make(map[int64]string)
+
+// SetTelegramBotRestartHook installs the server-owned lifecycle callback used
+// when Telegram settings are saved from the panel.
+func SetTelegramBotRestartHook(hook func() error) {
+	telegramBotRestartHookMu.Lock()
+	telegramBotRestartHook = hook
+	telegramBotRestartHookMu.Unlock()
+}
+
+// RestartTelegramBot asks the running server to apply persisted bot settings.
+func RestartTelegramBot() error {
+	telegramBotRestartHookMu.RLock()
+	hook := telegramBotRestartHook
+	telegramBotRestartHookMu.RUnlock()
+	if hook == nil {
+		return errors.New("Telegram bot lifecycle is not initialized")
+	}
+	return hook()
+}
 
 // telegramUpdatesViaLongPolling is the single polling seam used by the receiver;
 // keeping it replaceable lets lifecycle tests prove stop-before-start ordering.
@@ -231,8 +252,12 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	adminIds = parsedAdminIds
 	tgBotMutex.Unlock()
 
-	// Get Telegram bot proxy URL
+	// Xray-managed loopback SOCKS takes precedence without overwriting the saved
+	// external proxy value, so disabling the feature restores the old behavior.
 	tgBotProxy, err := t.settingService.GetTgBotProxy()
+	if enabled, e := t.settingService.GetTgBotXrayRoutingEnabled(); e == nil && enabled {
+		tgBotProxy = telegramBotXrayProxyURL
+	}
 	if err != nil {
 		logger.Warning("Failed to get Telegram bot proxy URL:", err)
 	}

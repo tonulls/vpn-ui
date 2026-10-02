@@ -41,30 +41,34 @@ type AllSetting struct {
 	Datepicker  string `json:"datepicker" form:"datepicker"`   // Date picker format
 
 	// Telegram bot settings
-	TgBotEnable           bool   `json:"tgBotEnable" form:"tgBotEnable"`                     // Enable Telegram bot
-	TgBotToken            string `json:"tgBotToken" form:"tgBotToken"`                       // Telegram bot token
-	TgBotProxy            string `json:"tgBotProxy" form:"tgBotProxy"`                       // Proxy URL for Telegram bot
-	TgBotAPIServer        string `json:"tgBotAPIServer" form:"tgBotAPIServer"`               // Custom API server for Telegram bot
-	TgBotChatId           string `json:"tgBotChatId" form:"tgBotChatId"`                     // Main Telegram bot admin user IDs; required when bot is enabled
-	TgBotAdditionalChatId string `json:"tgBotAdditionalChatId" form:"tgBotAdditionalChatId"` // Optional additional Telegram bot admin user IDs
-	TgRunTime             string `json:"tgRunTime" form:"tgRunTime"`                         // Legacy report schedule (retained for DB compatibility)
-	TgLang                string `json:"tgLang" form:"tgLang"`                               // Telegram bot language
-	TgForumEnable         bool   `json:"tgForumEnable" form:"tgForumEnable"`                 // Enable Telegram forum destination
-	TgForumChatId         string `json:"tgForumChatId" form:"tgForumChatId"`                 // Telegram forum supergroup chat ID
-	TgNotifyDirect        bool   `json:"tgNotifyDirect" form:"tgNotifyDirect"`               // Send event notifications to admins privately
-	TgNotifyForum         bool   `json:"tgNotifyForum" form:"tgNotifyForum"`                 // Send event notifications to forum
-	TgNotifyLoginSuccess  bool   `json:"tgNotifyLoginSuccess" form:"tgNotifyLoginSuccess"`   // Notify successful logins
-	TgNotifyLoginFailure  bool   `json:"tgNotifyLoginFailure" form:"tgNotifyLoginFailure"`   // Notify failed logins
-	TgNotifyCPU           bool   `json:"tgNotifyCPU" form:"tgNotifyCPU"`                     // Notify CPU threshold crossings
-	TgCpu                 int    `json:"tgCpu" form:"tgCpu"`                                 // CPU usage threshold for alerts
-	TgTopicLoginSuccess   string `json:"tgTopicLoginSuccess" form:"tgTopicLoginSuccess"`     // Forum thread ID for successful logins
-	TgTopicLoginFailure   string `json:"tgTopicLoginFailure" form:"tgTopicLoginFailure"`     // Forum thread ID for failed logins
-	TgTopicCPU            string `json:"tgTopicCPU" form:"tgTopicCPU"`                       // Forum thread ID for CPU alerts
-	TgBackupEnable        bool   `json:"tgBackupEnable" form:"tgBackupEnable"`               // Enable scheduled database backup
-	TgBackupIntervalHours int    `json:"tgBackupIntervalHours" form:"tgBackupIntervalHours"` // Backup interval in hours
-	TgBackupTopicId       string `json:"tgBackupTopicId" form:"tgBackupTopicId"`             // Forum thread ID for backups
-	TgBackupEncrypt       bool   `json:"tgBackupEncrypt" form:"tgBackupEncrypt"`             // Encrypt backup archive
-	TgBackupPassword      string `json:"tgBackupPassword" form:"tgBackupPassword"`           // Write-only backup archive password
+	TgBotEnable             bool   `json:"tgBotEnable" form:"tgBotEnable"`       // Enable Telegram bot
+	TgBotToken              string `json:"tgBotToken" form:"tgBotToken"`         // Telegram bot token
+	TgBotProxy              string `json:"tgBotProxy" form:"tgBotProxy"`         // Proxy URL for Telegram bot
+	TgBotAPIServer          string `json:"tgBotAPIServer" form:"tgBotAPIServer"` // Custom API server for Telegram bot
+	TgBotXrayRoutingEnabled bool   `json:"tgBotXrayRoutingEnabled" form:"tgBotXrayRoutingEnabled"`
+	TgBotXrayInboundTag     string `json:"tgBotXrayInboundTag" form:"tgBotXrayInboundTag"`
+	TgBotXrayOutboundTag    string `json:"tgBotXrayOutboundTag" form:"tgBotXrayOutboundTag"`
+	TgBotXrayBalancerTag    string `json:"tgBotXrayBalancerTag" form:"tgBotXrayBalancerTag"`
+	TgBotChatId             string `json:"tgBotChatId" form:"tgBotChatId"`                     // Main Telegram bot admin user IDs; required when bot is enabled
+	TgBotAdditionalChatId   string `json:"tgBotAdditionalChatId" form:"tgBotAdditionalChatId"` // Optional additional Telegram bot admin user IDs
+	TgRunTime               string `json:"tgRunTime" form:"tgRunTime"`                         // Legacy report schedule (retained for DB compatibility)
+	TgLang                  string `json:"tgLang" form:"tgLang"`                               // Telegram bot language
+	TgForumEnable           bool   `json:"tgForumEnable" form:"tgForumEnable"`                 // Enable Telegram forum destination
+	TgForumChatId           string `json:"tgForumChatId" form:"tgForumChatId"`                 // Telegram forum supergroup chat ID
+	TgNotifyDirect          bool   `json:"tgNotifyDirect" form:"tgNotifyDirect"`               // Send event notifications to admins privately
+	TgNotifyForum           bool   `json:"tgNotifyForum" form:"tgNotifyForum"`                 // Send event notifications to forum
+	TgNotifyLoginSuccess    bool   `json:"tgNotifyLoginSuccess" form:"tgNotifyLoginSuccess"`   // Notify successful logins
+	TgNotifyLoginFailure    bool   `json:"tgNotifyLoginFailure" form:"tgNotifyLoginFailure"`   // Notify failed logins
+	TgNotifyCPU             bool   `json:"tgNotifyCPU" form:"tgNotifyCPU"`                     // Notify CPU threshold crossings
+	TgCpu                   int    `json:"tgCpu" form:"tgCpu"`                                 // CPU usage threshold for alerts
+	TgTopicLoginSuccess     string `json:"tgTopicLoginSuccess" form:"tgTopicLoginSuccess"`     // Forum thread ID for successful logins
+	TgTopicLoginFailure     string `json:"tgTopicLoginFailure" form:"tgTopicLoginFailure"`     // Forum thread ID for failed logins
+	TgTopicCPU              string `json:"tgTopicCPU" form:"tgTopicCPU"`                       // Forum thread ID for CPU alerts
+	TgBackupEnable          bool   `json:"tgBackupEnable" form:"tgBackupEnable"`               // Enable scheduled database backup
+	TgBackupIntervalHours   int    `json:"tgBackupIntervalHours" form:"tgBackupIntervalHours"` // Backup interval in hours
+	TgBackupTopicId         string `json:"tgBackupTopicId" form:"tgBackupTopicId"`             // Forum thread ID for backups
+	TgBackupEncrypt         bool   `json:"tgBackupEncrypt" form:"tgBackupEncrypt"`             // Encrypt backup archive
+	TgBackupPassword        string `json:"tgBackupPassword" form:"tgBackupPassword"`           // Write-only backup archive password
 
 	// Security settings
 	TimeLocation    string `json:"timeLocation" form:"timeLocation"`       // Time zone location

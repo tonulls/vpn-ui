@@ -47,6 +47,10 @@ var defaultValueMap = map[string]string{
 	"tgBotToken":                  "",
 	"tgBotProxy":                  "",
 	"tgBotAPIServer":              "",
+	"tgBotXrayRoutingEnabled":     "false",
+	"tgBotXrayInboundTag":         "",
+	"tgBotXrayOutboundTag":        "",
+	"tgBotXrayBalancerTag":        "",
 	"tgBotChatId":                 "",
 	"tgBotAdditionalChatId":       "",
 	"tgRunTime":                   "@daily",
@@ -396,6 +400,22 @@ func (s *SettingService) GetTgBotAPIServer() (string, error) {
 
 func (s *SettingService) SetTgBotAPIServer(token string) error {
 	return s.setString("tgBotAPIServer", token)
+}
+
+func (s *SettingService) GetTgBotXrayRoutingEnabled() (bool, error) {
+	return s.getBool("tgBotXrayRoutingEnabled")
+}
+
+func (s *SettingService) GetTgBotXrayInboundTag() (string, error) {
+	return s.getString("tgBotXrayInboundTag")
+}
+
+func (s *SettingService) GetTgBotXrayOutboundTag() (string, error) {
+	return s.getString("tgBotXrayOutboundTag")
+}
+
+func (s *SettingService) GetTgBotXrayBalancerTag() (string, error) {
+	return s.getString("tgBotXrayBalancerTag")
 }
 
 func (s *SettingService) GetTgBotChatId() (string, error) {
@@ -1142,6 +1162,30 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	if err := allSetting.CheckValid(); err != nil {
 		return err
 	}
+	if allSetting.TgBotXrayRoutingEnabled {
+		if allSetting.TgBotXrayInboundTag != telegramBotXrayInboundTag {
+			return errors.New("Telegram Xray routing requires the managed loopback inboundTag")
+		}
+		raw, err := s.GetXrayConfigTemplate()
+		if err != nil {
+			return err
+		}
+		raw = UnwrapXrayTemplateConfig(raw)
+		candidate := &xray.Config{}
+		if err := json.Unmarshal([]byte(raw), candidate); err != nil {
+			return fmt.Errorf("parse Xray template for Telegram routing: %w", err)
+		}
+		if err := applyTelegramBotXrayRouting(candidate, telegramBotXraySettings{
+			Enabled: true, InboundTag: allSetting.TgBotXrayInboundTag,
+			Outbound: allSetting.TgBotXrayOutboundTag, Balancer: allSetting.TgBotXrayBalancerTag,
+		}); err != nil {
+			return err
+		}
+	}
+	oldTgXrayEnabled, _ := s.GetTgBotXrayRoutingEnabled()
+	oldTgXrayInbound, _ := s.GetTgBotXrayInboundTag()
+	oldTgXrayOutbound, _ := s.GetTgBotXrayOutboundTag()
+	oldTgXrayBalancer, _ := s.GetTgBotXrayBalancerTag()
 	oldForumChatID, _ := s.GetTgForumChatId()
 	oldXrayTrustedProxies, _ := s.GetXrayTrustedProxies()
 	topicKeys := []string{"tgTopicLoginSuccess", "tgTopicLoginFailure", "tgTopicCPU", "tgBackupTopicId"}
@@ -1189,7 +1233,11 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	if err := common.Combine(errs...); err != nil {
 		return err
 	}
-	if oldXrayTrustedProxies != allSetting.XrayTrustedProxies {
+	if oldXrayTrustedProxies != allSetting.XrayTrustedProxies ||
+		oldTgXrayEnabled != allSetting.TgBotXrayRoutingEnabled ||
+		oldTgXrayInbound != allSetting.TgBotXrayInboundTag ||
+		oldTgXrayOutbound != allSetting.TgBotXrayOutboundTag ||
+		oldTgXrayBalancer != allSetting.TgBotXrayBalancerTag {
 		(&XrayService{}).SetToNeedRestart()
 	}
 	return nil

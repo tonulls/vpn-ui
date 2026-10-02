@@ -184,6 +184,44 @@
                     v-model="allSetting.tgBotAPIServer"></a-input>
             </template>
         </a-setting-list-item>
+        <a-setting-list-item paddings="small">
+            <template #title>Включить проксирование через Xray</template>
+            <template #description>Направляет запросы Telegram-бота через выбранный Xray outbound или balancer. По умолчанию выключено.</template>
+            <template #control>
+                <a-switch v-model="allSetting.tgBotXrayRoutingEnabled"></a-switch>
+            </template>
+        </a-setting-list-item>
+        <template v-if="allSetting.tgBotXrayRoutingEnabled">
+            <a-setting-list-item paddings="small">
+                <template #title>inboundTag</template>
+                <template #description>Локальный SOCKS inbound для Telegram-бота (доступен только на localhost).</template>
+                <template #control>
+                    <a-select v-model="allSetting.tgBotXrayInboundTag" placeholder="Выберите inboundTag" style="min-width: 220px">
+                        <a-select-option v-for="tag in telegramXrayRoutingOptions.inboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+                    </a-select>
+                </template>
+            </a-setting-list-item>
+            <a-setting-list-item paddings="small">
+                <template #title>outboundTag</template>
+                <template #description>Выберите одну исходящую цель. Вторая цель при выборе будет очищена.</template>
+                <template #control>
+                    <a-select v-model="allSetting.tgBotXrayOutboundTag" placeholder="Не выбрано" allow-clear style="min-width: 220px"
+                        @change="allSetting.tgBotXrayBalancerTag = ''">
+                        <a-select-option v-for="tag in telegramXrayRoutingOptions.outboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+                    </a-select>
+                </template>
+            </a-setting-list-item>
+            <a-setting-list-item paddings="small">
+                <template #title>balancerTag</template>
+                <template #description>Взаимоисключается с outboundTag. Сохранённый внешний Socks5 временно не используется.</template>
+                <template #control>
+                    <a-select v-model="allSetting.tgBotXrayBalancerTag" placeholder="Не выбрано" allow-clear style="min-width: 220px"
+                        @change="allSetting.tgBotXrayOutboundTag = ''">
+                        <a-select-option v-for="tag in telegramXrayRoutingOptions.balancerTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+                    </a-select>
+                </template>
+            </a-setting-list-item>
+        </template>
     </a-collapse-panel>
 </a-collapse>
 {{end}}

@@ -26,6 +26,31 @@ func (s *XraySettingService) SaveXraySetting(newXraySettings string) error {
 	if err := s.CheckXrayConfig(newXraySettings); err != nil {
 		return err
 	}
+	if enabled, err := s.GetTgBotXrayRoutingEnabled(); err != nil {
+		return err
+	} else if enabled {
+		candidate := &xray.Config{}
+		if err := json.Unmarshal([]byte(newXraySettings), candidate); err != nil {
+			return err
+		}
+		inboundTag, err := s.GetTgBotXrayInboundTag()
+		if err != nil {
+			return err
+		}
+		outboundTag, err := s.GetTgBotXrayOutboundTag()
+		if err != nil {
+			return err
+		}
+		balancerTag, err := s.GetTgBotXrayBalancerTag()
+		if err != nil {
+			return err
+		}
+		if err := applyTelegramBotXrayRouting(candidate, telegramBotXraySettings{
+			Enabled: true, InboundTag: inboundTag, Outbound: outboundTag, Balancer: balancerTag,
+		}); err != nil {
+			return common.NewErrorf("cannot save Xray config while Telegram routing is enabled: %v", err)
+		}
+	}
 	// Pull down any geo data file the new rules reference, before the config that
 	// references it becomes the config on disk. Choosing "Iran" in the routing
 	// editor writes `ext:geoip_IR.dat:ir`, and on a GEO_LEAN build nothing has put

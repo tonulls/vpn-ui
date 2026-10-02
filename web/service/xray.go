@@ -544,6 +544,30 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		logger.Warning("could not synthesize the carrier bridges:", err)
 	}
 
+	tgRoutingEnabled, err := s.settingService.GetTgBotXrayRoutingEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if tgRoutingEnabled {
+		tgInboundTag, err := s.settingService.GetTgBotXrayInboundTag()
+		if err != nil {
+			return nil, err
+		}
+		tgOutboundTag, err := s.settingService.GetTgBotXrayOutboundTag()
+		if err != nil {
+			return nil, err
+		}
+		tgBalancerTag, err := s.settingService.GetTgBotXrayBalancerTag()
+		if err != nil {
+			return nil, err
+		}
+		if err := applyTelegramBotXrayRouting(xrayConfig, telegramBotXraySettings{
+			Enabled: true, InboundTag: tgInboundTag, Outbound: tgOutboundTag, Balancer: tgBalancerTag,
+		}); err != nil {
+			return nil, err
+		}
+	}
+
 	return xrayConfig, nil
 }
 

@@ -540,6 +540,18 @@ func (s *Server) Start() (err error) {
 	s.cron.Start()
 
 	s.customGeoService = service.NewCustomGeoService()
+	service.SetTelegramBotRestartHook(func() error {
+		enabled, settingErr := s.settingService.GetTgbotEnabled()
+		if settingErr != nil {
+			return settingErr
+		}
+		botService := s.tgbotService.NewTgbot()
+		if !enabled {
+			botService.Stop()
+			return nil
+		}
+		return botService.Start(i18nFS)
+	})
 
 	engine, err := s.initRouter()
 	if err != nil {
@@ -641,6 +653,7 @@ func (s *Server) Stop() error {
 	// Always stop Telegram polling on server shutdown. IsRunning can already be
 	// false during receiver teardown while its long-poll request is still exiting.
 	s.tgbotService.Stop()
+	service.SetTelegramBotRestartHook(nil)
 	// Gracefully stop WebSocket hub
 	if s.wsHub != nil {
 		s.wsHub.Stop()

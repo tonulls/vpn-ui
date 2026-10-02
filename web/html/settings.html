@@ -208,6 +208,7 @@
       },
       oldAllSetting: new AllSetting(),
       allSetting: new AllSetting(),
+      telegramXrayRoutingOptions: { inboundTags: [], outboundTags: [], balancerTags: [] },
       saveBtnDisable: true,
       entryHost: null,
       entryPort: null,
@@ -405,6 +406,10 @@
         const groups = head.length + tail.length;
 
         return parts.length === 2 ? groups < 8 : groups === 8;
+      },
+      async loadTelegramXrayRoutingOptions() {
+        const msg = await HttpUtil.get("/panel/setting/telegramXrayRoutingOptions");
+        if (msg && msg.success && msg.obj) this.telegramXrayRoutingOptions = msg.obj;
       },
       async getAllSetting() {
         const msg = await HttpUtil.post("/panel/setting/all");
@@ -1293,6 +1298,14 @@
           this.$message.error('Введите пароль для шифрования архива.');
           return;
         }
+        if (this.allSetting.tgBotXrayRoutingEnabled) {
+          const hasOutbound = !!this.allSetting.tgBotXrayOutboundTag;
+          const hasBalancer = !!this.allSetting.tgBotXrayBalancerTag;
+          if (!this.allSetting.tgBotXrayInboundTag || hasOutbound === hasBalancer) {
+            this.$message.error('Выберите inboundTag и ровно одну цель: outboundTag или balancerTag.');
+            return;
+          }
+        }
         this.loading(true);
         const msg = await HttpUtil.post("/panel/setting/update", this.allSetting);
         this.loading(false);
@@ -1682,6 +1695,7 @@
       this.entryProtocol = window.location.protocol;
       this.entryIsIP = this._isIp(this.entryHost);
       await this.getAllSetting();
+      await this.loadTelegramXrayRoutingOptions();
       await this.loadInboundTags();
       await this.loadServiceState();
       await this.loadServiceLog();
