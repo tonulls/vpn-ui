@@ -46,26 +46,24 @@ the core rather than by a daemon, and they work as **inbounds and outbounds**:
 - Ability to **Freeze** accounts
 - Added **checkboxes** to clients and **Inbound**s
 - **Bulk Operation** support:
-    * Bulk change of accounts' traffic
-    * Bulk change of accounts' days
-    * Bulk enable/disable of accounts
-    * Bulk delete of accounts
-    * Bulk delete of Inbounds
-    * Bulk **Freeze/Un-Freeze** of accounts
+  * Bulk change of accounts' traffic
+  * Bulk change of accounts' days
+  * Bulk enable/disable of accounts
+  * Bulk delete of accounts
+  * Bulk delete of Inbounds
+  * Bulk **Freeze/Un-Freeze** of accounts
 
 ## Tested Operating Systems
 
-
-| | Distribution |Version |Version |
-|:---:|:---|:---:|:---:|
-| <img src="https://cdn.simpleicons.org/ubuntu" width="32" height="32" alt="Ubuntu"> | **Ubuntu** | `24.04` | `26.04` |
-| <img src="https://cdn.simpleicons.org/debian" width="32" height="32" alt="Debian"> | **Debian** | `12` | `13` |
-| <img src="https://cdn.simpleicons.org/fedora" width="32" height="32" alt="Fedora"> | **Fedora** | `43` | `44` |
-| <img src="https://cdn.simpleicons.org/almalinux/2F80ED" width="32" height="32" alt="AlmaLinux"> | **AlmaLinux** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/rockylinux" width="32" height="32" alt="Rocky Linux"> | **Rocky Linux** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/centos" width="32" height="32" alt="CentOS Stream"> | **CentOS Stream** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/archlinux" width="32" height="32" alt="Arch Linux"> | **Arch Linux** | `Rolling` | |
-
+|  | Distribution            |   Version   |  Version  |
+| :-: | :---------------------- | :---------: | :-------: |
+|  | **Ubuntu**        |  `24.04`  | `26.04` |
+|  | **Debian**        |   `12`   |  `13`  |
+|  | **Fedora**        |   `43`   |  `44`  |
+|  | **AlmaLinux**     |    `9`    |  `10`  |
+|  | **Rocky Linux**   |    `9`    |  `10`  |
+|  | **CentOS Stream** |    `9`    |  `10`  |
+|  | **Arch Linux**    | `Rolling` |          |
 
 > [!IMPORTANT]
 > It is strongly recommended that you install the panel on one of the tested operating systems, because there is a high chance that the new cores will not work correctly on other operating systems!
@@ -209,7 +207,7 @@ flowchart TB
 ## Building from Source
 
 ```bash
-git clone https://github.com/Sir-MmD/vpn-ui.git && cd vpn-ui
+git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 ./build.sh
 ```
 
@@ -227,35 +225,35 @@ A complete **E2E** test written in Python has been designed for this project ins
 > [!IMPORTANT]
 > The full E2E test is extremely time-consuming; if you have only made a small change to the project, it is better to test only that specific part using the `--tests` switch:
 
-| Test ID | Description |
-| :--- | :--- |
-| `core-init` | provision kernel modules + packages + xray core |
-| `server-setup` | create inbounds + accounts + source-IP routing rules |
-| `openvpn` | connect variants + checks + peer reachability (OpenVPN) |
-| `l2tp` | connect variants + checks + peer reachability (L2TP/IPsec) |
-| `pptp` | connect variants + checks + peer reachability (PPTP) |
-| `openconnect` | connect variants + checks + peer reachability + same-NAT user-limit (OpenConnect/ocserv) |
-| `sstp` | connect variants + checks + peer reachability (SSTP/accel-ppp, PPP-over-TLS) |
-| `ikev2` | connect + checks + peer reachability (IKEv2/IPsec, strongSwan charon; eap-mschapv2 + psk + eap-tls) |
-| `wg-c` | connect + checks + peer reachability + per-account usage/termination (WireGuard C, in-kernel wgctrl, gateway /29, + preshared-key mode) |
-| `awg` | connect + checks + peer reachability + per-account usage/termination (AmneziaWG, in-kernel amneziawg DKMS module, obfuscation params, + preshared-key mode) |
-| `gre` | connect + checks + peer reachability + per-account usage/termination (GRE site-to-site, in-kernel ip_gre; raw / IPsec / FOU peer modes, static and dynamic peers) |
-| `mtproto` | alias: runs every MTProto phase below (MTProto Proxy, telemt) |
-| `mtproto-classic` | handshake + relay to a real Telegram DC + wrong-secret control + usage (obfuscated2) |
-| `mtproto-secure` | same, "dd" random-padding secret |
-| `mtproto-tls` | same + FakeTLS ServerHello HMAC verified, "ee" secret |
-| `mtproto-toggle` | editing an account's modes takes effect on the RUNNING daemon (no restart) |
-| `mtproto-termination` | quota auto-disables the account AND the proxy stops relaying for it |
-| `mtproto-adtag` | an ad tag forces middle-proxy egress and drops the inbound's Xray routing, and clearing it restores both |
-| `ssh` | connect + checks + routing + user-limit + both strategies + per-account usage/termination (SSH relay, in-binary Go gateway) |
-| `ssh-udp` | UDP through the relay: udpgw terminated in-process and bridged to Xray via SOCKS5 UDP ASSOCIATE, plus accounting |
-| `bulk-ops` | bulk client add/sub/enable/disable + TXT/PDF export via API |
-| `backup-restore` | DB export + import round-trip |
-| `warp-socks` | Cloudflare warp-cli SOCKS install + egress |
-| `random-cfg` | `--random` switch: randomize port + creds + webpath, then restore |
-| `systemd` | `--systemd` switch: install + run the panel as a systemd unit |
-| `uninstall` | `--uninstall` switch: install everything, tear down, assert clean host |
-| `export-js` | host-side Node TXT/PDF export test (no VM) |
+| Test ID                 | Description                                                                                                                                                       |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core-init`           | provision kernel modules + packages + xray core                                                                                                                   |
+| `server-setup`        | create inbounds + accounts + source-IP routing rules                                                                                                              |
+| `openvpn`             | connect variants + checks + peer reachability (OpenVPN)                                                                                                           |
+| `l2tp`                | connect variants + checks + peer reachability (L2TP/IPsec)                                                                                                        |
+| `pptp`                | connect variants + checks + peer reachability (PPTP)                                                                                                              |
+| `openconnect`         | connect variants + checks + peer reachability + same-NAT user-limit (OpenConnect/ocserv)                                                                          |
+| `sstp`                | connect variants + checks + peer reachability (SSTP/accel-ppp, PPP-over-TLS)                                                                                      |
+| `ikev2`               | connect + checks + peer reachability (IKEv2/IPsec, strongSwan charon; eap-mschapv2 + psk + eap-tls)                                                               |
+| `wg-c`                | connect + checks + peer reachability + per-account usage/termination (WireGuard C, in-kernel wgctrl, gateway /29, + preshared-key mode)                           |
+| `awg`                 | connect + checks + peer reachability + per-account usage/termination (AmneziaWG, in-kernel amneziawg DKMS module, obfuscation params, + preshared-key mode)       |
+| `gre`                 | connect + checks + peer reachability + per-account usage/termination (GRE site-to-site, in-kernel ip_gre; raw / IPsec / FOU peer modes, static and dynamic peers) |
+| `mtproto`             | alias: runs every MTProto phase below (MTProto Proxy, telemt)                                                                                                     |
+| `mtproto-classic`     | handshake + relay to a real Telegram DC + wrong-secret control + usage (obfuscated2)                                                                              |
+| `mtproto-secure`      | same, "dd" random-padding secret                                                                                                                                  |
+| `mtproto-tls`         | same + FakeTLS ServerHello HMAC verified, "ee" secret                                                                                                             |
+| `mtproto-toggle`      | editing an account's modes takes effect on the RUNNING daemon (no restart)                                                                                        |
+| `mtproto-termination` | quota auto-disables the account AND the proxy stops relaying for it                                                                                               |
+| `mtproto-adtag`       | an ad tag forces middle-proxy egress and drops the inbound's Xray routing, and clearing it restores both                                                          |
+| `ssh`                 | connect + checks + routing + user-limit + both strategies + per-account usage/termination (SSH relay, in-binary Go gateway)                                       |
+| `ssh-udp`             | UDP through the relay: udpgw terminated in-process and bridged to Xray via SOCKS5 UDP ASSOCIATE, plus accounting                                                  |
+| `bulk-ops`            | bulk client add/sub/enable/disable + TXT/PDF export via API                                                                                                       |
+| `backup-restore`      | DB export + import round-trip                                                                                                                                     |
+| `warp-socks`          | Cloudflare warp-cli SOCKS install + egress                                                                                                                        |
+| `random-cfg`          | `--random` switch: randomize port + creds + webpath, then restore                                                                                               |
+| `systemd`             | `--systemd` switch: install + run the panel as a systemd unit                                                                                                   |
+| `uninstall`           | `--uninstall` switch: install everything, tear down, assert clean host                                                                                          |
+| `export-js`           | host-side Node TXT/PDF export test (no VM)                                                                                                                        |
 
 To test on only one specific operating system, you can use the `--only` switch:
 
@@ -265,16 +263,6 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
-🔹USDC-Polygon: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
+🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
-🔹USDT-BEP20: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
-
-🔹USDT-TRC20: ```TXEhckDXtdLGAjP5PZXfNnQjPHzEVTcBmR```
-
-🔹TRX: ```TXEhckDXtdLGAjP5PZXfNnQjPHzEVTcBmR```
-
-🔹LTC: ```ltc1qmapmnuf6cq9x679nmu0k4uyq779mxxcwnkgdll```
-
-🔹BTC: ```bc1q62w7lyndzndsp74vj4dsayvun8xnapzq6hx5ea```
-
-🔹ETH: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
+🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``

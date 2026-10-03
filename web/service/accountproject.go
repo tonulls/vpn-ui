@@ -1167,6 +1167,20 @@ func (s *AccountService) SaveAccountWithoutInbound(entry map[string]any, creator
 		if err != nil {
 			return err
 		}
+		if rawSubID, present := entry["subId"]; present {
+			subID, ok := rawSubID.(string)
+			if !ok {
+				return common.NewError("Subscription id must be a string.")
+			}
+			if err := ValidateClientSubID(subID); err != nil {
+				return err
+			}
+			if existing == nil || existing.SubID != subID {
+				if err := ValidateNewClientSubID(subID); err != nil {
+					return err
+				}
+			}
+		}
 		var traffic xray.ClientTraffic
 		trafficErr := tx.Where("LOWER(TRIM(email)) = ?", key).First(&traffic).Error
 		if trafficErr != nil && trafficErr != gorm.ErrRecordNotFound {

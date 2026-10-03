@@ -30,11 +30,12 @@ const (
 	// its whole management column and found out which parts they held by clicking
 	// and reading the refusal.
 	//
-	// It scopes a PAGE, not a capability: every action it reveals still needs its
-	// own bit underneath, and this one grants none of them on its own. Deliberately
-	// reaches nothing escalation-class either -- backup, restore, DB export/import,
-	// logs, config.json and the panel update stay super-admin-only and stay hidden,
-	// because those hand over the panel outright and no delegated bit should.
+	// It scopes the overview's actions. This is intentionally powerful: the panel
+	// update can replace the running binary as root, logs include other admins' data,
+	// and database imports replace the store. Global config and full DB reads/exports
+	// additionally require PermSensitiveExports, so overview management alone does
+	// not expose stored credentials or password hashes. See the route gates in
+	// web/controller/server.go before changing this boundary.
 	//
 	// APPENDED, for the reason above.
 	PermOverviewManage
@@ -59,6 +60,11 @@ const (
 	//
 	// APPENDED, for the reason above.
 	PermAccessOverview
+	// PermSensitiveExports is a second, explicit gate for downloading the global
+	// generated Xray config or SQLite database. It must be combined with the
+	// overview-management grant; those exports contain credentials and password hashes.
+	// APPENDED to preserve every mask already stored in the database.
+	PermSensitiveExports
 )
 
 // resellerPerms is what a reseller may do, derived from the role rather than
@@ -109,6 +115,7 @@ var AllPermissions = []PermissionDef{
 	{PermManageResellers, "manageResellers"},
 	{PermAccessOverview, "accessOverview"},
 	{PermOverviewManage, "manageOverview"},
+	{PermSensitiveExports, "accessSensitiveExports"},
 }
 
 // Has reports whether every bit in q is set in p.
@@ -141,9 +148,9 @@ func PermissionsFromSlugs(slugs []string) Permission {
 	return p
 }
 
-// Can reports whether the user may do perm. Super admins may do anything, which
-// is why they are the only account type that can reach the escalation-class
-// endpoints (DB export/import, panel update, systemd unit, host reboot).
+// Can reports whether the user may do perm. Super admins may do anything. Route-level
+// checks may combine permissions or role-specific profile grants for higher-risk
+// actions; sensitive exports require both overview management and the explicit grant.
 func (u *User) Can(perm Permission) bool {
 	if u == nil || !u.Enable {
 		return false

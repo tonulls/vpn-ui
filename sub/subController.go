@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
+	"github.com/mhsanaei/3x-ui/v2/web/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -101,6 +102,7 @@ func NewSUBController(
 // on the provided router group.
 func (a *SUBController) initRouter(g *gin.RouterGroup) {
 	gLink := g.Group(a.subPath)
+	gLink.Use(subscriptionPrivacyHeaders())
 	gLink.GET(":subid", a.subs)
 	// Client config downloads offered by the subscriber page (OpenVPN .ovpn, wg-c/awg
 	// .conf). Under the raw sub path so it inherits the same host, port and base path,
@@ -108,11 +110,24 @@ func (a *SUBController) initRouter(g *gin.RouterGroup) {
 	gLink.GET(":subid/configs/:key", a.subConfig)
 	if a.jsonEnabled {
 		gJson := g.Group(a.subJsonPath)
+		gJson.Use(subscriptionPrivacyHeaders())
 		gJson.GET(":subid", a.subJsons)
 	}
 	if a.clashEnabled {
 		gClash := g.Group(a.subClashPath)
+		gClash.Use(subscriptionPrivacyHeaders())
 		gClash.GET(":subid", a.subClashs)
+	}
+}
+
+// subscriptionPrivacyHeaders reduce persistence and referrer leakage for URLs
+// whose path itself is the bearer credential. Clients will simply refresh on their
+// configured subscription interval rather than relying on a shared HTTP cache.
+func subscriptionPrivacyHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "private, no-store")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Next()
 	}
 }
 
@@ -144,24 +159,32 @@ func (a *SUBController) subs(c *gin.Context) {
 			if !a.clashEnabled {
 				subClashURL = ""
 			}
-			// Get base_path from context (set by middleware)
+			// Keep static assets on the configured, token-free subscription path.
+			// The subId authorizes the page/config requests; it must not be copied
+			// into stylesheet, script, font or image request URLs.
 			basePath, exists := c.Get("base_path")
-			if !exists {
-				basePath = "/"
+			basePathStr, ok := basePath.(string)
+			if !exists || !ok || basePathStr == "" {
+				basePathStr = "/"
 			}
-			// Add subId to base_path for asset URLs
-			basePathStr := basePath.(string)
-			if basePathStr == "/" {
-				basePathStr = "/" + subId + "/"
-			} else {
-				// Remove trailing slash if exists, add subId, then add trailing slash
-				basePathStr = strings.TrimRight(basePathStr, "/") + "/" + subId + "/"
+			if !strings.HasSuffix(basePathStr, "/") {
+				basePathStr += "/"
 			}
 			page := a.subService.BuildPageData(subId, hostHeader, traffic, lastOnline, subs, subURL, subJsonURL, subClashURL, basePathStr)
 			// OpenVPN and WireGuard cannot be set up from a link: the page offers their
 			// config files as downloads. Rendered only for the browser view, since a
 			// subscription client has no use for them.
 			page.Configs = a.subService.ConfigLinks(subId, host, scheme, hostWithPort, a.subPath)
+
+			// The donation button is only exposed when the operator has enabled and
+			// configured the list. Read it when rendering so settings changes take
+			// effect without restarting the subscription listener.
+			var donationEntries []service.DonationEntry
+			var settingService service.SettingService
+			if donations, err := settingService.GetDonationSettings(); err == nil && donations.Enabled {
+				donationEntries = donations.Entries
+			}
+
 			c.HTML(200, "subpage.html", gin.H{
 				"title":                "subscription.title",
 				"page_title":           a.subPageTitle,
@@ -194,6 +217,7 @@ func (a *SUBController) subs(c *gin.Context) {
 				"subClashUrl":          page.SubClashUrl,
 				"result":               page.Result,
 				"configs":              page.Configs,
+				"donate":               donationEntries,
 			})
 			return
 		}

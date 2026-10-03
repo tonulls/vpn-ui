@@ -88,10 +88,14 @@
     <!-- A super admin bypasses the mask entirely, so offering checkboxes would imply
          a limit that does not exist. -->
     <a-form-item v-if="!adminModal.admin.isSuperAdmin" label='{{ i18n "pages.admins.permissions" }}'>
-      <a-checkbox-group v-model="adminModal.admin.permissions" :style="{ width: '100%' }">
+      <a-checkbox-group v-model="adminModal.admin.permissions" :style="{ width: '100%' }"
+        @change="adminModal.onPermissionsChange">
         <a-row>
           <a-col :span="24" v-for="slug in adminModal.allPermissions" :key="slug">
-            <a-checkbox :value="slug">[[ adminModal.permLabel(slug) ]]</a-checkbox>
+            <a-checkbox :value="slug"
+              :disabled="slug === 'accessSensitiveExports' && !adminModal.admin.permissions.includes('manageOverview')">
+              [[ adminModal.permLabel(slug) ]]
+            </a-checkbox>
           </a-col>
         </a-row>
       </a-checkbox-group>
@@ -118,6 +122,7 @@
     manageResellers: '{{ i18n "pages.admins.manageResellers" }}',
     accessOverview: '{{ i18n "pages.admins.accessOverview" }}',
     manageOverview: '{{ i18n "pages.admins.manageOverview" }}',
+    accessSensitiveExports: '{{ i18n "pages.admins.accessSensitiveExports" }}',
   };
 
   const adminModal = {
@@ -132,6 +137,11 @@
     allInbounds: [],
     admin: { id: 0, username: '', password: '', nickname: '', enable: true, isSuperAdmin: false, permissions: [], subscriptionLimit: 0, inboundIds: [] },
 
+    onPermissionsChange(selected) {
+      if (!selected.includes('manageOverview')) {
+        this.admin.permissions = selected.filter(permission => permission !== 'accessSensitiveExports');
+      }
+    },
     permLabel(slug) {
       return PERMISSION_LABELS[slug] || slug;
     },

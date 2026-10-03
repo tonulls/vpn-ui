@@ -57,6 +57,9 @@ type resellerForm struct {
 	// AllowOverviewManage turns that overview from a showcase into a page that can
 	// act. No effect unless AllowOverview is on.
 	AllowOverviewManage bool `json:"allowOverviewManage" form:"allowOverviewManage"`
+	// This separate opt-in grants the global Xray config and full database exports,
+	// and has no effect unless both overview switches are enabled.
+	AllowSensitiveExports bool `json:"allowSensitiveExports" form:"allowSensitiveExports"`
 
 	// InboundIds arrives as repeated `inboundIds` keys (Qs arrayFormat:'repeat').
 	// A blank entry is how the UI sends "none": an omitted field would bind as nil
@@ -107,27 +110,28 @@ func (f *resellerForm) spec() (service.ResellerSpec, error) {
 		return service.ResellerSpec{}, err
 	}
 	return service.ResellerSpec{
-		Username:            f.Username,
-		Password:            f.Password,
-		Nickname:            f.Nickname,
-		Enable:              f.Enable,
-		AllowanceGB:         f.AllowanceGB,
-		Unlimited:           f.Unlimited,
-		DaysPerGB:           f.DaysPerGB,
-		BalanceResetDays:    f.BalanceResetDays,
-		BalanceResetStart:   f.BalanceResetStart,
-		MinCreateGB:         f.MinCreateGB,
-		SubscriptionLimit:   f.SubscriptionLimit,
-		MinAddGB:            f.MinAddGB,
-		AllowExternalProxy:  f.AllowExternalProxy,
-		ClientLimitsEnabled: f.ClientLimitsEnabled,
-		ClientLimitIP:       f.ClientLimitIP,
-		ClientLimitDevices:  devices,
-		ClientLimitDown:     down,
-		ClientLimitUp:       up,
-		AllowOverview:       f.AllowOverview,
-		AllowOverviewManage: f.AllowOverviewManage,
-		InboundIds:          f.inboundIds(),
+		Username:              f.Username,
+		Password:              f.Password,
+		Nickname:              f.Nickname,
+		Enable:                f.Enable,
+		AllowanceGB:           f.AllowanceGB,
+		Unlimited:             f.Unlimited,
+		DaysPerGB:             f.DaysPerGB,
+		BalanceResetDays:      f.BalanceResetDays,
+		BalanceResetStart:     f.BalanceResetStart,
+		MinCreateGB:           f.MinCreateGB,
+		SubscriptionLimit:     f.SubscriptionLimit,
+		MinAddGB:              f.MinAddGB,
+		AllowExternalProxy:    f.AllowExternalProxy,
+		ClientLimitsEnabled:   f.ClientLimitsEnabled,
+		ClientLimitIP:         f.ClientLimitIP,
+		ClientLimitDevices:    devices,
+		ClientLimitDown:       down,
+		ClientLimitUp:         up,
+		AllowOverview:         f.AllowOverview,
+		AllowOverviewManage:   f.AllowOverviewManage,
+		AllowSensitiveExports: f.AllowSensitiveExports,
+		InboundIds:            f.inboundIds(),
 	}, nil
 }
 

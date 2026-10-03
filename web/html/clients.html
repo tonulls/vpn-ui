@@ -424,7 +424,7 @@
                        reads `record` as the inbound its client belongs to. -->
                   <template slot="expandedRowRender" slot-scope="row">
                      <div class="bo-mb-list" @click.stop>
-                      <div v-if="row.subId" class="bo-mb bo-mb-sub">
+                      <div v-if="subSettings.enable && row.subId" class="bo-mb bo-mb-sub">
                        <div class="bo-mb-id">
                           <a-icon type="link"></a-icon>
                           <span class="bo-mb-name">Подписка</span>

@@ -26,7 +26,9 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/web/locale"
 	"github.com/mhsanaei/3x-ui/v2/web/middleware"
 	"github.com/mhsanaei/3x-ui/v2/web/network"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v2/web/session"
 	"github.com/mhsanaei/3x-ui/v2/web/websocket"
 
 	"github.com/gin-contrib/gzip"
@@ -46,6 +48,23 @@ var htmlFS embed.FS
 var i18nFS embed.FS
 
 var startTime = time.Now()
+
+// requestUsesHTTPS trusts the socket TLS state directly. Behind TLS termination,
+// the scheme header is trusted only from a configured immediate proxy and only
+// when exactly one X-Forwarded-Proto value says "https".
+func requestUsesHTTPS(r *http.Request, trustedProxyCIDRs string) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	if !proxyip.IsTrustedProxy(r.RemoteAddr, trustedProxyCIDRs) {
+		return false
+	}
+	values := r.Header.Values("X-Forwarded-Proto")
+	return len(values) == 1 && strings.EqualFold(strings.TrimSpace(values[0]), "https")
+}
 
 type wrapAssetsFS struct {
 	embed.FS
@@ -232,6 +251,20 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	store.Options(sessionOptions)
 	engine.Use(sessions.Sessions("vpn-ui", store))
+	engine.Use(func(c *gin.Context) {
+		secure := c.Request.TLS != nil
+		if !secure {
+			trustedProxies, proxyErr := s.settingService.GetWebTrustedProxies()
+			if proxyErr == nil {
+				secure = requestUsesHTTPS(c.Request, trustedProxies)
+			}
+		}
+		requestOptions := sessionOptions
+		requestOptions.Secure = secure
+		sessions.Default(c).Options(requestOptions)
+		session.SetSecureCookie(c, secure)
+		c.Next()
+	})
 	engine.Use(func(c *gin.Context) {
 		c.Set("base_path", basePath)
 	})

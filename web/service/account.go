@@ -87,29 +87,50 @@ func ValidateClientEmail(email string) error {
 }
 
 // ValidateClientSubID checks a subscription id is safe as a URL path component.
-//
-// subId was previously free text with no validation and no index, so a typo
-// silently merged an account into a STRANGER'S subscription: getInboundsBySubId
-// is a panel-wide scan keyed on this value alone. That is the bug this closes.
+// A subId is a bearer capability and repeated values are intentionally supported
+// for legacy multi-server subscriptions, so this helper does not impose uniqueness.
 func ValidateClientSubID(subID string) error {
 	if subID == "" {
 		// Absent is legal; the account simply has no subscription link yet.
 		return nil
 	}
 	if strings.TrimSpace(subID) != subID {
-		return common.NewErrorf("Subscription id %q has leading or trailing whitespace.", subID)
+		return common.NewError("Subscription id cannot have leading or trailing whitespace.")
 	}
 	if hasForbiddenClientChar(subID) {
-		return common.NewErrorf("Subscription id %q contains a control character.", subID)
+		return common.NewError("Subscription id cannot contain control characters.")
 	}
 	// It is served as /sub/<subId>, so anything that changes what path that is
 	// must be refused rather than escaped: an escaped value would no longer match
 	// the id stored on the account.
 	if strings.ContainsAny(subID, "/\\?#%") {
-		return common.NewErrorf("Subscription id %q cannot contain / \\ ? # or %%: it is used directly as the subscription URL path.", subID)
+		return common.NewError("Subscription id cannot contain / \\ ? # or %; it is used directly as a URL path component.")
 	}
 	if subID == "." || subID == ".." {
-		return common.NewErrorf("Subscription id %q is not a usable URL path component.", subID)
+		return common.NewError("Subscription id is not a usable URL path component.")
+	}
+	return nil
+}
+
+// ValidateNewClientSubID applies the stronger bearer-token policy to a newly
+// assigned or rotated subscription id. Existing ids are grandfathered only when
+// the stored client identity is unchanged; short legacy/shared ids remain usable
+// until explicitly changed.
+func ValidateNewClientSubID(subID string) error {
+	if err := ValidateClientSubID(subID); err != nil || subID == "" {
+		return err
+	}
+	if len(subID) < 16 {
+		return common.NewError("New subscription ids must be at least 16 URL-safe characters; use the generate button.")
+	}
+	if len(subID) > 128 {
+		return common.NewError("Subscription id is too long.")
+	}
+	for _, r := range subID {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || strings.ContainsRune("-_.~", r)) {
+			return common.NewError("New subscription ids may contain only letters, digits, '-', '_', '.', or '~'.")
+		}
 	}
 	return nil
 }
@@ -298,7 +319,7 @@ func validateChangedClientIdentities(protocol model.Protocol, clients []model.Cl
 		if err := ValidateClientEmail(client.Email); err != nil {
 			return err
 		}
-		if err := ValidateClientSubID(client.SubID); err != nil {
+		if err := ValidateNewClientSubID(client.SubID); err != nil {
 			return err
 		}
 		switch protocol {

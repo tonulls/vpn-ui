@@ -150,7 +150,14 @@
                         <span class="bo-secnav-label">{{ i18n "pages.settings.sslSettings" }}</span>
                       </button>
                     </div>
-                  </nav>
+                     <div>
+                       <button type="button" class="bo-secnav-sec" :class="{ 'is-open': sectionKey === '8' }"
+                         :aria-current="sectionKey === '8'" @click="selectSection('8')">
+                         <a-icon type="heart"></a-icon>
+                         <span class="bo-secnav-label">{{ i18n "pages.settings.donationSettings" }}</span>
+                       </button>
+                     </div>
+                   </nav>
                   <div class="bo-secpanes">
                     <div v-if="sectionMounted['1']" v-show="sectionKey === '1'" data-section="1" :style="{ paddingTop: '20px' }">
                       {{ template "settings/panel/general" . }}
@@ -172,6 +179,9 @@
                     </div>
                     <div v-if="sectionMounted['7']" v-show="sectionKey === '7'" data-section="7" :style="{ paddingTop: '20px' }">
                       {{ template "settings/panel/ssl" . }}
+                    </div>
+                    <div v-if="sectionMounted['8']" v-show="sectionKey === '8'" data-section="8" :style="{ paddingTop: '20px' }">
+                      {{ template "settings/panel/donations" . }}
                     </div>
                   </div>
                 </div>
@@ -208,6 +218,8 @@
       },
       oldAllSetting: new AllSetting(),
       allSetting: new AllSetting(),
+      donationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
+      oldDonationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
       telegramXrayRoutingOptions: { inboundTags: [], outboundTags: [], balancerTags: [] },
       saveBtnDisable: true,
       entryHost: null,
@@ -424,6 +436,35 @@
           app.changeRemarkSample();
           this.saveBtnDisable = true;
         }
+      },
+      async loadDonationSettings() {
+        const msg = await HttpUtil.get("/panel/setting/donationSettings");
+        if (!msg || !msg.success || !msg.obj) return;
+        const entries = Array.isArray(msg.obj.entries) ? msg.obj.entries.map(entry => ({
+          name: entry.name || '', wallet: entry.wallet || ''
+        })) : [];
+        this.donationSettings = {
+          enabled: !!msg.obj.enabled,
+          entries: entries.length ? entries : [{ name: '', wallet: '' }],
+        };
+        this.oldDonationSettings = JSON.parse(JSON.stringify(this.donationSettings));
+      },
+      addDonationEntry() {
+        this.donationSettings.entries.push({ name: '', wallet: '' });
+      },
+      removeDonationEntry(index) {
+        if (this.donationSettings.entries.length > 1) this.donationSettings.entries.splice(index, 1);
+      },
+      normalizedDonationSettings(settings) {
+        const entries = (settings.entries || []).map(entry => ({
+          name: String(entry.name || '').trim(),
+          wallet: String(entry.wallet || '').trim(),
+        })).filter(entry => entry.name || entry.wallet);
+        return { enabled: !!settings.enabled, entries };
+      },
+      donationSettingsChanged() {
+        return JSON.stringify(this.normalizedDonationSettings(this.donationSettings)) !==
+          JSON.stringify(this.normalizedDonationSettings(this.oldDonationSettings));
       },
       async loadServiceState() {
         const msg = await HttpUtil.get("/panel/setting/service");
@@ -1306,12 +1347,37 @@
             return;
           }
         }
-        this.loading(true);
-        const msg = await HttpUtil.post("/panel/setting/update", this.allSetting);
-        this.loading(false);
-        if (msg.success) {
-          await this.getAllSetting();
+        const allChanged = !this.oldAllSetting.equals(this.allSetting);
+        const donationChanged = this.donationSettingsChanged();
+        const donations = this.normalizedDonationSettings(this.donationSettings);
+        if (donations.enabled && (!donations.entries.length || donations.entries.some(entry => !entry.name || !entry.wallet))) {
+          this.$message.error('{{ i18n "pages.settings.donations.requiredEntry" }}');
+          return;
         }
+        if (!allChanged && !donationChanged) return;
+
+        this.loading(true);
+        if (allChanged) {
+          const msg = await HttpUtil.post("/panel/setting/update", this.allSetting);
+          if (!msg || !msg.success) {
+            this.loading(false);
+            return;
+          }
+        }
+        if (donationChanged) {
+          const msg = await HttpUtil.post("/panel/setting/donationSettings", {
+            enabled: String(donations.enabled),
+            entries: JSON.stringify(donations.entries),
+          });
+          if (!msg || !msg.success) {
+            if (allChanged) await this.getAllSetting();
+            this.loading(false);
+            return;
+          }
+          this.oldDonationSettings = JSON.parse(JSON.stringify(this.donationSettings));
+        }
+        if (allChanged) await this.getAllSetting();
+        this.loading(false);
       },
       async updateUser() {
         const sendUpdateUserRequest = async () => {
@@ -1695,7 +1761,8 @@
       this.entryProtocol = window.location.protocol;
       this.entryIsIP = this._isIp(this.entryHost);
       await this.getAllSetting();
-      await this.loadTelegramXrayRoutingOptions();
+      await this.loadDonationSettings();
+       await this.loadTelegramXrayRoutingOptions();
       await this.loadInboundTags();
       await this.loadServiceState();
       await this.loadServiceLog();
@@ -1709,7 +1776,7 @@
       }
       while (true) {
         await PromiseUtil.sleep(1000);
-        this.saveBtnDisable = this.oldAllSetting.equals(this.allSetting);
+        this.saveBtnDisable = this.oldAllSetting.equals(this.allSetting) && !this.donationSettingsChanged();
       }
     }
   });

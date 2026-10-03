@@ -117,6 +117,8 @@ var defaultValueMap = map[string]string{
 	"externalTrafficInformURI":    "",
 	"xrayOutboundTestUrl":         "https://www.google.com/generate_204",
 	"geofileAutoUpdate":           "true",
+	"geofileXrayRouting":          `{"enabled":false,"inboundTag":"","outboundTag":"","balancerTag":""}`,
+	"donationSettings":            `{"enabled":false,"entries":[]}`,
 	// Serve the pre-redesign inbound dialog instead of the rail one. Panel-wide,
 	// not per browser: operators asked for it back for their whole team, and a
 	// preference each admin had to find and flip on every device they use is not
@@ -186,7 +188,38 @@ func (s *SettingService) GetDefaultJSONConfig() (any, error) {
 	return jsonData, nil
 }
 
-const redactedBackupPassword = "********"
+const (
+	redactedSecretValue    = "********"
+	redactedBackupPassword = redactedSecretValue
+)
+
+// These operator-supplied URLs may carry credentials in userinfo, query strings,
+// or opaque path segments. Treat the whole value as write-only rather than trying
+// to guess where a provider hid its bearer token.
+var writeOnlyURLSettings = map[string]struct{}{
+	"tgBotProxy":               {},
+	"tgBotAPIServer":           {},
+	"externalTrafficInformURI": {},
+	"subSupportUrl":            {},
+	"subProfileUrl":            {},
+}
+
+func allSettingURLValue(settings *entity.AllSetting, key string) *string {
+	switch key {
+	case "tgBotProxy":
+		return &settings.TgBotProxy
+	case "tgBotAPIServer":
+		return &settings.TgBotAPIServer
+	case "externalTrafficInformURI":
+		return &settings.ExternalTrafficInformURI
+	case "subSupportUrl":
+		return &settings.SubSupportUrl
+	case "subProfileUrl":
+		return &settings.SubProfileUrl
+	default:
+		return nil
+	}
+}
 
 func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 	db := database.GetDB()
@@ -260,10 +293,27 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		}
 	}
 
-	// The archive password is write-only. Return a fixed marker so the settings
-	// form can show that one exists without exposing it in the settings API.
+	// Credentials are write-only. Return a fixed marker so the settings form can
+	// preserve configured values without exposing them through the settings API.
 	if allSetting.TgBackupPassword != "" {
 		allSetting.TgBackupPassword = redactedBackupPassword
+	}
+	if allSetting.TgBotToken != "" {
+		allSetting.TgBotToken = redactedSecretValue
+	}
+	if allSetting.LdapPassword != "" {
+		allSetting.LdapPassword = redactedSecretValue
+	}
+	// Old installations may still have the panel-global TOTP setting if migration
+	// was interrupted. It must never be returned; current TOTP secrets live on the
+	// individual User row and are excluded from JSON there.
+	if allSetting.TwoFactorToken != "" {
+		allSetting.TwoFactorToken = redactedSecretValue
+	}
+	for key := range writeOnlyURLSettings {
+		if urlValue := allSettingURLValue(allSetting, key); urlValue != nil && *urlValue != "" {
+			*urlValue = redactedSecretValue
+		}
 	}
 	return allSetting, nil
 }
@@ -1047,6 +1097,30 @@ func (s *SettingService) SetGeofileAutoUpdate(value bool) error {
 	return s.setBool("geofileAutoUpdate", value)
 }
 
+// GetGeofileXrayRouting returns the optional Xray egress route for built-in
+// geofile downloads. It is a separate setting rather than an AllSetting field so
+// unrelated panel-settings saves cannot silently reset it.
+func (s *SettingService) GetGeofileXrayRouting() (GeofileXrayRoutingSettings, error) {
+	var value GeofileXrayRoutingSettings
+	raw, err := s.getString("geofileXrayRouting")
+	if err != nil {
+		return value, err
+	}
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return value, err
+	}
+	return value, nil
+}
+
+// SetGeofileXrayRouting persists the toggle and its selected route together.
+func (s *SettingService) SetGeofileXrayRouting(value GeofileXrayRoutingSettings) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return s.setString("geofileXrayRouting", string(raw))
+}
+
 // GetLegacyInboundForm reports whether the inbounds page should serve the old
 // inbound dialog - one scrolling column at 520px - instead of the rail form that
 // replaced it. Off by default; the panel ships the current form.
@@ -1202,9 +1276,20 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		key := field.Tag.Get("json")
 		fieldV := v.FieldByName(field.Name)
 		value := fmt.Sprint(fieldV.Interface())
+		if value == redactedSecretValue && (key == "tgBotToken" || key == "ldapPassword" || key == "twoFactorToken") {
+			// These settings are write-only. An unchanged mask preserves the stored
+			// credential; an empty value can still explicitly clear it.
+			continue
+		}
 		if key == "tgBackupPassword" && (value == redactedBackupPassword || value == "") {
-			// Password updates are write-only. A blank/masked value means retain the
-			// current secret; turning encryption off is controlled by its own switch.
+			// A blank/masked archive password means retain the current secret; turning
+			// encryption off is controlled by its own switch.
+			continue
+		}
+		if _, ok := writeOnlyURLSettings[key]; ok && value == redactedSecretValue {
+			// Preserve the server-side URL exactly. Even a syntactically ordinary
+			// path can contain a provider's opaque bearer credential; empty input
+			// remains the explicit way to clear the setting.
 			continue
 		}
 		err := s.saveSetting(key, value)
@@ -1314,7 +1399,8 @@ func (s *SettingService) GetDefaultSettings(host string, full bool) (map[string]
 		"ipLimitEnable":   func() (any, error) { return s.GetIpLimitEnable() },
 		// Read here rather than through AllSetting: the switch lives in the overview's
 		// Geofiles dialog, and AllSetting is written wholesale by the Settings form.
-		"geofileAutoUpdate": func() (any, error) { return s.GetGeofileAutoUpdate() },
+		"geofileAutoUpdate":  func() (any, error) { return s.GetGeofileAutoUpdate() },
+		"geofileXrayRouting": func() (any, error) { return s.GetGeofileXrayRouting() },
 		// The overview's access-log viewer reads Xray's access FILE, so this is what
 		// decides whether it has anything to show. It used to ride on ipLimitEnable,
 		// which meant the same thing until IP-limit enforcement moved into the core and

@@ -568,6 +568,14 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		}
 	}
 
+	geofileRouting, err := s.settingService.GetGeofileXrayRouting()
+	if err != nil {
+		return nil, err
+	}
+	if err := applyGeofileXrayRouting(xrayConfig, geofileRouting); err != nil {
+		return nil, err
+	}
+
 	return xrayConfig, nil
 }
 

@@ -72,10 +72,12 @@ func (a *XUIController) index(c *gin.Context) {
 	var serverService service.ServerService
 	panelName, domain := serverService.BackupNameParts(browserHost(c))
 
-	// The donate dialog on the VPN-UI tile. Rendered server-side rather than
-	// fetched: the list is static, so a round trip would only add a spinner.
+	// The donate dialog on the VPN-UI tile uses the operator's editable settings.
+	// Rendered server-side so disabled entries never appear in the browser payload.
+	var settingService service.SettingService
+	donationSettings, _ := settingService.GetDonationSettings()
 	html(c, "index.html", "pages.index.title", gin.H{
-		"donate":            donateAddresses,
+		"donate":            donationEntriesForDisplay(donationSettings),
 		"backup_panel_name": panelName,
 		"backup_domain":     domain,
 	})
@@ -110,6 +112,7 @@ func (a *XUIController) settings(c *gin.Context) {
 
 // xraySettings renders the Xray settings page.
 func (a *XUIController) xraySettings(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	html(c, "xray.html", "pages.xray.title", nil)
 }
 

@@ -93,7 +93,7 @@ const (
 // Geofiles button. Bound the phases that can hang here.
 var geofileHTTPClient = &http.Client{
 	Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 geofileDownloadProxy,
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,

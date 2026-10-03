@@ -1,0 +1,36 @@
+{{define "settings/panel/donations"}}
+<a-collapse default-active-key="1">
+    <a-collapse-panel key="1" header='{{ i18n "pages.settings.donations.title" }}'>
+        <a-setting-list-item paddings="small">
+            <template #title>
+                <span>{{ i18n "pages.settings.donations.enabled" }}</span>
+                <a-tooltip title='{{ i18n "pages.settings.donations.example" }}'>
+                    <a-icon type="question-circle" :style="{ marginLeft: '8px', color: 'var(--muted)' }"></a-icon>
+                </a-tooltip>
+            </template>
+            <template #description>{{ i18n "pages.settings.donations.enabledDesc" }}</template>
+            <template #control>
+                <a-switch v-model="donationSettings.enabled"></a-switch>
+            </template>
+        </a-setting-list-item>
+
+        <a-row v-for="(entry, index) in donationSettings.entries" :key="index" :gutter="[8, 8]"
+            type="flex" align="middle" :style="{ margin: '8px 0' }">
+            <a-col :xs="24" :sm="10">
+                <a-input v-model="entry.name" placeholder='{{ i18n "pages.settings.donations.namePlaceholder" }}'></a-input>
+            </a-col>
+            <a-col :xs="24" :sm="12">
+                <a-input v-model="entry.wallet" placeholder='{{ i18n "pages.settings.donations.walletPlaceholder" }}'></a-input>
+            </a-col>
+            <a-col :xs="24" :sm="2" :style="{ textAlign: 'right' }">
+                <a-button v-if="donationSettings.entries.length > 1" type="danger" shape="circle"
+                    icon="delete" aria-label='{{ i18n "pages.settings.donations.removeEntry" }}'
+                    @click="removeDonationEntry(index)"></a-button>
+            </a-col>
+        </a-row>
+
+        <a-button type="primary" icon="plus" :style="{ backgroundColor: '#52c41a', borderColor: '#52c41a' }"
+            @click="addDonationEntry">{{ i18n "pages.settings.donations.addEntry" }}</a-button>
+    </a-collapse-panel>
+</a-collapse>
+{{end}}

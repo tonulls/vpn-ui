@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,8 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.Use(requirePerm(model.PermPanelSettings))
 
 	g.POST("/all", a.getAllSetting)
+	g.GET("/donationSettings", a.getDonationSettings)
+	g.POST("/donationSettings", a.updateDonationSettings)
 	g.GET("/telegramXrayRoutingOptions", a.telegramXrayRoutingOptions)
 	g.POST("/update", a.updateSetting)
 	g.POST("/updateUser", a.updateUser)
@@ -193,6 +196,26 @@ func (a *SettingController) getDefaultSettings(c *gin.Context) {
 		return
 	}
 	jsonObj(c, result, nil)
+}
+
+func (a *SettingController) getDonationSettings(c *gin.Context) {
+	settings, err := a.settingService.GetDonationSettings()
+	jsonObj(c, settings, err)
+}
+
+func (a *SettingController) updateDonationSettings(c *gin.Context) {
+	enabled, err := strconv.ParseBool(c.PostForm("enabled"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+		return
+	}
+	var entries []service.DonationEntry
+	if err := json.Unmarshal([]byte(c.PostForm("entries")), &entries); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+		return
+	}
+	err = a.settingService.SetDonationSettings(service.DonationSettings{Enabled: enabled, Entries: entries})
+	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 }
 
 // updateSetting updates all settings with the provided data.

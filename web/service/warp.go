@@ -23,7 +23,72 @@ func (s *WarpService) GetWarpData() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return warp, nil
+	return warpDataForBrowser(warp)
+}
+
+// warpDataForBrowser removes server-only Cloudflare credentials and the private
+// key before the stored WARP record is returned to the admin UI. The key is only
+// sent separately when the operator explicitly asks to build the WARP outbound.
+func warpDataForBrowser(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return "", err
+	}
+	delete(data, "access_token")
+	delete(data, "license_key")
+	delete(data, "private_key")
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// warpConfigForBrowser returns only the peer/interface config consumed by the
+// frontend, not the Cloudflare registration envelope containing account tokens.
+func warpConfigForBrowser(raw string) (string, error) {
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		return "", err
+	}
+	config, ok := response["config"]
+	if !ok || len(config) == 0 {
+		return "", fmt.Errorf("Cloudflare WARP response has no config")
+	}
+	encoded, err := json.Marshal(struct {
+		Config json.RawMessage `json:"config"`
+	}{Config: config})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func warpConfigWithPrivateKeyForBrowser(raw, privateKey string) (string, error) {
+	if privateKey == "" {
+		return "", fmt.Errorf("stored WARP private key is unavailable")
+	}
+	filtered, err := warpConfigForBrowser(raw)
+	if err != nil {
+		return "", err
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(filtered), &response); err != nil {
+		return "", err
+	}
+	keyJSON, err := json.Marshal(privateKey)
+	if err != nil {
+		return "", err
+	}
+	response["private_key"] = keyJSON
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func (s *WarpService) DelWarpData() error {
@@ -53,7 +118,7 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+warpData["access_token"])
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -65,17 +130,26 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 		return "", err
 	}
 
-	return buffer.String(), nil
+	return warpConfigWithPrivateKeyForBrowser(buffer.String(), warpData["private_key"])
 }
 
 func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error) {
 	tos := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	hostName, _ := os.Hostname()
-	data := fmt.Sprintf(`{"key":"%s","tos":"%s","type": "PC","model": "vpn-ui", "name": "%s"}`, publicKey, tos, hostName)
+	data, err := json.Marshal(struct {
+		Key   string `json:"key"`
+		Tos   string `json:"tos"`
+		Type  string `json:"type"`
+		Model string `json:"model"`
+		Name  string `json:"name"`
+	}{Key: publicKey, Tos: tos, Type: "PC", Model: "vpn-ui", Name: hostName})
+	if err != nil {
+		return "", err
+	}
 
 	url := "https://api.cloudflareclient.com/v0a2158/reg"
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(data)))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +157,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 	req.Header.Add("CF-Client-Version", "a-7.21-0721")
 	req.Header.Add("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -95,28 +169,53 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 		return "", err
 	}
 
-	var rspData map[string]any
-	err = json.Unmarshal(buffer.Bytes(), &rspData)
+	var rspData struct {
+		ID      string `json:"id"`
+		Token   string `json:"token"`
+		Account struct {
+			License string `json:"license"`
+		} `json:"account"`
+	}
+	if err := json.Unmarshal(buffer.Bytes(), &rspData); err != nil {
+		return "", err
+	}
+	if rspData.ID == "" || rspData.Token == "" || rspData.Account.License == "" {
+		logger.Debug("Cloudflare WARP registration response omitted required fields.")
+		return "", fmt.Errorf("Cloudflare WARP registration response is incomplete")
+	}
+
+	warpData, err := json.MarshalIndent(map[string]string{
+		"access_token": rspData.Token,
+		"device_id":    rspData.ID,
+		"license_key":  rspData.Account.License,
+		"private_key":  secretKey,
+	}, "", "  ")
 	if err != nil {
 		return "", err
 	}
-
-	deviceId := rspData["id"].(string)
-	token := rspData["token"].(string)
-	license, ok := rspData["account"].(map[string]any)["license"].(string)
-	if !ok {
-		logger.Debug("Error accessing license value.")
+	if err := s.SettingService.SetWarp(string(warpData)); err != nil {
 		return "", err
 	}
 
-	warpData := fmt.Sprintf("{\n  \"access_token\": \"%s\",\n  \"device_id\": \"%s\",", token, deviceId)
-	warpData += fmt.Sprintf("\n  \"license_key\": \"%s\",\n  \"private_key\": \"%s\"\n}", license, secretKey)
-
-	s.SettingService.SetWarp(warpData)
-
-	result := fmt.Sprintf("{\n  \"data\": %s,\n  \"config\": %s\n}", warpData, buffer.String())
-
-	return result, nil
+	browserData, err := warpDataForBrowser(string(warpData))
+	if err != nil {
+		return "", err
+	}
+	browserConfig, err := warpConfigForBrowser(buffer.String())
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Data   json.RawMessage `json:"data"`
+		Config json.RawMessage `json:"config"`
+	}
+	result.Data = json.RawMessage(browserData)
+	result.Config = json.RawMessage(browserConfig)
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func (s *WarpService) SetWarpLicense(license string) (string, error) {
@@ -131,15 +230,20 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	}
 
 	url := fmt.Sprintf("https://api.cloudflareclient.com/v0a2158/reg/%s/account", warpData["device_id"])
-	data := fmt.Sprintf(`{"license": "%s"}`, license)
+	data, err := json.Marshal(struct {
+		License string `json:"license"`
+	}{License: license})
+	if err != nil {
+		return "", err
+	}
 
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer([]byte(data)))
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+warpData["access_token"])
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -167,7 +271,8 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.SettingService.SetWarp(string(newWarpData))
-
-	return string(newWarpData), nil
+	if err := s.SettingService.SetWarp(string(newWarpData)); err != nil {
+		return "", err
+	}
+	return warpDataForBrowser(string(newWarpData))
 }

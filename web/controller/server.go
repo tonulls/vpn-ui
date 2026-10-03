@@ -67,17 +67,15 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	// PermOverviewManage (requireOverviewManage, which also resolves a reseller's
 	// profile columns) rather than to the super admin role.
 	//
-	// They are still escalation-class. getConfigJson and getDb expose every admin's
-	// data and getDb carries the users table with its bcrypt hashes; importDB replaces
-	// the database wholesale; updatePanel swaps the running binary as root. Anyone
-	// holding that bit can therefore take the panel, which the operator chose
-	// deliberately with the consequence stated. Do not "tidy" this back to
-	// requireSuperAdmin, and do not widen the bit's reach any further without asking:
-	// the line drawn was "everything the overview offers", which is why admin
-	// management, the host reboot, core uninstall and the systemd unit stayed behind
-	// requireSuperAdmin. See overviewManage in permission.go.
-	g.GET("/getConfigJson", requireOverviewManage(), a.getConfigJson)
-	g.GET("/getDb", requireOverviewManage(), a.getDb)
+	// They remain escalation-class, but global config and full DB downloads now also
+	// require a separate per-account sensitive-export grant (requireSensitiveExports).
+	// importDB replaces the database wholesale; updatePanel swaps the running binary
+	// as root. PermOverviewManage still intentionally delegates those overview actions,
+	// so an operator can choose that risk per admin/reseller. Admin management, host
+	// reboot, core uninstall and the systemd unit remain requireSuperAdmin. See
+	// overviewManage in permission.go.
+	g.GET("/getConfigJson", requireOverviewManage(), requireSensitiveExports(), a.getConfigJson)
+	g.GET("/getDb", requireOverviewManage(), requireSensitiveExports(), a.getDb)
 	g.GET("/getNewUUID", a.getNewUUID)
 	g.GET("/getNewX25519Cert", a.getNewX25519Cert)
 	g.GET("/getNewmldsa65", a.getNewmldsa65)
@@ -129,6 +127,8 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/updateGeofile/:fileName", requireOverviewManage(), a.updateGeofile)
 	// Whether the panel refreshes the geo data on its own. Same dialog, same bit.
 	g.POST("/geofileAutoUpdate", requireOverviewManage(), a.setGeofileAutoUpdate)
+	g.GET("/geofileXrayOptions", requireOverviewManage(), a.geofileXrayOptions)
+	g.POST("/geofileXrayRouting", requireOverviewManage(), a.setGeofileXrayRouting)
 	// Panel and Xray logs name other admins' inbounds, clients and IPs.
 	g.POST("/logs/:count", requireOverviewManage(), a.getLogs)
 	g.POST("/xraylogs/:count", requireOverviewManage(), a.getXrayLogs)
@@ -538,6 +538,43 @@ func (a *ServerController) setGeofileAutoUpdate(c *gin.Context) {
 	enabled := c.PostForm("enabled") == "true"
 	err := a.settingService.SetGeofileAutoUpdate(enabled)
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+}
+
+func (a *ServerController) geofileXrayOptions(c *gin.Context) {
+	options, err := a.settingService.GetGeofileXrayRoutingOptions()
+	if err != nil {
+		jsonMsg(c, "Failed to read Xray routing options", err)
+		return
+	}
+	jsonObj(c, options, nil)
+}
+
+func (a *ServerController) setGeofileXrayRouting(c *gin.Context) {
+	settings := service.GeofileXrayRoutingSettings{
+		Enabled:    c.PostForm("enabled") == "true",
+		InboundTag: strings.TrimSpace(c.PostForm("inboundTag")),
+		Outbound:   strings.TrimSpace(c.PostForm("outboundTag")),
+		Balancer:   strings.TrimSpace(c.PostForm("balancerTag")),
+	}
+	if err := a.settingService.ValidateGeofileXrayRouting(settings); err != nil {
+		jsonMsg(c, "Invalid Geo-file Xray routing settings", err)
+		return
+	}
+	previous, err := a.settingService.GetGeofileXrayRouting()
+	if err != nil {
+		jsonMsg(c, "Failed to read Geo-file Xray routing settings", err)
+		return
+	}
+	if err := a.settingService.SetGeofileXrayRouting(settings); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+		return
+	}
+	routeChanged := previous.Enabled != settings.Enabled ||
+		(settings.Enabled && (previous.InboundTag != settings.InboundTag || previous.Outbound != settings.Outbound || previous.Balancer != settings.Balancer))
+	if routeChanged {
+		(&service.XrayService{}).SetToNeedRestart()
+	}
+	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), nil)
 }
 
 // stopXrayService stops the Xray service.

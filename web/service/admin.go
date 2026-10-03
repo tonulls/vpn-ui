@@ -154,6 +154,15 @@ func (spec *AdminSpec) validate() error {
 	return nil
 }
 
+// normalizeAdminPermissions prevents a sensitive-export grant from being parked
+// without the overview-management scope and unexpectedly becoming active later.
+func normalizeAdminPermissions(perms model.Permission) model.Permission {
+	if !perms.Has(model.PermOverviewManage) {
+		perms &^= model.PermSensitiveExports
+	}
+	return perms
+}
+
 // AddAdmin creates an admin. Password is required and always bcrypt-hashed here:
 // nothing downstream will retro-hash it.
 func (s *AdminService) AddAdmin(spec AdminSpec) (*model.User, error) {
@@ -178,6 +187,7 @@ func (s *AdminService) AddAdmin(spec AdminSpec) (*model.User, error) {
 	if err != nil {
 		return nil, err
 	}
+	spec.Permissions = normalizeAdminPermissions(spec.Permissions)
 	user := &model.User{
 		Username:          username,
 		UsernameDisplay:   usernameDisplay,
@@ -237,6 +247,7 @@ func (s *AdminService) UpdateAdmin(id int, spec AdminSpec) error {
 	if err := spec.validate(); err != nil {
 		return err
 	}
+	spec.Permissions = normalizeAdminPermissions(spec.Permissions)
 	usernameDisplay := spec.Username
 	username := normalizeUsername(usernameDisplay)
 	taken, err := s.usernameTaken(db, username, id)

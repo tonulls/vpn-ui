@@ -7,21 +7,9 @@
     </template>
     <template v-else>
         <table :style="{ margin: '5px 0', width: '100%' }">
-            <tr class="client-table-odd-row">
-                <td>Access Token</td>
-                <td>[[ warpModal.warpData.access_token ]]</td>
-            </tr>
             <tr>
                 <td>Device ID</td>
                 <td>[[ warpModal.warpData.device_id ]]</td>
-            </tr>
-            <tr class="client-table-odd-row">
-                <td>License Key</td>
-                <td>[[ warpModal.warpData.license_key ]]</td>
-            </tr>
-            <tr>
-                <td>Private Key</td>
-                <td>[[ warpModal.warpData.private_key ]]</td>
             </tr>
         </table>
         <a-button @click="delConfig" :loading="warpModal.confirmLoading" type="danger">{{ i18n "delete" }}</a-button>
@@ -139,7 +127,7 @@
                         protocol: Protocols.Wireguard,
                         settings: {
                             mtu: 1420,
-                            secretKey: warpModal.warpData.private_key,
+                            secretKey: warpModal.warpConfig.private_key,
                             address: this.getAddresses(config.interface.addresses),
                             reserved: this.getResolved(config.client_id),
                             domainStrategy: 'ForceIP',
@@ -181,7 +169,9 @@
                 if (msg.success) {
                     const resp = JSON.parse(msg.obj);
                     warpModal.warpData = resp.data;
+                    warpModal.warpData.private_key = keys.privateKey;
                     warpModal.warpConfig = resp.config;
+                    warpModal.warpConfig.private_key = keys.privateKey;
                     this.collectConfig();
                 }
                 warpModal.loading(false);

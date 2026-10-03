@@ -114,7 +114,22 @@
         </a-tooltip>
       </template>
       <a-switch v-model="resellerModal.reseller.allowOverviewManage"
-        :disabled="!resellerModal.reseller.allowOverview"></a-switch>
+        :disabled="!resellerModal.reseller.allowOverview"
+        @change="resellerModal.onAllowOverviewManageChange"></a-switch>
+    </a-form-item>
+
+    <!-- A separate super-admin-only grant: overview management alone must not
+         silently expose the generated Xray config or complete SQLite database. -->
+    <a-form-item v-if="PERMS.superAdmin">
+      <template slot="label">
+        <a-tooltip>
+          <template slot="title">{{ i18n "pages.resellers.allowSensitiveExportsDesc" }}</template>
+          {{ i18n "pages.resellers.allowSensitiveExports" }}
+          <a-icon type="question-circle"></a-icon>
+        </a-tooltip>
+      </template>
+      <a-switch v-model="resellerModal.reseller.allowSensitiveExports"
+        :disabled="!resellerModal.reseller.allowOverview || !resellerModal.reseller.allowOverviewManage"></a-switch>
     </a-form-item>
 
     <a-form-item>
@@ -264,6 +279,7 @@
       id: 0, username: '', password: '', nickname: '', enable: true,
       unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0, subscriptionLimit: 0, minCreateGb: 0, minAddGb: 0,
       allowExternalProxy: false, allowOverview: false, allowOverviewManage: false,
+      allowSensitiveExports: false,
       clientLimitsEnabled: false, clientLimitIp: 0,
       clientLimitDevices: '', clientLimitDown: '', clientLimitUp: '',
       inboundIds: [],
@@ -287,7 +303,13 @@
     // parked behind the disabled switch would save a grant nobody can see, and
     // re-granting the page later would hand back its controls with it.
     onAllowOverviewChange(checked) {
-      if (!checked) resellerModal.reseller.allowOverviewManage = false;
+      if (!checked) {
+        resellerModal.reseller.allowOverviewManage = false;
+        resellerModal.reseller.allowSensitiveExports = false;
+      }
+    },
+    onAllowOverviewManageChange(checked) {
+      if (!checked) resellerModal.reseller.allowSensitiveExports = false;
     },
     ok() {
       ObjectUtil.execute(resellerModal.confirm, resellerModal.reseller);
@@ -320,6 +342,7 @@
           allowExternalProxy: !!reseller.allowExternalProxy,
           allowOverview: !!reseller.allowOverview,
           allowOverviewManage: !!reseller.allowOverviewManage,
+          allowSensitiveExports: !!reseller.allowSensitiveExports,
           clientLimitsEnabled: !!reseller.clientLimitsEnabled,
           clientLimitIp: Number(reseller.clientLimitIp) || 0,
           clientLimitDevices: reseller.clientLimitDevices == null ? '' : String(reseller.clientLimitDevices),
@@ -333,6 +356,7 @@
           unlimited: false, allowanceGb: 0, balanceResetDays: 0, daysPerGb: 0,
           subscriptionLimit: 0, minCreateGb: 0, minAddGb: 0,
           allowExternalProxy: false, allowOverview: false, allowOverviewManage: false,
+          allowSensitiveExports: false,
           clientLimitsEnabled: false, clientLimitIp: 0,
           clientLimitDevices: '', clientLimitDown: '', clientLimitUp: '',
           inboundIds: [],
@@ -363,6 +387,7 @@
         allowExternalProxy: reseller.allowExternalProxy,
         allowOverview: reseller.allowOverview,
         allowOverviewManage: reseller.allowOverviewManage,
+        allowSensitiveExports: reseller.allowSensitiveExports,
         clientLimitsEnabled: reseller.clientLimitsEnabled,
         clientLimitIp: Number(reseller.clientLimitIp) || 0,
         clientLimitDevices: reseller.clientLimitDevices == null ? '' : String(reseller.clientLimitDevices).trim(),

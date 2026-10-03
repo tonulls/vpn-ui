@@ -254,12 +254,21 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 
 	// Xray-managed loopback SOCKS takes precedence without overwriting the saved
 	// external proxy value, so disabling the feature restores the old behavior.
-	tgBotProxy, err := t.settingService.GetTgBotProxy()
-	if enabled, e := t.settingService.GetTgBotXrayRoutingEnabled(); e == nil && enabled {
-		tgBotProxy = telegramBotXrayProxyURL
+	xrayRoutingEnabled, err := t.settingService.GetTgBotXrayRoutingEnabled()
+	if err != nil {
+		return err
 	}
+	tgBotProxy, err := t.settingService.GetTgBotProxy()
 	if err != nil {
 		logger.Warning("Failed to get Telegram bot proxy URL:", err)
+	}
+	if xrayRoutingEnabled {
+		tgBotProxy = telegramBotXrayProxyURL
+		if err := waitForTelegramXraySocks(); err != nil {
+			// Do not hold panel startup beyond the five-second readiness budget. The
+			// polling client keeps retrying and can recover if Xray binds later.
+			logger.Warning(err)
+		}
 	}
 
 	// Get Telegram bot API server URL
@@ -297,19 +306,35 @@ func (t *Tgbot) trySetBotCommands(bot *telego.Bot) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	err := bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
+	params := &telego.SetMyCommandsParams{
 		Commands: []telego.BotCommand{
 			{Command: "start", Description: t.I18nBot("tgbot.commands.startDesc")},
 			{Command: "help", Description: t.I18nBot("tgbot.commands.helpDesc")},
 			{Command: "status", Description: t.I18nBot("tgbot.commands.statusDesc")},
 			{Command: "id", Description: t.I18nBot("tgbot.commands.idDesc")},
 		},
-	})
-	if err != nil {
-		logger.Warning("Failed to set bot commands:", err)
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for attempt := 1; attempt <= 3; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), min(2*time.Second, remaining))
+		err := bot.SetMyCommands(ctx, params)
+		cancel()
+		if err == nil {
+			return
+		}
+		if !telegramCommandErrorRetryable(err) || attempt == 3 {
+			break
+		}
+		backoff := time.Duration(attempt) * 250 * time.Millisecond
+		if remaining = time.Until(deadline); remaining > 0 {
+			time.Sleep(min(backoff, remaining))
+		}
+	}
+	logger.Warning("Failed to set bot commands after transient retries; bot polling continues")
 }
 
 // createRobustFastHTTPClient creates a fasthttp.Client with proper connection handling

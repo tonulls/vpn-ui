@@ -445,7 +445,7 @@
       </div>
       <div class="bo-vpnui-body">
         <div>
-          <a rel="noopener" href="https://github.com/Sir-MmD/vpn-ui" target="_blank"
+          <a rel="noopener" href="https://github.com/tonulls/vpn-ui" target="_blank"
             :style="{ color: 'inherit', textDecoration: 'none' }">
             <div class="bo-vpnui-version num">v{{ .cur_ver }}</div>
           </a>
@@ -521,7 +521,7 @@
           <!-- Always offered, unlike Update Now: it is the one action on this
                tile that does not depend on the release check having run. -->
           <button type="button" class="bo-btn bo-btn--ghost bo-btn--icon"
-            @click="openDonateModal">
+            v-if="donateList.length" @click="openDonateModal">
             <svg class="bo-icon bo-icon-14" aria-hidden="true"><use href="#bo-i-heart"></use></svg>
             {{ i18n "pages.index.donate" }}
           </button>
@@ -692,22 +692,20 @@
     </div>
   </a-modal>
 
-  <!-- Donate dialog (VPN-UI tile). The addresses are rendered server-side from
-       web/controller/donate.go, which a test pins to README.md's Donate section
-       so the panel can never show an address the README has moved on from.
-       Each row is a copy target: these are pasted into a wallet, so the address
-       is monospaced, selectable, and copied verbatim rather than retyped. -->
+  <!-- Donate dialog (VPN-UI tile). The entries are rendered server-side from the
+       operator's support settings. Each wallet is a copy target and is copied
+       verbatim rather than retyped. -->
   <a-modal id="donate-modal" v-model="donateModal.visible" title='{{ i18n "pages.index.donateTitle" }}'
     :closable="true" :class="themeSwitcher.currentTheme" :width="isMobile ? '95%' : 620"
     @cancel="() => donateModal.visible = false" footer="">
     <p class="bo-donate-intro">{{ i18n "pages.index.donateIntro" }}</p>
     <ul class="bo-donate-list">
-      <li class="bo-donate-row" v-for="(d, i) in donateList" :key="d.chain">
-        <div class="bo-donate-chain">[[ d.chain ]]</div>
-        <code class="bo-donate-addr num">[[ d.addr ]]</code>
+      <li class="bo-donate-row" v-for="(d, i) in donateList" :key="d.name">
+        <div class="bo-donate-chain">[[ d.name ]]</div>
+        <code class="bo-donate-addr num">[[ d.wallet ]]</code>
         <button type="button" class="bo-icon-btn bo-donate-copy"
           :class="donateModal.copied === i ? 'bo-icon-btn--ok' : ''"
-          @click="copyDonateAddress(i, d.addr)">
+          @click="copyDonateAddress(i, d.wallet)">
           <!-- v-if/v-else rather than a bound :href: html/template treats an href
                as a URL context and would rewrite a Vue expression to ZgotmplZ. -->
           <svg class="bo-icon bo-icon-14" aria-hidden="true">
@@ -814,6 +812,54 @@
           </span>
           <a-switch :checked="geofileAutoUpdate" :loading="geofileAutoUpdateSaving"
             @change="toggleGeofileAutoUpdate"></a-switch>
+        </div>
+        <div class="mb-10"
+          :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }">
+          <span>
+            {{ i18n "pages.index.geofileXrayRouting" }}
+            <a-tooltip>
+              <template slot="title">
+                <div>{{ i18n "pages.index.geofileXrayRoutingHint" }}</div>
+                <div class="mt-5">{{ i18n "pages.index.geofileXrayRoutingBootstrap" }}</div>
+              </template>
+              <a-icon type="question-circle" :style="{ marginInlineStart: '4px', opacity: 0.65 }"></a-icon>
+            </a-tooltip>
+          </span>
+          <a-switch :checked="geofileXrayRouting.enabled" :disabled="geofileXrayRoutingSaving"
+            @change="toggleGeofileXrayRouting"></a-switch>
+        </div>
+        <div v-if="geofileXrayRouting.enabled" class="mb-10">
+          <a-row :gutter="12">
+            <a-col :span="24" class="mb-8">
+              <div class="mb-5">inboundTag</div>
+              <a-select v-model="geofileXrayRouting.inboundTag" allow-clear
+                placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
+                :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%">
+                <a-select-option v-for="tag in geofileXrayRoutingOptions.inboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+              </a-select>
+            </a-col>
+            <a-col :span="24" class="mb-8">
+              <div class="mb-5">outboundTag</div>
+              <a-select :value="geofileXrayRouting.outboundTag || undefined" allow-clear
+                placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
+                :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%"
+                @change="setGeofileXrayOutbound">
+                <a-select-option v-for="tag in geofileXrayRoutingOptions.outboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+              </a-select>
+            </a-col>
+            <a-col :span="24" class="mb-8">
+              <div class="mb-5">balancerTag</div>
+              <a-select :value="geofileXrayRouting.balancerTag || undefined" allow-clear
+                placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
+                :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%"
+                @change="setGeofileXrayBalancer">
+                <a-select-option v-for="tag in geofileXrayRoutingOptions.balancerTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
+              </a-select>
+            </a-col>
+          </a-row>
+          <a-button type="primary" class="mt-8" :loading="geofileXrayRoutingSaving"
+            :disabled="!geofileXrayRoutingChanged || !geofileXrayRoutingValid"
+            @click="saveGeofileXrayRouting">{{ i18n "pages.index.geofileXraySave" }}</a-button>
         </div>
         <a-list class="ant-version-list w-100" bordered>
           <a-list-item class="ant-version-list-item"
@@ -1860,12 +1906,12 @@
       // -1 for none. An index rather than a boolean so two rows carrying the
       // SAME address (several chains share one) confirm independently.
       donateModal: { visible: false, copied: -1 },
-      // Rendered from web/controller/donate.go, which a test pins to README.md's
-      // Donate section. Emitted here as JS rather than as markup so each address
-      // lands in a JS string context, where html/template escapes it correctly -
+      // Rendered from operator-managed donation settings.
+      // Emitted as JS rather than markup so each wallet
+      // lands in a JS string context, where html/template escapes user input correctly -
       // interpolating one into a Vue attribute expression instead would leave the
       // escaping to whatever context the attribute happened to be classified as.
-      donateList: [{{ range .donate }}{ chain: '{{ .Chain }}', addr: '{{ .Address }}' },{{ end }}],
+      donateList: [{{ range .donate }}{ name: '{{ .Name }}', wallet: '{{ .Wallet }}' },{{ end }}],
       geofilesModal: { visible: false },
       // Which geo files are actually on disk. Four of the six the list offers do
       // not ship with the panel, and until this is fetched the list has no way to
@@ -1900,6 +1946,10 @@
       // value arrives with the defaultSettings call in mounted().
       geofileAutoUpdate: true,
       geofileAutoUpdateSaving: false,
+      geofileXrayRouting: { enabled: false, inboundTag: '', outboundTag: '', balancerTag: '' },
+      geofileXrayRoutingSaved: { enabled: false, inboundTag: '', outboundTag: '', balancerTag: '' },
+      geofileXrayRoutingOptions: { inboundTags: [], outboundTags: [], balancerTags: [] },
+      geofileXrayRoutingSaving: false,
       distroModal: { visible: false, pretty: '', tested: '' },
 
       // --- redesign shell + bento tiles ---------------------------------
@@ -1931,6 +1981,14 @@
         const byName = {};
         (this.geofileStatus || []).forEach(state => { byName[state.name] = state; });
         return byName;
+      },
+      geofileXrayRoutingChanged() {
+        return JSON.stringify(this.geofileXrayRouting) !== JSON.stringify(this.geofileXrayRoutingSaved);
+      },
+      geofileXrayRoutingValid() {
+        const route = this.geofileXrayRouting;
+        if (!route.enabled) return true;
+        return !!route.inboundTag && (!!route.outboundTag !== !!route.balancerTag);
       },
       // Identity tile. A user-set name wins; otherwise the distro name; the
       // hostname is the last resort so the tile is never blank.
@@ -2991,6 +3049,7 @@
         this.geofilesModal.visible = true;
         this.loadCustomGeo();
         this.fetchGeofileStatus();
+        this.fetchGeofileXrayRoutingOptions();
         // Re-attach to a download already in flight. Opening the dialog is the most
         // likely moment for that: the operator started one, went to look at their
         // inbounds while it ran, and came back.
@@ -3066,6 +3125,46 @@
           this.geofileAutoUpdate = previous;
         }
         this.geofileAutoUpdateSaving = false;
+      },
+      async fetchGeofileXrayRoutingOptions() {
+        const msg = await HttpUtil.get('/panel/api/server/geofileXrayOptions');
+        if (msg && msg.success && msg.obj) {
+          this.geofileXrayRoutingOptions = msg.obj;
+        }
+      },
+      async toggleGeofileXrayRouting(checked) {
+        if (checked) {
+          this.geofileXrayRouting.enabled = true;
+          return;
+        }
+        const previous = { ...this.geofileXrayRouting };
+        this.geofileXrayRouting = { enabled: false, inboundTag: '', outboundTag: '', balancerTag: '' };
+        if (!await this.saveGeofileXrayRouting()) {
+          this.geofileXrayRouting = previous;
+        }
+      },
+      setGeofileXrayOutbound(value) {
+        this.geofileXrayRouting.outboundTag = value || '';
+        if (value) this.geofileXrayRouting.balancerTag = '';
+      },
+      setGeofileXrayBalancer(value) {
+        this.geofileXrayRouting.balancerTag = value || '';
+        if (value) this.geofileXrayRouting.outboundTag = '';
+      },
+      async saveGeofileXrayRouting() {
+        if (!this.geofileXrayRoutingValid) return false;
+        this.geofileXrayRoutingSaving = true;
+        try {
+          const route = { ...this.geofileXrayRouting };
+          const msg = await HttpUtil.post('/panel/api/server/geofileXrayRouting', route);
+          if (msg && msg.success) {
+            this.geofileXrayRoutingSaved = { ...route };
+            return true;
+          }
+          return false;
+        } finally {
+          this.geofileXrayRoutingSaving = false;
+        }
       },
       async fetchGeofileStatus() {
         try {
@@ -3571,6 +3670,16 @@
         this.xrayAccessLogEnable = !!msg.obj.xrayAccessLogEnable;
         if (typeof msg.obj.geofileAutoUpdate === 'boolean') {
           this.geofileAutoUpdate = msg.obj.geofileAutoUpdate;
+        }
+        if (msg.obj.geofileXrayRouting && typeof msg.obj.geofileXrayRouting === 'object') {
+          const route = msg.obj.geofileXrayRouting;
+          this.geofileXrayRouting = {
+            enabled: !!route.enabled,
+            inboundTag: route.inboundTag || '',
+            outboundTag: route.outboundTag || '',
+            balancerTag: route.balancerTag || '',
+          };
+          this.geofileXrayRoutingSaved = { ...this.geofileXrayRouting };
         }
       }
 

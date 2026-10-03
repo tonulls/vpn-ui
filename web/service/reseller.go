@@ -1119,18 +1119,19 @@ type ResellerView struct {
 	BalanceResetStart     int64 `json:"balanceResetStart"`
 	BalanceResetAllowance int64 `json:"balanceResetAllowance"`
 
-	DaysPerGB           int  `json:"daysPerGb"`
-	MinCreateGB         int  `json:"minCreateGb"`
-	SubscriptionLimit   int  `json:"subscriptionLimit"`
-	MinAddGB            int  `json:"minAddGb"`
-	AllowExternalProxy  bool `json:"allowExternalProxy"`
-	ClientLimitsEnabled bool `json:"clientLimitsEnabled"`
-	ClientLimitIP       int  `json:"clientLimitIp"`
-	ClientLimitDevices  *int `json:"clientLimitDevices"`
-	ClientLimitDown     *int `json:"clientLimitDown"`
-	ClientLimitUp       *int `json:"clientLimitUp"`
-	AllowOverview       bool `json:"allowOverview"`
-	AllowOverviewManage bool `json:"allowOverviewManage"`
+	DaysPerGB             int  `json:"daysPerGb"`
+	MinCreateGB           int  `json:"minCreateGb"`
+	SubscriptionLimit     int  `json:"subscriptionLimit"`
+	MinAddGB              int  `json:"minAddGb"`
+	AllowExternalProxy    bool `json:"allowExternalProxy"`
+	ClientLimitsEnabled   bool `json:"clientLimitsEnabled"`
+	ClientLimitIP         int  `json:"clientLimitIp"`
+	ClientLimitDevices    *int `json:"clientLimitDevices"`
+	ClientLimitDown       *int `json:"clientLimitDown"`
+	ClientLimitUp         *int `json:"clientLimitUp"`
+	AllowOverview         bool `json:"allowOverview"`
+	AllowOverviewManage   bool `json:"allowOverviewManage"`
+	AllowSensitiveExports bool `json:"allowSensitiveExports"`
 
 	InboundIds  []int `json:"inboundIds"`
 	ClientCount int64 `json:"clientCount"`
@@ -1152,20 +1153,21 @@ type ResellerSpec struct {
 	AllowanceGB int
 	Unlimited   bool
 
-	DaysPerGB           int
-	BalanceResetDays    int
-	BalanceResetStart   int64
-	MinCreateGB         int
-	SubscriptionLimit   int
-	MinAddGB            int
-	AllowExternalProxy  bool
-	ClientLimitsEnabled bool
-	ClientLimitIP       int
-	ClientLimitDevices  *int
-	ClientLimitDown     *int
-	ClientLimitUp       *int
-	AllowOverview       bool
-	AllowOverviewManage bool
+	DaysPerGB             int
+	BalanceResetDays      int
+	BalanceResetStart     int64
+	MinCreateGB           int
+	SubscriptionLimit     int
+	MinAddGB              int
+	AllowExternalProxy    bool
+	ClientLimitsEnabled   bool
+	ClientLimitIP         int
+	ClientLimitDevices    *int
+	ClientLimitDown       *int
+	ClientLimitUp         *int
+	AllowOverview         bool
+	AllowOverviewManage   bool
+	AllowSensitiveExports bool
 
 	// InboundIds is the exact set this reseller may sell on. Replaces whatever
 	// they had; empty means none, which is a legitimate state.
@@ -1241,32 +1243,33 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 			available = 0
 		}
 		out = append(out, ResellerView{
-			Id:                  u.Id,
-			Username:            u.DisplayUsername(),
-			Nickname:            u.Nickname,
-			Enable:              u.Enable,
-			TwoFactorEnable:     u.TwoFactorEnable,
-			AllowanceBytes:      p.AllowanceBytes,
-			SpentBytes:          p.SpentBytes,
-			AvailableBytes:      available,
-			Unlimited:           p.Unlimited,
-			DaysPerGB:           p.DaysPerGB,
-			BalanceResetDays:    p.BalanceResetDays,
-			BalanceResetStart:   p.BalanceResetStart,
-			MinCreateGB:         p.MinCreateGB,
-			SubscriptionLimit:   p.SubscriptionLimit,
-			MinAddGB:            p.MinAddGB,
-			AllowExternalProxy:  p.AllowExternalProxy,
-			ClientLimitsEnabled: p.ClientLimitsEnabled,
-			ClientLimitIP:       p.ClientLimitIP,
-			ClientLimitDevices:  p.ClientLimitDevices,
-			ClientLimitDown:     p.ClientLimitDown,
-			ClientLimitUp:       p.ClientLimitUp,
-			AllowOverview:       p.AllowOverview,
-			AllowOverviewManage: p.AllowOverviewManage,
-			InboundIds:          gs,
-			ClientCount:         countBy[u.Id],
-			CreatedBy:           p.CreatedBy,
+			Id:                    u.Id,
+			Username:              u.DisplayUsername(),
+			Nickname:              u.Nickname,
+			Enable:                u.Enable,
+			TwoFactorEnable:       u.TwoFactorEnable,
+			AllowanceBytes:        p.AllowanceBytes,
+			SpentBytes:            p.SpentBytes,
+			AvailableBytes:        available,
+			Unlimited:             p.Unlimited,
+			DaysPerGB:             p.DaysPerGB,
+			BalanceResetDays:      p.BalanceResetDays,
+			BalanceResetStart:     p.BalanceResetStart,
+			MinCreateGB:           p.MinCreateGB,
+			SubscriptionLimit:     p.SubscriptionLimit,
+			MinAddGB:              p.MinAddGB,
+			AllowExternalProxy:    p.AllowExternalProxy,
+			ClientLimitsEnabled:   p.ClientLimitsEnabled,
+			ClientLimitIP:         p.ClientLimitIP,
+			ClientLimitDevices:    p.ClientLimitDevices,
+			ClientLimitDown:       p.ClientLimitDown,
+			ClientLimitUp:         p.ClientLimitUp,
+			AllowOverview:         p.AllowOverview,
+			AllowOverviewManage:   p.AllowOverviewManage,
+			AllowSensitiveExports: p.AllowSensitiveExports,
+			InboundIds:            gs,
+			ClientCount:           countBy[u.Id],
+			CreatedBy:             p.CreatedBy,
 		})
 	}
 	return out, nil
@@ -1453,7 +1456,9 @@ func (s *ResellerService) AddReseller(caller *model.User, spec ResellerSpec) (*m
 			ClientLimitUp:         spec.ClientLimitUp,
 			AllowOverview:         spec.AllowOverview,
 			AllowOverviewManage:   spec.AllowOverviewManage,
-			CreatedBy:             caller.Id,
+			AllowSensitiveExports: spec.AllowSensitiveExports && spec.AllowOverview &&
+				spec.AllowOverviewManage && caller.IsSuperAdmin,
+			CreatedBy: caller.Id,
 		}).Error
 	})
 	if err != nil {
@@ -1497,6 +1502,13 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 	if err != nil {
 		return err
 	}
+	// Only a super admin may grant sensitive global exports to a reseller. A
+	// delegated reseller manager can still edit the business profile; an existing
+	// sensitive grant is preserved unless the overview scope itself is removed.
+	if !caller.IsSuperAdmin {
+		spec.AllowSensitiveExports = profile.AllowSensitiveExports
+	}
+	spec.AllowSensitiveExports = spec.AllowSensitiveExports && spec.AllowOverview && spec.AllowOverviewManage
 	spec.Username = strings.TrimSpace(spec.Username)
 	if spec.Username == "" {
 		return errors.New("username is required")
@@ -1553,18 +1565,19 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 					}
 					return profile.AllowanceBytes
 				}(),
-				"days_per_gb":           spec.DaysPerGB,
-				"min_create_gb":         spec.MinCreateGB,
-				"subscription_limit":    spec.SubscriptionLimit,
-				"min_add_gb":            spec.MinAddGB,
-				"allow_external_proxy":  spec.AllowExternalProxy,
-				"client_limits_enabled": spec.ClientLimitsEnabled,
-				"client_limit_ip":       spec.ClientLimitIP,
-				"client_limit_devices":  spec.ClientLimitDevices,
-				"client_limit_down":     spec.ClientLimitDown,
-				"client_limit_up":       spec.ClientLimitUp,
-				"allow_overview":        spec.AllowOverview,
-				"allow_overview_manage": spec.AllowOverviewManage,
+				"days_per_gb":             spec.DaysPerGB,
+				"min_create_gb":           spec.MinCreateGB,
+				"subscription_limit":      spec.SubscriptionLimit,
+				"min_add_gb":              spec.MinAddGB,
+				"allow_external_proxy":    spec.AllowExternalProxy,
+				"client_limits_enabled":   spec.ClientLimitsEnabled,
+				"client_limit_ip":         spec.ClientLimitIP,
+				"client_limit_devices":    spec.ClientLimitDevices,
+				"client_limit_down":       spec.ClientLimitDown,
+				"client_limit_up":         spec.ClientLimitUp,
+				"allow_overview":          spec.AllowOverview,
+				"allow_overview_manage":   spec.AllowOverviewManage,
+				"allow_sensitive_exports": spec.AllowSensitiveExports,
 			}).Error
 	})
 	if err != nil {

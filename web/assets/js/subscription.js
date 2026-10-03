@@ -4,6 +4,9 @@
   if (!el) return;
   const textarea = document.getElementById('subscription-links');
   const rawLinks = (textarea?.value || '').split('\n').filter(Boolean);
+  const donationEntries = Array.isArray(window.subscriptionDonationEntries)
+    ? window.subscriptionDonationEntries
+    : [];
 
   const data = {
     sId: el.getAttribute('data-sid') || '',
@@ -137,6 +140,8 @@
       themeSwitcher,
       app: data,
       links: rawLinks,
+      donateList: donationEntries,
+      donationModal: { visible: false },
       lang: '',
       viewportWidth: (typeof window !== 'undefined' ? window.innerWidth : 1024),
     },
@@ -199,6 +204,9 @@
     methods: {
       renderLink,
       copy,
+      openDonationModal() {
+        this.donationModal.visible = true;
+      },
       open,
       linkName,
       i18nLabel(key) {

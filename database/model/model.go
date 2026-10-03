@@ -199,13 +199,13 @@ type ResellerProfile struct {
 	// the overview they were let into is a read-only showcase. It has no effect
 	// unless AllowOverview is on, since there is no page to scope otherwise.
 	//
-	// What it can actually reveal is narrow, and narrower than the admin bit. Every
-	// control on that page requires a permission the reseller role does not carry
-	// (resellerPerms holds no Xray, core or panel-settings bit) and the escalation
-	// class is super-admin-only, so today this un-hides nothing a reseller could
-	// then use. It exists so the two roles are configured the same way, and so the
-	// day an action becomes reseller-reachable it is already gated.
+	// Sensitive global exports (generated Xray config and full database) have a
+	// separate explicit opt-in below; this flag alone does not grant those exports.
 	AllowOverviewManage bool `json:"allowOverviewManage" gorm:"default:0"`
+	// AllowSensitiveExports is an additional opt-in for downloading the global
+	// Xray config and the full SQLite database. It is ineffective unless both the
+	// overview and its management controls are enabled.
+	AllowSensitiveExports bool `json:"allowSensitiveExports" gorm:"default:0"`
 
 	// CreatedBy is the admin who owns this reseller. A non-super admin holding
 	// PermManageResellers sees and edits only their own: without this, one such

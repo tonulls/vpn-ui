@@ -144,6 +144,14 @@
                         [[ reseller.allowOverview && reseller.allowOverviewManage ? '{{ i18n "enabled" }}' : '{{ i18n "disabled" }}' ]]
                       </dd>
                     </div>
+                    <div class="bo-spec-row">
+                      <span class="bo-spec-ico bo-spec-ico--os"><svg class="bo-icon bo-icon-14" aria-hidden="true"><use href="#bo-i-shield"></use></svg></span>
+                      <dt class="bo-spec-key">{{ i18n "pages.resellers.allowSensitiveExports" }}</dt>
+                      <dd class="bo-spec-val"
+                        :class="reseller.allowOverview && reseller.allowOverviewManage && reseller.allowSensitiveExports ? 'bo-ok' : 'bo-muted'">
+                        [[ reseller.allowOverview && reseller.allowOverviewManage && reseller.allowSensitiveExports ? '{{ i18n "enabled" }}' : '{{ i18n "disabled" }}' ]]
+                      </dd>
+                    </div>
                   </dl>
                 </article>
               </div>

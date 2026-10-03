@@ -53,6 +53,7 @@ func (a *XraySettingController) initRouter(g *gin.RouterGroup) {
 
 // getXraySetting retrieves the Xray configuration template, inbound tags, and outbound test URL.
 func (a *XraySettingController) getXraySetting(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	xraySetting, err := a.SettingService.GetXrayConfigTemplate()
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
@@ -130,6 +131,9 @@ func (a *XraySettingController) getXrayResult(c *gin.Context) {
 // warp handles Warp-related operations based on the action parameter.
 func (a *XraySettingController) warp(c *gin.Context) {
 	action := c.Param("action")
+	if action == "config" {
+		c.Header("Cache-Control", "private, no-store")
+	}
 	var resp string
 	var err error
 	switch action {

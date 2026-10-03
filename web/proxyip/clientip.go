@@ -43,6 +43,17 @@ func NormalizeTrustedProxies(value string) (string, error) {
 	return strings.Join(canonical, ", "), nil
 }
 
+// IsTrustedProxy reports whether the immediate TCP peer is in the configured
+// trusted-proxy CIDRs. Callers must not trust forwarded headers from other peers.
+func IsTrustedProxy(remoteAddr, trustedProxyCIDRs string) bool {
+	peer := parseIP(remoteAddr)
+	if peer == nil {
+		return false
+	}
+	trusted, err := parseNetworks(trustedProxyCIDRs)
+	return err == nil && contains(trusted, peer)
+}
+
 // Resolve returns the client IP for a request. Untrusted peers cannot influence the
 // result through Forwarded, X-Forwarded-For, or X-Real-IP headers.
 func Resolve(remoteAddr string, headers http.Header, trustedProxyCIDRs string) string {

@@ -233,6 +233,7 @@ func templateReseller(c *gin.Context) map[string]any {
 	}
 	out["allowOverview"] = p.AllowOverview
 	out["allowOverviewManage"] = p.AllowOverviewManage
+	out["allowSensitiveExports"] = p.AllowSensitiveExports
 	return out
 }
 

@@ -16,7 +16,8 @@ const (
 	loginUserKey = "LOGIN_USER"
 	// loginUserCtxKey caches the loaded user for the life of one request, so the
 	// several handlers that ask for it don't each re-query.
-	loginUserCtxKey = "LOGIN_USER_ROW"
+	loginUserCtxKey    = "LOGIN_USER_ROW"
+	secureCookieCtxKey = "SESSION_COOKIE_SECURE"
 )
 
 // The session cookie holds ONLY the user's id, never the user row.
@@ -34,6 +35,18 @@ const (
 // assertion below fails and the session soft-logs-out. That is the intended
 // migration: one forced re-login, rather than a stale snapshot decoding with
 // zero permissions into a panel where every action silently 403s.
+
+// SetCookieSecure records the request's transport security decision so logout
+// clears the cookie with the same Secure attribute used to issue it.
+func SetCookieSecure(c *gin.Context, secure bool) {
+	c.Set(secureCookieCtxKey, secure)
+}
+
+func cookieSecure(c *gin.Context) bool {
+	value, exists := c.Get(secureCookieCtxKey)
+	secure, ok := value.(bool)
+	return exists && ok && secure
+}
 
 // SetLoginUser stores the authenticated user's id in the session.
 func SetLoginUser(c *gin.Context, user *model.User) {
@@ -112,6 +125,7 @@ func ClearSession(c *gin.Context) {
 		Path:     cookiePath,
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   cookieSecure(c),
 		SameSite: http.SameSiteLaxMode,
 	})
 }

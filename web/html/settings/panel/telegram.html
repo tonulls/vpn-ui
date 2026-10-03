@@ -12,7 +12,7 @@
             <template #title>{{ i18n "pages.settings.telegramToken"}}</template>
             <template #description>{{ i18n "pages.settings.telegramTokenDesc"}}</template>
             <template #control>
-                <a-input type="text" v-model.trim="allSetting.tgBotToken"
+                <a-input type="password" autocomplete="new-password" v-model.trim="allSetting.tgBotToken"
                     :required="allSetting.tgBotEnable"></a-input>
             </template>
         </a-setting-list-item>

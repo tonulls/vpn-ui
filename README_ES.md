@@ -69,7 +69,7 @@ Este proyecto es una versión mejorada del panel **[3X-UI](https://github.com/MH
 ## Instalación del panel
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/deploy.sh | sudo bash
+curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/main/deploy.sh | sudo bash
 ```
 
 ## Desinstalación del panel
@@ -200,7 +200,7 @@ flowchart TB
 ## Compilación desde el código fuente
 
 ```bash
-git clone https://github.com/Sir-MmD/vpn-ui.git && cd vpn-ui
+git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 ./build.sh
 ```
 
@@ -254,18 +254,8 @@ Para probar solo en un sistema operativo específico, también puedes usar el sw
 sudo ./run.sh --only ubuntu-24
 ```
 
-## Donaciones
+## Donate
 
-🔹USDC-Polygon: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
+🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
-🔹USDT-BEP20: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
-
-🔹USDT-TRC20: ```TXEhckDXtdLGAjP5PZXfNnQjPHzEVTcBmR```
-
-🔹TRX: ```TXEhckDXtdLGAjP5PZXfNnQjPHzEVTcBmR```
-
-🔹LTC: ```ltc1qmapmnuf6cq9x679nmu0k4uyq779mxxcwnkgdll```
-
-🔹BTC: ```bc1q62w7lyndzndsp74vj4dsayvun8xnapzq6hx5ea```
-
-🔹ETH: ```0xdC2Ab962954e8fA1502C44656c5A32CF2979568C```
+🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``

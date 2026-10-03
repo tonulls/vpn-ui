@@ -42,9 +42,9 @@ type AllSetting struct {
 
 	// Telegram bot settings
 	TgBotEnable             bool   `json:"tgBotEnable" form:"tgBotEnable"`       // Enable Telegram bot
-	TgBotToken              string `json:"tgBotToken" form:"tgBotToken"`         // Telegram bot token
-	TgBotProxy              string `json:"tgBotProxy" form:"tgBotProxy"`         // Proxy URL for Telegram bot
-	TgBotAPIServer          string `json:"tgBotAPIServer" form:"tgBotAPIServer"` // Custom API server for Telegram bot
+	TgBotToken              string `json:"tgBotToken" form:"tgBotToken"`         // Write-only Telegram bot token
+	TgBotProxy              string `json:"tgBotProxy" form:"tgBotProxy"`         // Write-only URL; credentials may be hidden in any URL component
+	TgBotAPIServer          string `json:"tgBotAPIServer" form:"tgBotAPIServer"` // Write-only URL; credentials may be hidden in any URL component
 	TgBotXrayRoutingEnabled bool   `json:"tgBotXrayRoutingEnabled" form:"tgBotXrayRoutingEnabled"`
 	TgBotXrayInboundTag     string `json:"tgBotXrayInboundTag" form:"tgBotXrayInboundTag"`
 	TgBotXrayOutboundTag    string `json:"tgBotXrayOutboundTag" form:"tgBotXrayOutboundTag"`
@@ -82,11 +82,11 @@ type AllSetting struct {
 	SubPageTitle                string `json:"subPageTitle" form:"subPageTitle"`                               // Browser title for the subscription page
 	SubFaviconUrl               string `json:"subFaviconUrl" form:"subFaviconUrl"`                             // Favicon URL for the subscription page
 	SubShowSupport              bool   `json:"subShowSupport" form:"subShowSupport"`                           // Show support link on the subscription page
-	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Subscription support URL
+	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Hidden by settings API; emitted when a subscriber enables this link
 	SubSupportButtonLabel       string `json:"subSupportButtonLabel" form:"subSupportButtonLabel"`             // Label for the support button on the subscription page
 	SubShowProfileUrl           bool   `json:"subShowProfileUrl" form:"subShowProfileUrl"`                     // Show profile URL button on the subscription page
 	SubProfileButtonLabel       string `json:"subProfileButtonLabel" form:"subProfileButtonLabel"`             // Label for the profile URL button on the subscription page
-	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Subscription profile URL
+	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Hidden by settings API; emitted when a subscriber enables this link
 	SubAnnounce                 string `json:"subAnnounce" form:"subAnnounce"`                                 // Subscription announce
 	SubEnableRouting            bool   `json:"subEnableRouting" form:"subEnableRouting"`                       // Enable routing for subscription
 	SubRoutingRules             string `json:"subRoutingRules" form:"subRoutingRules"`                         // Subscription global routing rules (Only for Happ)
@@ -98,7 +98,7 @@ type AllSetting struct {
 	SubKeyFile                  string `json:"subKeyFile" form:"subKeyFile"`                                   // SSL private key file for subscription server
 	SubUpdates                  int    `json:"subUpdates" form:"subUpdates"`                                   // Subscription update interval in minutes
 	ExternalTrafficInformEnable bool   `json:"externalTrafficInformEnable" form:"externalTrafficInformEnable"` // Enable external traffic reporting
-	ExternalTrafficInformURI    string `json:"externalTrafficInformURI" form:"externalTrafficInformURI"`       // URI for external traffic reporting
+	ExternalTrafficInformURI    string `json:"externalTrafficInformURI" form:"externalTrafficInformURI"`       // Write-only URL; credentials may be hidden in any URL component
 	SubEncrypt                  bool   `json:"subEncrypt" form:"subEncrypt"`                                   // Encrypt subscription responses
 	SubShowInfo                 bool   `json:"subShowInfo" form:"subShowInfo"`                                 // Show client information in subscriptions
 	SubURI                      string `json:"subURI" form:"subURI"`                                           // Subscription server URI
@@ -118,7 +118,7 @@ type AllSetting struct {
 	LdapPort       int    `json:"ldapPort" form:"ldapPort"`
 	LdapUseTLS     bool   `json:"ldapUseTLS" form:"ldapUseTLS"`
 	LdapBindDN     string `json:"ldapBindDN" form:"ldapBindDN"`
-	LdapPassword   string `json:"ldapPassword" form:"ldapPassword"`
+	LdapPassword   string `json:"ldapPassword" form:"ldapPassword"` // Write-only LDAP bind password
 	LdapBaseDN     string `json:"ldapBaseDN" form:"ldapBaseDN"`
 	LdapUserFilter string `json:"ldapUserFilter" form:"ldapUserFilter"`
 	LdapUserAttr   string `json:"ldapUserAttr" form:"ldapUserAttr"` // e.g., mail or uid

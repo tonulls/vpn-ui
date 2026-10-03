@@ -129,6 +129,75 @@
         border-radius: 8px;
         line-height: 1;
     }
+
+    /* Ant Design Vue mounts modal content under body, outside .subscription-page. */
+    .subscription-donate-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 16px;
+    }
+
+    .subscription-donate-entry {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface-2);
+    }
+
+    .subscription-donate-name {
+        white-space: nowrap;
+    }
+
+    .subscription-donate-wallet {
+        display: block;
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: nowrap;
+        overflow-wrap: normal;
+        user-select: text;
+        cursor: pointer;
+        font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .subscription-donate-wallet:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+
+    .subscription-donate-copy {
+        flex: 0 0 auto;
+    }
+
+    .subscription-page .subscription-action-button {
+        width: 100%;
+        height: 40px;
+        min-height: 40px;
+        padding: 0 20px;
+        border-radius: 4rem;
+        box-sizing: border-box;
+    }
+
+    @media (max-width: 575px) {
+        .subscription-platform-android {
+            order: 1;
+        }
+
+        .subscription-platform-ios {
+            order: 2;
+        }
+
+        .subscription-donate-col {
+            order: 3;
+        }
+    }
 </style>
 {{ template "page/head_end" .}}
 
@@ -313,11 +382,12 @@
                     <a-form layout="vertical">
                         <a-form-item>
                             <a-row type="flex" justify="center" :gutter="[8,8]" style="width:100%">
-                                <a-col :xs="24" :sm="12" style="text-align:center;">
+                                <a-col class="subscription-platform-android" :xs="24"
+                                    :sm="donateList.length ? 8 : 12" style="text-align:center;">
                                     <!-- Android dropdown -->
                                     <a-dropdown :trigger="['click']">
-                                        <a-button icon="android" :block="isMobile"
-                                            :style="{ marginTop: isMobile ? '6px' : 0 }" size="large" type="primary">
+                                        <a-button class="subscription-action-button" icon="android"
+                                            :block="isMobile || donateList.length > 0" size="large" type="primary">
                                             Android <a-icon type="down" />
                                         </a-button>
                                         <a-menu slot="overlay" :class="themeSwitcher.currentTheme">
@@ -336,11 +406,22 @@
                                         </a-menu>
                                     </a-dropdown>
                                 </a-col>
-                                <a-col :xs="24" :sm="12" style="text-align:center;">
+                                <a-col v-if="donateList.length" class="subscription-donate-col"
+                                    :xs="24" :sm="8" style="text-align:center;">
+                                    <a-button class="subscription-action-button subscription-donate-button"
+                                        :block="true" size="large" type="primary"
+                                        aria-label='{{ i18n "subscription.donateButton" }}'
+                                        title='{{ i18n "subscription.donateButton" }}'
+                                        @click="openDonationModal()">
+                                        <a-icon type="heart" theme="filled"></a-icon>
+                                    </a-button>
+                                </a-col>
+                                <a-col class="subscription-platform-ios" :xs="24"
+                                    :sm="donateList.length ? 8 : 12" style="text-align:center;">
                                     <!-- iOS dropdown -->
                                     <a-dropdown :trigger="['click']">
-                                        <a-button icon="apple" :block="isMobile"
-                                            :style="{ marginTop: isMobile ? '6px' : 0 }" size="large" type="primary">
+                                        <a-button class="subscription-action-button" icon="apple"
+                                            :block="isMobile || donateList.length > 0" size="large" type="primary">
                                             iOS <a-icon type="down" />
                                         </a-button>
                                         <a-menu slot="overlay" :class="themeSwitcher.currentTheme">
@@ -361,6 +442,29 @@
                             </a-row>
                         </a-form-item>
                     </a-form>
+
+                    <a-modal v-if="donateList.length" id="subscription-donate-modal"
+                        v-model="donationModal.visible"
+                        title='{{ i18n "subscription.donateTitle" }}'
+                        :closable="true" :class="themeSwitcher.currentTheme"
+                        :width="isMobile ? '95%' : 620"
+                        @cancel="donationModal.visible = false" footer="">
+                        <p>{{ i18n "subscription.donateIntro" }}</p>
+                        <div class="subscription-donate-list">
+                            <div v-for="(entry, index) in donateList" :key="entry.name + '-' + index"
+                                class="subscription-donate-entry">
+                                <strong class="subscription-donate-name">[[ entry.name ]]</strong>
+                                <code class="subscription-donate-wallet" role="button" tabindex="0"
+                                    aria-label='{{ i18n "copy" }}' title='{{ i18n "copy" }}'
+                                    @click="copy(entry.wallet)"
+                                    @keydown.enter.prevent="copy(entry.wallet)"
+                                    @keydown.space.prevent="copy(entry.wallet)">[[ entry.wallet ]]</code>
+                                <a-button class="subscription-donate-copy" size="small" icon="copy"
+                                    aria-label='{{ i18n "copy" }}' title='{{ i18n "copy" }}'
+                                    @click="copy(entry.wallet)"></a-button>
+                            </div>
+                        </div>
+                    </a-modal>
                 </a-card>
             </a-col>
         </a-row>
@@ -375,6 +479,10 @@
     data-datepicker="{{ .datepicker }}"></template>
 <textarea id="subscription-links" style="display:none">{{ range .result }}{{ . }}
 {{ end }}</textarea>
+<script>
+    // Embedded as JavaScript values so html/template safely escapes operator-provided labels and wallets.
+    window.subscriptionDonationEntries = [{{ range .donate }}{ name: '{{ .Name }}', wallet: '{{ .Wallet }}' },{{ end }}];
+</script>
 
 {{template "component/aThemeSwitch" .}}
 <script src="{{ .base_path }}assets/js/subscription.js?{{ .asset_ver }}"></script>

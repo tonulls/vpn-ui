@@ -1,13 +1,18 @@
 package controller
 
 import (
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"github.com/mhsanaei/3x-ui/v2/web/proxyip"
+	"github.com/mhsanaei/3x-ui/v2/web/service"
 	"github.com/mhsanaei/3x-ui/v2/web/session"
 	"github.com/mhsanaei/3x-ui/v2/web/websocket"
 
@@ -29,42 +34,107 @@ const (
 	maxMessageSize = 512
 )
 
+func websocketOriginAllowed(r *http.Request) bool {
+	origins := r.Header.Values("Origin")
+	if len(origins) == 0 {
+		// Non-browser clients may omit Origin; browsers send it on WebSocket handshakes.
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	return sameWebSocketOrigin(origins[0], websocketRequestScheme(r), r.Host)
+}
+
+func websocketRequestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	trustedProxies, err := (&service.SettingService{}).GetWebTrustedProxies()
+	if err == nil && proxyip.IsTrustedProxy(r.RemoteAddr, trustedProxies) {
+		forwarded := r.Header.Values("X-Forwarded-Proto")
+		if len(forwarded) == 1 {
+			scheme := strings.ToLower(strings.TrimSpace(forwarded[0]))
+			if scheme == "http" || scheme == "https" {
+				return scheme
+			}
+		}
+	}
+	return "http"
+}
+
+func sameWebSocketOrigin(rawOrigin, expectedScheme, requestHost string) bool {
+	if expectedScheme != "http" && expectedScheme != "https" {
+		return false
+	}
+	if strings.TrimSpace(rawOrigin) != rawOrigin {
+		return false
+	}
+	origin, err := url.Parse(rawOrigin)
+	if err != nil || origin.User != nil || origin.Opaque != "" || origin.Host == "" ||
+		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	if !strings.EqualFold(origin.Scheme, expectedScheme) {
+		return false
+	}
+	originAuthority, ok := normalizeWebSocketAuthority(origin.Host, origin.Scheme)
+	if !ok {
+		return false
+	}
+	requestAuthority, ok := normalizeWebSocketAuthority(requestHost, expectedScheme)
+	return ok && originAuthority == requestAuthority
+}
+
+func normalizeWebSocketAuthority(authority, scheme string) (string, bool) {
+	if authority == "" {
+		return "", false
+	}
+	parsed, err := url.Parse("//" + authority)
+	if err != nil || parsed.Host == "" || parsed.Host != authority || parsed.User != nil ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", false
+	}
+	port := parsed.Port()
+	if port == "" {
+		if strings.HasSuffix(authority, ":") {
+			return "", false
+		}
+		switch strings.ToLower(scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			return "", false
+		}
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	} else if strings.Contains(host, ":") {
+		// A colon-bearing host must be a valid IPv6 literal, not an unbracketed
+		// or malformed authority that could collapse under string splitting.
+		return "", false
+	} else {
+		host = strings.ToLower(host)
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), true
+}
+
 var upgrader = ws.Upgrader{
 	ReadBufferSize:    32768,
 	WriteBufferSize:   32768,
 	EnableCompression: true, // Negotiate permessage-deflate compression if the client supports it
 
-	CheckOrigin: func(r *http.Request) bool {
-		// Check origin for security
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			// Allow connections without Origin header (same-origin requests)
-			return true
-		}
-		// Get the host from the request
-		host := r.Host
-		// Extract scheme and host from origin
-		originURL := origin
-		// Simple check: origin should match the request host
-		// This prevents cross-origin WebSocket hijacking
-		if strings.HasPrefix(originURL, "http://") || strings.HasPrefix(originURL, "https://") {
-			// Extract host from origin
-			originHost := strings.TrimPrefix(strings.TrimPrefix(originURL, "http://"), "https://")
-			if idx := strings.Index(originHost, "/"); idx != -1 {
-				originHost = originHost[:idx]
-			}
-			if idx := strings.Index(originHost, ":"); idx != -1 {
-				originHost = originHost[:idx]
-			}
-			// Compare hosts (without port)
-			requestHost := host
-			if idx := strings.Index(requestHost, ":"); idx != -1 {
-				requestHost = requestHost[:idx]
-			}
-			return originHost == requestHost || originHost == "" || requestHost == ""
-		}
-		return false
-	},
+	CheckOrigin: websocketOriginAllowed,
 }
 
 // WebSocketController handles WebSocket connections for real-time updates

@@ -158,14 +158,13 @@ func overviewAccess(user *model.User) bool {
 //
 // READ THIS BEFORE WIDENING ANYTHING ONTO THIS BIT. The operator deliberately chose,
 // 2026-07-31 and with the consequence spelled out, that this permission reaches the
-// escalation-class overview actions: the panel update (which replaces the running
-// binary as root), config.json (every inbound's secrets across all admins), the logs
-// (other admins' clients and IPs), and backup / restore / DB import-export (the whole
-// SQLite file, users table and bcrypt hashes included). So a delegated admin or a
-// reseller holding this bit can take the panel. That is the operator's call, not an
-// oversight, and it is why what stayed behind requireSuperAdmin stayed: admin
-// management (it mints super admins), the host reboot, core uninstall, and the systemd
-// unit. None of those are on the overview, so none of them are what this bit is for.
+// escalation-class overview actions: panel updates replace the running binary as root;
+// logs reveal other admins' clients and IPs; database imports replace the whole store.
+// A delegated admin or reseller holding this bit can therefore take the panel. The
+// separate read/export surfaces that expose global Xray credentials or the complete
+// SQLite database (including bcrypt hashes) additionally require PermSensitiveExports
+// or the reseller's AllowSensitiveExports flag. Admin management (which mints super
+// admins), host reboot, core uninstall, and the systemd unit remain super-admin-only.
 func overviewManage(user *model.User) bool {
 	if user == nil {
 		return false
@@ -193,6 +192,36 @@ func requireOverviewManage() gin.HandlerFunc {
 			deny(c, http.StatusForbidden, "pages.admins.forbidden", landingPath(c))
 			return
 		}
+		c.Next()
+	}
+}
+
+// requireSensitiveExports adds an explicit, per-account gate to global config and
+// database downloads. These are intentionally separate from ordinary overview
+// management because the payloads include Xray/WARP credentials and admin hashes.
+func requireSensitiveExports() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := session.GetLoginUser(c)
+		if user == nil {
+			deny(c, http.StatusUnauthorized, "pages.login.loginAgain", c.GetString("base_path"))
+			return
+		}
+		allowed := false
+		switch {
+		case user.IsSuperAdmin:
+			allowed = true
+		case user.IsReseller:
+			profile, err := resellerService.ProfileFor(user.Id)
+			allowed = err == nil && profile.AllowOverview && profile.AllowOverviewManage &&
+				profile.AllowSensitiveExports
+		default:
+			allowed = user.Can(model.PermOverviewManage) && user.Can(model.PermSensitiveExports)
+		}
+		if !allowed {
+			deny(c, http.StatusForbidden, "pages.admins.forbidden", landingPath(c))
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
 		c.Next()
 	}
 }
@@ -295,11 +324,11 @@ func requirePerm(perm model.Permission) gin.HandlerFunc {
 	}
 }
 
-// requireSuperAdmin gates the escalation-class routes that no permission bit can
-// safely stand in for, because reaching any of them yields the whole panel:
-// exporting or importing the SQLite DB (every admin's bcrypt hash), mailing it to
-// Telegram, replacing the panel binary, writing the systemd unit as root, and
-// rebooting the host. It also gates admin management itself.
+// requireSuperAdmin gates actions that remain intentionally reserved for the
+// super-admin role: managing other admins, changing protected core/systemd/SSL
+// configuration, uninstalling a core, and rebooting the host. Global config and
+// full database reads have their own explicit permission gate; see
+// requireSensitiveExports.
 func requireSuperAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := session.GetLoginUser(c)
