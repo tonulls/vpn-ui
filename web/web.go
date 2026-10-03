@@ -262,7 +262,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		requestOptions := sessionOptions
 		requestOptions.Secure = secure
 		sessions.Default(c).Options(requestOptions)
-		session.SetSecureCookie(c, secure)
+		session.SetCookieSecure(c, secure)
 		c.Next()
 	})
 	engine.Use(func(c *gin.Context) {
