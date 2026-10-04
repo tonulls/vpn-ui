@@ -36,6 +36,7 @@ var defaultValueMap = map[string]string{
 	"webKeyFile":                  "",
 	"secret":                      random.Seq(32),
 	"webBasePath":                 "/",
+	"webFaviconUrl":               "",
 	"sessionMaxAge":               "360",
 	"pageSize":                    "25",
 	"expireDiff":                  "0",
@@ -426,6 +427,10 @@ func (s *SettingService) SetListen(ip string) error {
 
 func (s *SettingService) GetWebDomain() (string, error) {
 	return s.getString("webDomain")
+}
+
+func (s *SettingService) GetWebFaviconURL() (string, error) {
+	return s.getString("webFaviconUrl")
 }
 
 func (s *SettingService) GetTgBotToken() (string, error) {

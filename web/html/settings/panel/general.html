@@ -66,6 +66,31 @@
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.panelFavicon" }}</template>
+            <template #description>{{ i18n "pages.settings.panelFaviconDesc" }}</template>
+            <template #control>
+                <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }">
+                    <a-input type="text" :value="panelFaviconUrlInput"
+                        :placeholder='isUploadedPanelFavicon() ? "{{ i18n "pages.settings.panelFaviconUploaded" }}" : ""'
+                        @input="setPanelFaviconUrl">
+                        <a-icon v-if="allSetting.webFaviconUrl" slot="suffix" type="close-circle"
+                            title='{{ i18n "pages.settings.panelFaviconClear" }}' @click.stop="clearPanelFavicon"></a-icon>
+                    </a-input>
+                    <div :style="{ width: '40px', height: '40px', flex: '0 0 40px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #d9d9d9', borderRadius: '4px', overflow: 'hidden' }">
+                        <img v-if="allSetting.webFaviconUrl && !panelFaviconPreviewFailed"
+                            :src="allSetting.webFaviconUrl" @error="panelFaviconPreviewFailed = true"
+                            :style="{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }">
+                        <a-icon v-else type="picture" :style="{ color: '#bfbfbf', fontSize: '18px' }"></a-icon>
+                    </div>
+                    <a-button @click="$refs.panelFaviconFile.click()">
+                        <a-icon type="upload"></a-icon>{{ i18n "pages.settings.panelFaviconUpload" }}
+                    </a-button>
+                    <input ref="panelFaviconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,image/vnd.microsoft.icon"
+                        style="display: none" @change="uploadPanelFavicon">
+                </div>
+            </template>
+        </a-setting-list-item>
+        <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.sessionMaxAge" }}</template>
             <template #description>{{ i18n "pages.settings.sessionMaxAgeDesc" }}</template>
             <template #control>

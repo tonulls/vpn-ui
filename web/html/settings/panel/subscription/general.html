@@ -185,9 +185,27 @@
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.subFaviconUrl" }}</template>
+            <template #description>{{ i18n "pages.settings.subFaviconDesc" }}</template>
             <template #control>
-                <a-input type="url" v-model="allSetting.subFaviconUrl"
-                    placeholder="https://example.com/favicon.ico"></a-input>
+                <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }">
+                    <a-input type="text" :value="subFaviconUrlInput"
+                        :placeholder='isUploadedSubFavicon() ? "{{ i18n "pages.settings.panelFaviconUploaded" }}" : ""'
+                        @input="setSubFaviconUrl">
+                        <a-icon v-if="allSetting.subFaviconUrl" slot="suffix" type="close-circle"
+                            title='{{ i18n "pages.settings.panelFaviconClear" }}' @click.stop="clearSubFavicon"></a-icon>
+                    </a-input>
+                    <div :style="{ width: '40px', height: '40px', flex: '0 0 40px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #d9d9d9', borderRadius: '4px', overflow: 'hidden' }">
+                        <img v-if="allSetting.subFaviconUrl && !subFaviconPreviewFailed"
+                            :src="allSetting.subFaviconUrl" @error="subFaviconPreviewFailed = true"
+                            :style="{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }">
+                        <a-icon v-else type="picture" :style="{ color: '#bfbfbf', fontSize: '18px' }"></a-icon>
+                    </div>
+                    <a-button @click="$refs.subFaviconFile.click()">
+                        <a-icon type="upload"></a-icon>{{ i18n "pages.settings.panelFaviconUpload" }}
+                    </a-button>
+                    <input ref="subFaviconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,image/vnd.microsoft.icon"
+                        style="display: none" @change="uploadSubFavicon">
+                </div>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">

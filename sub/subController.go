@@ -3,10 +3,12 @@ package sub
 import (
 	"encoding/base64"
 	"fmt"
+	"html/template"
 	"strconv"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
+	"github.com/mhsanaei/3x-ui/v2/web/entity"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 
 	"github.com/gin-gonic/gin"
@@ -184,12 +186,20 @@ func (a *SUBController) subs(c *gin.Context) {
 			if donations, err := settingService.GetDonationSettings(); err == nil && donations.Enabled {
 				donationEntries = donations.Entries
 			}
+			faviconURL := a.subFaviconUrl
+			if currentFaviconURL, err := settingService.GetSubFaviconUrl(); err == nil {
+				faviconURL = currentFaviconURL
+			}
+			var faviconValue any = faviconURL
+			if strings.HasPrefix(strings.ToLower(faviconURL), "data:") && entity.ValidateFaviconURL(faviconURL) == nil {
+				faviconValue = template.URL(faviconURL)
+			}
 
 			c.HTML(200, "subpage.html", gin.H{
 				"title":                "subscription.title",
 				"page_title":           a.subPageTitle,
 				"subscription_page":    true,
-				"favicon_url":          a.subFaviconUrl,
+				"favicon_url":          faviconValue,
 				"support_url":          a.subSupportUrl,
 				"show_support":         a.subShowSupport,
 				"support_button_label": a.subSupportButtonLabel,

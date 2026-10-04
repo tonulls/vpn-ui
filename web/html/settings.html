@@ -218,6 +218,10 @@
       },
       oldAllSetting: new AllSetting(),
       allSetting: new AllSetting(),
+      panelFaviconUrlInput: '',
+      panelFaviconPreviewFailed: false,
+      subFaviconUrlInput: '',
+      subFaviconPreviewFailed: false,
       donationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
       oldDonationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
       telegramXrayRoutingOptions: { inboundTags: [], outboundTags: [], balancerTags: [] },
@@ -419,6 +423,92 @@
 
         return parts.length === 2 ? groups < 8 : groups === 8;
       },
+      isUploadedPanelFavicon() {
+        return /^data:image\/(?:png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon);base64,/i.test(String(this.allSetting.webFaviconUrl || ''));
+      },
+      setPanelFaviconUrl(event) {
+        this.panelFaviconUrlInput = event && event.target ? event.target.value : '';
+        this.allSetting.webFaviconUrl = this.panelFaviconUrlInput;
+        this.panelFaviconPreviewFailed = false;
+      },
+      clearPanelFavicon() {
+        this.panelFaviconUrlInput = '';
+        this.allSetting.webFaviconUrl = '';
+        this.panelFaviconPreviewFailed = false;
+      },
+      uploadPanelFavicon(event) {
+        const input = event && event.target;
+        const file = input && input.files ? input.files[0] : null;
+        if (input) input.value = '';
+        if (!file) return;
+
+        const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon', 'image/vnd.microsoft.icon'];
+        if (!allowedTypes.includes(String(file.type || '').toLowerCase())) {
+          this.$message.error('{{ i18n "pages.settings.panelFaviconUnsupported" }}');
+          return;
+        }
+        if (file.size > 256 * 1024) {
+          this.$message.error('{{ i18n "pages.settings.panelFaviconTooLarge" }}');
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const value = typeof reader.result === 'string' ? reader.result : '';
+          if (!/^data:image\/(?:png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)) {
+            this.$message.error('{{ i18n "pages.settings.panelFaviconReadError" }}');
+            return;
+          }
+          this.allSetting.webFaviconUrl = value;
+          this.panelFaviconUrlInput = '';
+          this.panelFaviconPreviewFailed = false;
+        };
+        reader.onerror = () => this.$message.error('{{ i18n "pages.settings.panelFaviconReadError" }}');
+        reader.readAsDataURL(file);
+      },
+      isUploadedSubFavicon() {
+        return /^data:image\/(?:png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon);base64,/i.test(String(this.allSetting.subFaviconUrl || ''));
+      },
+      setSubFaviconUrl(event) {
+        this.subFaviconUrlInput = event && event.target ? event.target.value : '';
+        this.allSetting.subFaviconUrl = this.subFaviconUrlInput;
+        this.subFaviconPreviewFailed = false;
+      },
+      clearSubFavicon() {
+        this.subFaviconUrlInput = '';
+        this.allSetting.subFaviconUrl = '';
+        this.subFaviconPreviewFailed = false;
+      },
+      uploadSubFavicon(event) {
+        const input = event && event.target;
+        const file = input && input.files ? input.files[0] : null;
+        if (input) input.value = '';
+        if (!file) return;
+
+        const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon', 'image/vnd.microsoft.icon'];
+        if (!allowedTypes.includes(String(file.type || '').toLowerCase())) {
+          this.$message.error('{{ i18n "pages.settings.panelFaviconUnsupported" }}');
+          return;
+        }
+        if (file.size > 256 * 1024) {
+          this.$message.error('{{ i18n "pages.settings.panelFaviconTooLarge" }}');
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const value = typeof reader.result === 'string' ? reader.result : '';
+          if (!/^data:image\/(?:png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)) {
+            this.$message.error('{{ i18n "pages.settings.panelFaviconReadError" }}');
+            return;
+          }
+          this.allSetting.subFaviconUrl = value;
+          this.subFaviconUrlInput = '';
+          this.subFaviconPreviewFailed = false;
+        };
+        reader.onerror = () => this.$message.error('{{ i18n "pages.settings.panelFaviconReadError" }}');
+        reader.readAsDataURL(file);
+      },
       async loadTelegramXrayRoutingOptions() {
         const msg = await HttpUtil.get("/panel/setting/telegramXrayRoutingOptions");
         if (msg && msg.success && msg.obj) this.telegramXrayRoutingOptions = msg.obj;
@@ -433,6 +523,10 @@
 
           this.oldAllSetting = new AllSetting(msg.obj);
           this.allSetting = new AllSetting(msg.obj);
+          this.panelFaviconUrlInput = this.isUploadedPanelFavicon() ? '' : String(this.allSetting.webFaviconUrl || '');
+          this.panelFaviconPreviewFailed = false;
+          this.subFaviconUrlInput = this.isUploadedSubFavicon() ? '' : String(this.allSetting.subFaviconUrl || '');
+          this.subFaviconPreviewFailed = false;
           app.changeRemarkSample();
           this.saveBtnDisable = true;
         }

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"html/template"
 	"net"
 	"net/http"
 	"strings"
@@ -109,6 +110,18 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	data["host"] = browserHost(c)
 	data["request_uri"] = c.Request.RequestURI
 	data["base_path"] = c.GetString("base_path")
+	if faviconURL, err := (&service.SettingService{}).GetWebFaviconURL(); err == nil {
+		faviconURL = strings.TrimSpace(faviconURL)
+		if faviconURL != "" && entity.ValidateFaviconURL(faviconURL) == nil {
+			if strings.HasPrefix(strings.ToLower(faviconURL), "data:") {
+				// Only the validator's tightly constrained image MIME types may bypass
+				// html/template's default rejection of data: URLs.
+				data["favicon_url"] = template.URL(faviconURL)
+			} else {
+				data["favicon_url"] = faviconURL
+			}
+		}
+	}
 	// Every page funnels through here and includes the sidebar with the dot, so
 	// putting the caller's permissions in once makes them available panel-wide with
 	// no round trip and no nav flicker on first paint.

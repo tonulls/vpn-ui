@@ -1,14 +1,14 @@
-[English](/README.md) | [فارسی](/README_FA.md) | [العربية](/README_AR.md) | [中文](/README_ZH.md) | [Español](/README_ES.md) | [Русский](/README_RU.md) | [Türkçe](/README_TR.md)
+[English](/README.md) | [فارسی](/docs/README_FA.md) | [العربية](/docs/README_AR.md) | [中文](/docs/README_ZH.md) | [Español](/docs/README_ES.md) | [Русский](/docs/README_RU.md) | [Türkçe](/docs/README_TR.md)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/logo.png" alt="VPN-UI Logo" width="260">
 </p>
 
-Bu proje, **[3X-UI](https://github.com/MHSanaei/3x-ui)** panelinin (2.9.3 sürümü) geliştirilmiş bir versiyonudur. Projenin amacı; çeşitli protokoller eklemek ve **Xray-core** özelliklerini destekleyen kapsamlı bir panel olarak hayata geçirmektir.
+هذا المشروع هو نسخة مُطوّرة من لوحة **[3X-UI](https://github.com/MHSanaei/3x-ui)** (الإصدار 2.9.3). يهدف هذا المشروع إلى إضافة بروتوكولات مختلفة وتقديمه كلوحة شاملة مع دعم إمكانيات **Xray-core**.
 
-![Genel Görünüm](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/overview.png)
+![نظرة عامة](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/overview.png)
 
-## Yeni Protokoller
+## البروتوكولات الجديدة
 
 - PPTP
 - L2TP (RAW)
@@ -18,36 +18,36 @@ Bu proje, **[3X-UI](https://github.com/MHSanaei/3x-ui)** panelinin (2.9.3 sürü
 - SSTP
 - IKEv2
 - WireGuard (C)
-- AmneziaWG (gizlenmiş WireGuard)
-- GRE (yönlendiriciler arası site-to-site tüneller, isteğe bağlı olarak IPsec üzerinden)
+- AmneziaWG (WireGuard مموّه)
+- GRE (أنفاق site-to-site بين الراوترات، مع إمكانية تشغيلها فوق IPsec)
 - MTProto Proxy (Telegram)
 - SSH
 
-## Yeni Özellikler
+## الميزات الجديدة
 
-- Inbound bazlı erişimle **Çoklu Yönetici**: her yönetici yalnızca kendisine atadığınız Inbound'ları görür
-- Yöneticinin yüklediği ölçülü trafik bakiyesiyle **Bayi** hesapları, yalnızca kendisine verilen Inbound'larda harcanır
-- **Client to Client** özelliği, hatta **Cross Inbound** biçiminde bile (bir L2TP kullanıcısının bir OpenVPN kullanıcısına dahili bağlantısı)
-- **Shadowsocks** protokolüne **AES-256-GCM** ve **AES-128-GCM** **Encryption** yöntemlerinin eklenmesi
-- **Inbound** ve **Outbound** içinde **XHTTP Object** desteği
-- **[WARP-CLI](https://github.com/Sir-MmD/warp-cli)** (Cloudflare'in resmi sürümü) için otomatik kurulum betiği
-- **Shadowsocks** protokolündeki «Unsupported Cipher» hatasını gidermek için [yamalanmış **Xray-core**](https://github.com/Sir-MmD/Xray-core) çekirdeği
-- Tüm dosyaların (Geofile, Xray-core ve Backend çekirdekleri) tek bir binary dosyası içinde paketlenmesi
-- Hesap bağlantılarının **TXT** ve **PDF** olarak dışa aktarılması
-- Hesapları **dondurma (Freeze)** özelliği
-- İstemcilere ve Inbound'lara **checkbox** eklenmesi
-- **Bulk Operation** özelliği:
-    * Hesapların trafiğini toplu değiştirme
-    * Hesapların süresini toplu değiştirme
-    * Hesapları toplu etkinleştirme/devre dışı bırakma
-    * Hesapları toplu silme
-    * Inbound'ları toplu silme
-    * Hesapları toplu **dondurma/çözme (Freeze/Un-Freeze)**
+- **تعدد المشرفين** بصلاحية لكل Inbound، فكل مشرف ما يشوفش غير الـ Inbounds اللي خصصتهالوه
+- حسابات **الموزّعين** برصيد ترافيك محسوب يشحنه المشرف، ما يتصرفش غير على الـ Inbounds اللي اتدّت له
+- إمكانية **Client to Client** حتى بصيغة **Cross Inbound** (اتصال داخلي بين مستخدم L2TP ومستخدم OpenVPN)
+- إضافة **Encryption** من نوعَي **AES-256-GCM** و **AES-128-GCM** إلى بروتوكول **Shadowsocks**
+- دعم **XHTTP Object** في **Inbound** و **Outbound**
+- سكربت التثبيت التلقائي لـ **[WARP-CLI](https://github.com/Sir-MmD/warp-cli)** (النسخة الرسمية من Cloudflare)
+- نواة [**Xray-core** المُعدَّلة](https://github.com/Sir-MmD/Xray-core) لإصلاح خطأ «Unsupported Cipher» في بروتوكول **Shadowsocks**
+- تجميع جميع الملفات (Geofile و Xray-core ونوى الـ Backend) داخل ملف ثنائي (binary) واحد
+- تصدير روابط الحسابات بصيغة **TXT** و **PDF**
+- إمكانية **تجميد (Freeze)** الحسابات
+- إضافة **checkbox** إلى الـ client والـ Inbound
+- إمكانية **Bulk Operation**:
+    * تغيير حجم الحسابات بشكل جماعي
+    * تغيير مدة الحسابات بشكل جماعي
+    * تفعيل/تعطيل الحسابات بشكل جماعي
+    * حذف الحسابات بشكل جماعي
+    * حذف الـ Inbound بشكل جماعي
+    * **تجميد/إلغاء تجميد (Freeze/Un-Freeze)** الحسابات بشكل جماعي
 
-## Test Edilen İşletim Sistemleri
+## أنظمة التشغيل المُختبَرة
 
 
-| | Dağıtım |Sürüm |Sürüm |
+| | التوزيعة |الإصدار |الإصدار |
 |:---:|:---|:---:|:---:|
 | <img src="https://cdn.simpleicons.org/ubuntu" width="32" height="32" alt="Ubuntu"> | **Ubuntu** | `24.04` | `26.04` |
 | <img src="https://cdn.simpleicons.org/debian" width="32" height="32" alt="Debian"> | **Debian** | `12` | `13` |
@@ -59,29 +59,29 @@ Bu proje, **[3X-UI](https://github.com/MHSanaei/3x-ui)** panelinin (2.9.3 sürü
 
 
 > [!IMPORTANT]
-> Paneli mutlaka test edilen işletim sistemlerine kurmanız önerilir; çünkü yeni çekirdeklerin diğer işletim sistemlerinde düzgün çalışmama ihtimali yüksektir!
+> يُوصى بشدّة بتثبيت اللوحة على أنظمة التشغيل المُختبَرة؛ لأن احتمال ألّا تعمل النوى الجديدة بشكل صحيح على بقية أنظمة التشغيل مرتفع!
 
 > [!NOTE]
-> **AmneziaWG yalnızca Debian 12/13 ve Ubuntu 24.04/26.04 üzerinde çalışır.**
-> Diğer tüm protokollerin aksine AmneziaWG hiçbir dağıtımın çekirdeğinde yer almaz: panel, kurulum sırasında çekirdek modülünü sizin sunucunuzda derler. Bu modül şu anda iki durumda derlenemiyor. **Çekirdek 7.1 ve üzerinde** (Fedora 43/44, Arch) çekirdek, modülün hâlâ kullandığı `ipv6_stub` sembolünü kaldırdı. **AlmaLinux, Rocky Linux ve CentOS Stream** üzerinde ise geriye uyarlanmış (backport) RHEL çekirdekleri modülün uyumluluk katmanıyla çakışıyor; EL10 ise bu katman tarafından hiç tanınmıyor. Her ikisi de AmneziaWG modülünün kendi sınırlamalarıdır ve düzeltmeleri ana projede hâlâ beklemektedir, dolayısıyla panelin ayarlarla aşabileceği şeyler değildir.
-> Kurulum bunu tespit edip size bildirir, sessizce başarısız olmaz. **Diğer tüm protokoller, test edilen tüm işletim sistemlerinde normal şekilde çalışır.**
+> **يعمل AmneziaWG على Debian 12/13 وUbuntu 24.04/26.04 فقط.**
+> على خلاف بقية البروتوكولات، AmneziaWG غير موجود في نواة أي توزيعة: فاللوحة تُجمِّع (compile) وحدة النواة الخاصة به على خادمك أثناء الإعداد. وهذه الوحدة تفشل حالياً في البناء في حالتين. على **النواة 7.1 أو أحدث** (Fedora 43/44 وArch) أزالت النواة الرمز `ipv6_stub` الذي ما زالت الوحدة تستخدمه. وعلى **AlmaLinux وRocky Linux وCentOS Stream** تتعارض نوى RHEL المنقولة (backported) مع طبقة التوافق في الوحدة، كما أن EL10 غير معروف لها إطلاقاً. وكلتا الحالتين قيدٌ في وحدة AmneziaWG الأصلية، وإصلاحهما ما زال مفتوحاً لدى المشروع الأصلي، لذا لا يمكن للوحة تجاوزهما بأي إعداد.
+> يكتشف الإعداد ذلك ويُخبرك به بدلاً من أن يفشل بصمت. **أما بقية البروتوكولات فتعمل بشكل طبيعي على كل أنظمة التشغيل المُختبَرة.**
 
-## Panel Kurulumu
+## تثبيت اللوحة
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/main/deploy.sh | sudo bash
 ```
 
-## Panel Kaldırma
+## إزالة اللوحة
 
 ```bash
 sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 ```
 
 > [!NOTE]
-> Veritabanı yolu, systemd servisi ve tüm varsayılan portlar değiştirildi; bu yüzden bu paneli hiçbir sorun yaşamadan diğer panellerinizin yanına kurabilirsiniz.
+> تم تغيير مسار قاعدة البيانات وخدمة systemd وجميع المنافذ الافتراضية، لذا يمكنك تثبيت هذه اللوحة بجانب لوحاتك الأخرى دون أي مشكلة.
 
-## Yeni Protokollerin Xray-core Çekirdeği ile Etkileşimi
+## كيفية تفاعل البروتوكولات الجديدة مع نواة Xray-core
 
 ```mermaid
 flowchart TB
@@ -150,11 +150,11 @@ flowchart TB
   NET -.->|"replies (symmetric path back)"| OUT
 ```
 
-## RBridge, RADIUS Kullanmayan Protokolleri Nasıl Entegre Eder
+## كيف يدمج RBridge البروتوكولات بدون RADIUS
 
-WireGuard (C), AmneziaWG ve IKEv2'nin **PSK** / **EAP-TLS** modları açık anahtar veya sertifika ile kimlik doğrular; bu yüzden RADIUS ile gidiş-geliş yapmazlar ve aksi hâlde ne oturum kaydı, ne trafik muhasebesi, ne de **User Limit** uygulaması olurdu. **RBridge** (Radius Bridge) bu boşluğu kapatır: her trafik döngüsünde bir kez, **Sweeper** her protokolün canlı tünellerini yoklar (poll), kotayı (quota), devre dışı bırakmayı ve hesap başına **User Limit** K'yı uygular (fazlalıkları evict ile atarak), ardından hayatta kalanları RADIUS protokollerinin zaten kullandığı aynı gömülü **RADIUS** oturum kayıt defterine ve aynı **nftables** muhasebesine reconcile eder. Böylece anahtar tabanlı bir protokol kullanım, kota ve cihaz limiti açısından tıpatıp aynı davranır ve aynı Xray **dokodemo-door** veri düzleminden internete çıkar.
+يعتمد WireGuard (C) و AmneziaWG وأوضاع **PSK** / **EAP-TLS** في IKEv2 على مصادقة بمفتاح عام أو شهادة، لذا لا تُجري أي جولة تبادل مع RADIUS، وكانت لولا ذلك ستبقى بلا سجل جلسة ولا محاسبة حركة ولا فرض لحدّ **User Limit**. يسدّ **RBridge** (جسر RADIUS) هذه الفجوة: مرة واحدة في كل دورة جمع للحركة، يقوم **Sweeper** باستطلاع الأنفاق الحيّة لكل بروتوكول (poll)، ويطبّق الحصة (quota) والتعطيل وحدّ **User Limit** لكل حساب (K) مع طرد الزائدين (evict)، ثم يوفّق الناجين داخل نفس سجلّ جلسات **RADIUS** المدمج ونفس محاسبة **nftables** التي تستخدمها بروتوكولات RADIUS أصلاً. وبذلك يحصل البروتوكول القائم على المفاتيح على نفس سلوك الاستهلاك والحصة وحدّ الأجهزة تمامًا، ويخرج عبر نفس مستوى بيانات **dokodemo-door** الخاص بـ Xray.
 
-Anahtar tabanlı iki tünel protokolünde, **WireGuard (C)** ve **AmneziaWG**, K değerindeki bir **User Limit** her hesaba K adet cihaz yuvası ayırır: K anahtar çifti, K yapılandırma dosyası ve K farklı tünel IP'si, yani her cihaz için ayrı bir yapılandırma. Bu, ticari sağlayıcıların kullandığı modelin aynısıdır ve tek bir hesabın telefonda, dizüstünde ve router'da aynı anda, cihazlar tek bir anahtar için çekişmeden kullanılabilmesini sağlar.
+وفي بروتوكولَي الأنفاق القائمين على المفاتيح، **WireGuard (C)** و **AmneziaWG**، يخصّص **User Limit** بقيمة K عددًا K من فتحات الأجهزة لكل حساب: K من أزواج المفاتيح، وK من ملفات الإعداد، وK من عناوين IP مختلفة داخل النفق، بواقع ملف إعداد واحد لكل جهاز. وهو نفس النموذج الذي تستخدمه الخدمات التجارية، وهو ما يتيح استعمال حساب واحد على الهاتف والحاسوب والراوتر في آن واحد دون أن تتنازع الأجهزة على مفتاح واحد.
 
 ```mermaid
 flowchart TB
@@ -197,26 +197,26 @@ flowchart TB
   ACCT -.- XRAY
 ```
 
-## Kaynaktan Derleme
+## البناء من المصدر
 
 ```bash
 git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 ./build.sh
 ```
 
-## E2E Testi
+## اختبار E2E
 
-![E2E Testi](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/test_unit.png)
+![اختبار E2E](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/test_unit.png)
 
-Bu proje için `test_unit` klasörü içinde Python ile tam bir **E2E** testi tasarlandı; bunu kullanabilirsiniz. Adımları şöyledir:
+صُمِّم لهذا المشروع اختبار **E2E** كامل بلغة Python داخل مجلد `test_unit` يمكنك استخدامه. وخطواته كالتالي:
 
-1. `test_unit` klasörüne girin ve istediğiniz ayarları `config.toml` içine girin.
-2. `setup.sh` betiğini çalıştırın.
-3. Derlenmiş binary dosyasını `test_subject` klasörünün içine koyun.
-4. `run.sh` betiğini `sudo` yetkisiyle çalıştırın.
+1. ادخل إلى مجلد `test_unit` وأدخِل الإعدادات المطلوبة في `config.toml`.
+2. شغّل سكربت `setup.sh`.
+3. ضع الملف الثنائي (binary) المُجمَّع داخل مجلد `test_subject`.
+4. شغّل `run.sh` بصلاحيات `sudo`.
 
 > [!IMPORTANT]
-> Tam E2E testi son derece zaman alıcıdır; eğer projede yalnızca küçük bir değişiklik yaptıysanız, `--tests` switch'i ile yalnızca o bölümü test etmeniz daha iyi olur:
+> اختبار E2E الكامل يستغرق وقتاً طويلاً جداً؛ إذا أجريت تغييراً صغيراً فقط في المشروع، فمن الأفضل اختبار ذلك الجزء فقط باستخدام الخيار `--tests`:
 
 | Test ID | Description |
 | :--- | :--- |
@@ -248,7 +248,7 @@ Bu proje için `test_unit` klasörü içinde Python ile tam bir **E2E** testi ta
 | `uninstall` | `--uninstall` switch: install everything, tear down, assert clean host |
 | `export-js` | host-side Node TXT/PDF export test (no VM) |
 
-Yalnızca belirli bir işletim sisteminde test yapmak için de `--only` switch'ini kullanabilirsiniz:
+ولاختبار نظام تشغيل واحد محدّد فقط، يمكنك أيضاً استخدام الخيار `--only`:
 
 ```bash
 sudo ./run.sh --only ubuntu-24

@@ -1,4 +1,4 @@
-[English](/README.md) | [فارسی](/README_FA.md) | [العربية](/README_AR.md) | [中文](/README_ZH.md) | [Español](/README_ES.md) | [Русский](/README_RU.md) | [Türkçe](/README_TR.md)
+[English](/README.md) | [فارسی](/docs/README_FA.md) | [العربية](/docs/README_AR.md) | [中文](/docs/README_ZH.md) | [Español](/docs/README_ES.md) | [Русский](/docs/README_RU.md) | [Türkçe](/docs/README_TR.md)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/logo.png" alt="VPN-UI Logo" width="260">

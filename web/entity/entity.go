@@ -3,8 +3,11 @@ package entity
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"math"
 	"net"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +34,7 @@ type AllSetting struct {
 	WebCertFile        string `json:"webCertFile" form:"webCertFile"`               // Path to SSL certificate file for web server
 	WebKeyFile         string `json:"webKeyFile" form:"webKeyFile"`                 // Path to SSL private key file for web server
 	WebBasePath        string `json:"webBasePath" form:"webBasePath"`               // Base path for web panel URLs
+	WebFaviconUrl      string `json:"webFaviconUrl" form:"webFaviconUrl"`           // URL or uploaded image data URI for the panel favicon
 	SessionMaxAge      int    `json:"sessionMaxAge" form:"sessionMaxAge"`           // Session maximum age in minutes
 
 	// UI settings
@@ -191,8 +195,75 @@ func normalizeTelegramUserIDs(raw, label string, required bool) (string, error) 
 	return strings.Join(ids, ","), nil
 }
 
+const maxFaviconBytes = 256 << 10
+const maxFaviconDataURLBytes = (maxFaviconBytes+2)/3*4 + 64
+
+var faviconMediaTypes = map[string]struct{}{
+	"image/png":                {},
+	"image/jpeg":               {},
+	"image/gif":                {},
+	"image/webp":               {},
+	"image/x-icon":             {},
+	"image/vnd.microsoft.icon": {},
+}
+
+// ValidateFaviconURL accepts an HTTP(S)/relative URL or a small, base64-encoded
+// raster image uploaded by a settings form. SVG and active-content schemes are
+// excluded because this value is written into a page's <head>.
+func ValidateFaviconURL(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
+		if len(value) > maxFaviconDataURLBytes {
+			return common.NewError("favicon image exceeds 256 KiB")
+		}
+		header, encoded, ok := strings.Cut(value, ",")
+		if !ok || !strings.HasSuffix(strings.ToLower(header), ";base64") {
+			return common.NewError("favicon data URL must use base64 encoding")
+		}
+		mediaType := strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(header), "data:"), ";base64")
+		if _, ok := faviconMediaTypes[mediaType]; !ok {
+			return common.NewError("favicon must be PNG, JPEG, GIF, WebP, or ICO")
+		}
+		image, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(image) == 0 || len(image) > maxFaviconBytes {
+			return common.NewError("favicon image data is invalid or too large")
+		}
+		detectedType := strings.Split(http.DetectContentType(image), ";")[0]
+		iconAlias := mediaType == "image/vnd.microsoft.icon" && detectedType == "image/x-icon"
+		if !strings.EqualFold(detectedType, mediaType) && !iconAlias {
+			return common.NewError("favicon image content does not match its media type")
+		}
+		return nil
+	}
+	if len(value) > 4096 {
+		return common.NewError("favicon URL is too long")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return common.NewError("favicon URL is invalid:", err)
+	}
+	if parsed.Scheme == "" {
+		return nil
+	}
+	if (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) && parsed.Host != "" {
+		return nil
+	}
+	return common.NewError("favicon URL must use HTTP or HTTPS")
+}
+
 // CheckValid validates all settings in the AllSetting struct, checking IP addresses, ports, SSL certificates, and other configuration values.
 func (s *AllSetting) CheckValid() error {
+	s.WebFaviconUrl = strings.TrimSpace(s.WebFaviconUrl)
+	if err := ValidateFaviconURL(s.WebFaviconUrl); err != nil {
+		return err
+	}
+	s.SubFaviconUrl = strings.TrimSpace(s.SubFaviconUrl)
+	if err := ValidateFaviconURL(s.SubFaviconUrl); err != nil {
+		return err
+	}
 	s.TgBotToken = strings.TrimSpace(s.TgBotToken)
 	if s.TgBotEnable && s.TgBotToken == "" {
 		return common.NewError("Telegram bot token is required when Telegram bot is enabled")

@@ -1,14 +1,14 @@
-[English](/README.md) | [فارسی](/README_FA.md) | [العربية](/README_AR.md) | [中文](/README_ZH.md) | [Español](/README_ES.md) | [Русский](/README_RU.md) | [Türkçe](/README_TR.md)
+[English](/README.md) | [فارسی](/docs/README_FA.md) | [العربية](/docs/README_AR.md) | [中文](/docs/README_ZH.md) | [Español](/docs/README_ES.md) | [Русский](/docs/README_RU.md) | [Türkçe](/docs/README_TR.md)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/logo.png" alt="VPN-UI Logo" width="260">
 </p>
 
-این پروژه، یک نسخه‌ی ارتقایافته از پنل **[3X-UI](https://github.com/MHSanaei/3x-ui)** (نسخه‌ی 2.9.3) هستش.  هدف این پروژه اضافه کردن پروتکل های مختلف و راه اندازی بصورت یک پنل جامعه با پشتیبانی از قابلیت های **Xray-core**  هستش
+本项目是 **[3X-UI](https://github.com/MHSanaei/3x-ui)** 面板（2.9.3 版本）的增强版。本项目旨在添加多种协议，并将其打造成一个支持 **Xray-core** 各项功能的综合性面板。
 
-![نمای کلی](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/overview.png)
+![总览](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/overview.png)
 
-## پروتکل‌های جدید
+## 新增协议
 
 - PPTP
 - L2TP (RAW)
@@ -18,37 +18,36 @@
 - SSTP
 - IKEv2
 - WireGuard (C)
-- AmneziaWG (نسخه‌ی مبهم‌سازی‌شده‌ی WireGuard)
-- GRE (تونل‌های site-to-site بین روترها، در صورت نیاز روی IPsec)
+- AmneziaWG（混淆版 WireGuard）
+- GRE（路由器之间的站点到站点隧道，可选择通过 IPsec 加密）
 - MTProto Proxy (Telegram)
 - SSH
 
-## امکانات جدید
+## 新增功能
 
-- **چند مدیره** با دسترسی جداگانه به هر Inbound، هر مدیر فقط Inbound هایی را می‌بیند که به او داده‌اید
-- حساب‌های **نماینده** با اعتبار ترافیک که مدیر آن را شارژ می‌کند و فقط روی Inbound های داده‌شده خرج می‌شود
-- قابلیت **Client to Client** حتی بصورت **Cross Inbound** (اتصال داخلی کاربر L2TP به کاربر OpenVPN)
-- اضافه‌شدن **Encryption** های **AES-256-GCM** و **AES-128-GCM** به پروتکل **Shadowsocks**
-- پشتیبانی از **XHTTP Object** در **Inbound** و **Outbound**
-- اسکریپت نصب خودکار **[WARP-CLI](https://github.com/Sir-MmD/warp-cli)** (نسخه‌ی رسمی Cloudflare)
-- هسته‌ی [**Xray-core** پچ‌شده](https://github.com/Sir-MmD/Xray-core) برای رفع خطای «Unsupported Cipher» در پروتکل **Shadowsocks**
-- باندل‌شدن همه‌ی فایل‌ها (Geofile، Xray-core و هسته‌های Backend) داخل یک فایل باینریِ واحد
-- خروجی گرفتن لینک اکانت ها بصورت **TXT** و **PDF**
-- قابلیت **Freez** کردن اکانت هات
-- اضافه شدن **checkbox** به کلاینت و Inbound ها
-- قابلیت **Bulk Operation**: 
+- **多管理员**，按 Inbound 授权，每个管理员只能看到分配给他的 Inbound
+- **分销商**账户，流量额度由管理员充值计量，且只能消耗在分配给它的 Inbound 上
+- 支持 **Client to Client** 功能，甚至可以实现 **Cross Inbound**（L2TP 用户与 OpenVPN 用户之间的内部互联）
+- 为 **Shadowsocks** 协议新增了 **AES-256-GCM** 和 **AES-128-GCM** 两种 **Encryption**
+- 在 **Inbound** 和 **Outbound** 中支持 **XHTTP Object**
+- **[WARP-CLI](https://github.com/Sir-MmD/warp-cli)**（Cloudflare 官方版本）自动安装脚本
+- 经过[补丁修复的 **Xray-core**](https://github.com/Sir-MmD/Xray-core) 内核，用于修复 **Shadowsocks** 协议中的「Unsupported Cipher」错误
+- 将所有文件（Geofile、Xray-core 以及 Backend 内核）打包进单个二进制文件中
+- 以 **TXT** 和 **PDF** 格式导出账户链接
+- 支持**冻结（Freeze）**账户
+- 为客户端和 Inbound 新增 **checkbox**
+- **Bulk Operation** 功能：
+    * 批量修改账户流量
+    * 批量修改账户时长
+    * 批量启用/禁用账户
+    * 批量删除账户
+    * 批量删除 Inbound
+    * 批量**冻结/解冻**账户
 
-    * تغییر گروهی حجم اکانت ها
-    * تغییر گروهی روز اکانت ها
-    * فعال سازی/غیر فعال سازی گروهی اکانت ها
-    * حذف گروهی اکانت ها
-    * حذف گروهی Inbound ها
-    * قابلیت Freez/Un-Freez کردن گروهی اکانت ها
-
-## سیستم‌عامل‌های تست شده
+## 已测试的操作系统
 
 
-| | توزیع |نسخه |نسخه |
+| | 发行版 |版本 |版本 |
 |:---:|:---|:---:|:---:|
 | <img src="https://cdn.simpleicons.org/ubuntu" width="32" height="32" alt="Ubuntu"> | **Ubuntu** | `24.04` | `26.04` |
 | <img src="https://cdn.simpleicons.org/debian" width="32" height="32" alt="Debian"> | **Debian** | `12` | `13` |
@@ -60,29 +59,29 @@
 
 
 > [!IMPORTANT]
-> پیشنهاد می‌شه حتماً پنل رو روی سیستم‌عامل‌های تست‌شده نصب کنید؛ چون احتمال این‌که هسته‌های جدید روی بقیه‌ی سیستم‌عامل‌ها درست کار نکنن بالاست!
+> 强烈建议务必将面板安装在已测试的操作系统上；因为新内核在其他操作系统上无法正常工作的可能性很高！
 
 > [!NOTE]
-> **پروتکل AmneziaWG فقط روی Debian 12/13 و Ubuntu 24.04/26.04 کار می‌کنه.**
-> برخلاف بقیه‌ی پروتکل‌ها، AmneziaWG توی هسته‌ی هیچ توزیعی نیست: پنل موقع راه‌اندازی، ماژول هسته‌اش رو روی سرور خودتون کامپایل می‌کنه. این ماژول فعلاً توی دو حالت بیلد نمی‌شه. روی **هسته‌ی 7.1 و بالاتر** (Fedora 43/44 و Arch) هسته سمبل `ipv6_stub` رو که ماژول هنوز ازش استفاده می‌کنه حذف کرده. روی **AlmaLinux، Rocky Linux و CentOS Stream** هم هسته‌های بک‌پورت‌شده‌ی RHEL با لایه‌ی سازگاری ماژول تداخل دارن و EL10 اصلاً براش شناخته‌شده نیست. هر دوی این‌ها محدودیت خودِ ماژول AmneziaWG هستن و رفعشون هنوز سمت پروژه‌ی اصلی بازه، پس چیزی نیست که پنل بتونه با تنظیمات دورش بزنه.
-> فرایند راه‌اندازی این رو تشخیص می‌ده و بهتون خبر می‌ده، به‌جای این‌که بی‌صدا شکست بخوره. **بقیه‌ی پروتکل‌ها روی همه‌ی سیستم‌عامل‌های تست‌شده به‌طور عادی کار می‌کنن.**
+> **AmneziaWG 仅支持 Debian 12/13 与 Ubuntu 24.04/26.04。**
+> 与其他所有协议不同，AmneziaWG 并未包含在任何发行版的内核中：面板会在初始化过程中在您的服务器上编译它的内核模块。该模块目前在两种情况下会编译失败。在**内核 7.1 及更新版本**（Fedora 43/44、Arch）上，内核已移除该模块仍在使用的 `ipv6_stub` 符号。在 **AlmaLinux、Rocky Linux 与 CentOS Stream** 上，回溯移植的 RHEL 内核与该模块的兼容层相互冲突，而 EL10 更是完全无法被其识别。这两者都是 AmneziaWG 原始模块自身的限制，相关修复在上游项目中仍未合并，因此并不是面板可以通过配置绕开的问题。
+> 初始化过程会检测到这一点并提示您，而不会静默失败。**其他所有协议在全部已测试的操作系统上均可正常工作。**
 
-## نصب پنل
+## 安装面板
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/main/deploy.sh | sudo bash
 ```
 
-## حذف پنل
+## 卸载面板
 
 ```bash
 sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 ```
 
 > [!NOTE]
-> مسیر دیتابیس، سرویس systemd و همه‌ی پورت‌های پیش‌فرض تغییر کرده‌اند، پس می‌تونید این پنل رو بدون هیچ مشکلی کنار پنل‌های دیگه‌تون نصب کنید.
+> 数据库路径、systemd 服务以及所有默认端口均已更改，因此您可以将本面板与您的其他面板并存安装，而不会产生任何问题。
 
-## نحوه‌ی تعامل پروتکل‌های جدید با هسته‌ی Xray-core
+## 新增协议与 Xray-core 内核的交互方式
 
 ```mermaid
 flowchart TB
@@ -151,9 +150,11 @@ flowchart TB
   NET -.->|"replies (symmetric path back)"| OUT
 ```
 
-## نحوه‌ی کار RBridge با پروتکل‌های بدون RADIUS
+## RBridge 如何整合非 RADIUS 协议
 
-برای دو پروتکل tunnel مبتنی بر کلید، یعنی **WireGuard (C)** و **AmneziaWG**، مقدار K در **User Limit** به هر اکانت تعداد K جای دستگاه می‌دهد: K جفت‌کلید، K فایل config و K آدرس IP متفاوت داخل tunnel، یعنی برای هر دستگاه یک config جداگانه. این همان مدلی است که سرویس‌های تجاری استفاده می‌کنند و باعث می‌شود یک اکانت همزمان روی موبایل، لپ‌تاپ و روتر کار کند، بدون اینکه دستگاه‌ها سر یک کلید با هم تداخل پیدا کنند.
+WireGuard (C)、AmneziaWG 以及 IKEv2 的 **PSK** / **EAP-TLS** 模式使用公钥或证书进行认证，因此不会与 RADIUS 进行往返交互；若不加处理，它们将没有会话记录、没有流量计费，也没有 **User Limit** 限制。**RBridge**（Radius Bridge）正好弥补了这一空缺：在每个流量统计周期里，它的 **Sweeper** 会轮询（poll）每个协议的活动隧道，执行配额（quota）、禁用以及每账户的 **User Limit** K（并将多余者用 evict 驱逐），然后把存活的会话汇入 RADIUS 协议本就在用的同一套内置 **RADIUS** 会话注册表与 **nftables** 计费之中。如此一来，基于密钥的协议在用量、配额和设备数限制上表现完全一致，并通过同一个 Xray **dokodemo-door** 数据平面出网。
+
+对于两个基于密钥的隧道协议，即 **WireGuard (C)** 和 **AmneziaWG**，取值为 K 的 **User Limit** 会为每个账户分配 K 个设备位：K 对密钥、K 份配置和 K 个互不相同的隧道 IP，每台设备一份配置。这与商业服务商采用的模型相同，也正因如此，同一个账户才能同时在手机、笔记本和路由器上使用，而不会让多台设备争抢同一把密钥。
 
 ```mermaid
 flowchart TB
@@ -196,26 +197,26 @@ flowchart TB
   ACCT -.- XRAY
 ```
 
-## کامپایل از سورس
+## 从源码编译
 
 ```bash
 git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 ./build.sh
 ```
 
-## تست E2E
+## E2E 测试
 
-![تست E2E](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/test_unit.png)
+![E2E 测试](https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/test_unit.png)
 
-یک تست **E2E** کامل با Python داخل فولدر `test_unit` برای این پروژه طراحی شده که می‌تونید ازش استفاده کنید. مراحلش این‌طوریه:
+本项目在 `test_unit` 文件夹中设计了一套完整的、使用 Python 编写的 **E2E** 测试，您可以直接使用它。步骤如下：
 
-1. وارد فولدر `test_unit` بشید و تنظیمات دلخواه‌تون رو توی `config.toml` وارد کنید.
-2. اسکریپت `setup.sh` رو اجرا کنید.
-3. فایل باینریِ کامپایل‌شده رو داخل فولدر `test_subject` قرار بدید.
-4. `run.sh` رو با دسترسی `sudo` اجرا کنید.
+1. 进入 `test_unit` 文件夹，在 `config.toml` 中填写您想要的配置。
+2. 运行 `setup.sh` 脚本。
+3. 将编译好的二进制文件放入 `test_subject` 文件夹中。
+4. 以 `sudo` 权限运行 `run.sh`。
 
 > [!IMPORTANT]
-> تست کامل E2E به‌شدت زمان‌بره؛ اگه فقط یه تغییر کوچیک توی پروژه دادید، بهتره با سویچ `--tests` فقط همون بخش رو تست کنید:
+> 完整的 E2E 测试非常耗时；如果您只对项目做了一处小改动，最好使用 `--tests` 开关只测试相应的那一部分：
 
 | Test ID | Description |
 | :--- | :--- |
@@ -247,7 +248,7 @@ git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 | `uninstall` | `--uninstall` switch: install everything, tear down, assert clean host |
 | `export-js` | host-side Node TXT/PDF export test (no VM) |
 
-برای تست روی فقط یک سیستم‌عامل خاص هم می‌تونید از سویچ `--only` استفاده کنید:
+如果只想在某一个特定的操作系统上进行测试，也可以使用 `--only` 开关：
 
 ```bash
 sudo ./run.sh --only ubuntu-24

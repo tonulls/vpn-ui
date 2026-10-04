@@ -9,6 +9,7 @@ class AllSetting {
         this.webCertFile = "";
         this.webKeyFile = "";
         this.webBasePath = "/";
+        this.webFaviconUrl = "";
         this.sessionMaxAge = 360;
         this.pageSize = 25;
         this.expireDiff = 0;
