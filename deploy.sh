@@ -407,6 +407,9 @@ else
     [[ "$(head -c4 "$tmp")" == $'\x7fELF' ]] || die "downloaded file is not an ELF binary."
 fi
 if [[ -n "$selected_tag" ]]; then
+    # mktemp creates mode 0600; allow root to execute the verified ELF before we
+    # inspect its embedded version, without exposing the not-yet-installed binary.
+    chmod 0700 "$tmp" || die "could not prepare downloaded binary for version verification."
     binary_ver="$("$tmp" -v 2>/dev/null | head -n1 | tr -d '[:space:]')" || binary_ver=""
     expected_core="$(version_core "$selected_tag" 2>/dev/null || true)"
     actual_core="$(version_core "$binary_ver" 2>/dev/null || true)"
@@ -477,7 +480,7 @@ if [[ "$MODE" == "update" && -f "$DB" ]]; then
     ok "backed up DB -> $backup"
 fi
 
-chmod +x "$tmp"
+chmod 0755 "$tmp"
 mv -f "$tmp" "$DEST"
 trap - EXIT
 ok "installed -> $DEST"
