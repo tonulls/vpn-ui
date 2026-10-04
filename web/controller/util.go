@@ -239,18 +239,25 @@ func templateReseller(c *gin.Context) map[string]any {
 
 // getContext adds version and other context data to the provided gin.H.
 //
-// cur_ver is the release version, shown to the operator. asset_ver is what the
-// `assets/...?` query strings carry: a separate value because it has to change on
-// every build whose assets differ, which the release version does not.
+// cur_ver is normalized without a leading v because index.html adds the display
+// prefix itself. asset_ver is what the `assets/...?` query strings carry: a
+// separate value because it has to change on every build whose assets differ,
+// which the release version does not.
 func getContext(h gin.H) gin.H {
 	a := gin.H{
-		"cur_ver":   config.GetVersion(),
+		"cur_ver":   panelVersionForDisplay(config.GetVersion()),
 		"asset_ver": config.GetAssetVersion(),
 	}
 	for key, value := range h {
 		a[key] = value
 	}
 	return a
+}
+
+func panelVersionForDisplay(version string) string {
+	version = strings.TrimSpace(version)
+	version = strings.TrimPrefix(version, "v")
+	return strings.TrimPrefix(version, "V")
 }
 
 // isAjax checks if the request is an AJAX request.
