@@ -1435,22 +1435,28 @@ func (s *ServerService) IsValidGeofileName(filename string) bool {
 }
 
 // UpdateGeofile downloads one built-in geo data file into bin/, or all of them
-// when fileName is empty, then restarts Xray so the new data takes effect. The
-// download itself lives in downloadGeofile (geofile.go), which EnsureGeofiles
-// also uses. That one must not restart Xray, since it runs from inside the
-// restart path.
+// when fileName is empty. Xray is restarted once only after a complete refresh has
+// changed files; unchanged files and partial failures do not interrupt the running
+// core. The download itself lives in downloadGeofile (geofile.go), which
+// EnsureGeofiles also uses. That one must not restart Xray, since it runs from
+// inside the restart path.
 //
 // It still BLOCKS, so the HTTP contract is unchanged for API callers. What is new
 // is that it publishes its progress into geofileRun on the way through, which is
 // what lets the overview pick a transfer back up after the operator navigated
 // away and came back - the request is abandoned, the download is not.
 func (s *ServerService) UpdateGeofile(fileName string) error {
-	// Strict allowlist check to avoid writing uncontrolled files
+	// Strict allowlist check to avoid writing uncontrolled files.
 	if fileName != "" {
 		if _, ok := builtinGeofiles[fileName]; !ok {
 			return common.NewErrorf("Invalid geofile name: %q not in allowlist", fileName)
 		}
 	}
+
+	// Serialize batches because the pending-restart flags below describe files
+	// already written to disk but not yet loaded by Xray.
+	geofileRefreshMu.Lock()
+	defer geofileRefreshMu.Unlock()
 
 	// builtinGeofileOrder rather than ranging the map, so the names the overview is
 	// told to expect arrive in the order they will actually be fetched.
@@ -1463,14 +1469,17 @@ func (s *ServerService) UpdateGeofile(fileName string) error {
 	tracked := geofileRunBegin(queue)
 
 	var errorMessages []string
+	changedAny := false
 	for _, name := range queue {
 		if tracked {
 			geofileRunCurrent(name)
 		}
-		if err := downloadGeofile(builtinGeofiles[name], geofileManualMaxTime); err != nil {
+		changed, err := downloadGeofileResult(builtinGeofiles[name], geofileManualMaxTime)
+		if err != nil {
 			errorMessages = append(errorMessages, fmt.Sprintf("Error downloading Geofile '%s': %v", name, err))
 			continue
 		}
+		changedAny = changedAny || changed
 		if tracked {
 			geofileRunFetched(name)
 		}
@@ -1479,18 +1488,46 @@ func (s *ServerService) UpdateGeofile(fileName string) error {
 		geofileRunCurrent("")
 	}
 
-	err := s.RestartXrayService()
-	if err != nil {
-		errorMessages = append(errorMessages, fmt.Sprintf("Updated Geofile '%s' but Failed to start Xray: %v", fileName, err))
+	failed := len(errorMessages) > 0
+	shouldRestart, pending, incomplete := geofileRefreshDecision(
+		fileName, failed, changedAny, geofileRestartPending, geofileFullRefreshIncomplete,
+	)
+	geofileRestartPending = pending
+	geofileFullRefreshIncomplete = incomplete
+	if failed {
+		// Keep the running core untouched on a partial refresh. Successful files
+		// remain safely installed, and a later complete batch will load them all.
+		joined := strings.Join(errorMessages, "\r\n")
+		logger.Warning("geofiles: keeping the current Xray process running after an incomplete refresh")
+		if tracked {
+			geofileRunEnd(true, joined)
+		}
+		return common.NewErrorf("%s", joined)
+	}
+	if geofileFullRefreshIncomplete {
+		logger.Info("geofiles: deferring the Xray restart until a full refresh succeeds")
+		if tracked {
+			geofileRunEnd(false, "")
+		}
+		return nil
+	}
+	if !shouldRestart {
+		logger.Debug("geofiles: all files are current; skipping the Xray restart")
+		if tracked {
+			geofileRunEnd(false, "")
+		}
+		return nil
 	}
 
-	if len(errorMessages) > 0 {
+	if err := s.RestartXrayService(); err != nil {
+		errorMessages = append(errorMessages, fmt.Sprintf("Updated Geofile '%s' but Failed to start Xray: %v", fileName, err))
 		joined := strings.Join(errorMessages, "\r\n")
 		if tracked {
 			geofileRunEnd(true, joined)
 		}
 		return common.NewErrorf("%s", joined)
 	}
+	geofileRestartPending = false
 
 	if tracked {
 		geofileRunEnd(false, "")

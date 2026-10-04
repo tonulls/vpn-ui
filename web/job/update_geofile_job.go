@@ -1,6 +1,8 @@
 package job
 
 import (
+	"context"
+	"sync"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/logger"
@@ -19,6 +21,11 @@ const (
 	// an Xray restart, which drops every live connection. Once a day is the most
 	// disruption this is worth.
 	GeofileUpdateSchedule = "@every 24h"
+
+	// GeofileUpdateRetryDelay spaces retries after a failed refresh. Geo assets
+	// change infrequently, and retrying every minute only adds upstream load and
+	// risks repeating an Xray interruption.
+	GeofileUpdateRetryDelay = 4 * time.Hour
 
 	// GeofileUpdateStartupDelay is when the first refresh runs after the panel starts.
 	//
@@ -46,37 +53,150 @@ type UpdateGeofileJob struct {
 	// reaching the network. Nil in production, so the zero-value job behaves like
 	// every other job in this package.
 	update func() error
+
+	runMu           sync.Mutex
+	retryMu         sync.Mutex
+	ctx             context.Context
+	retryTimer      *time.Timer
+	retryDue        time.Time
+	retryID         uint64
+	lastRunAt       time.Time
+	lastRunWasRetry bool
+	retryDelay      time.Duration
 }
 
 // NewUpdateGeofileJob creates a new geo data refresh job.
 func NewUpdateGeofileJob() *UpdateGeofileJob {
-	return new(UpdateGeofileJob)
+	return &UpdateGeofileJob{retryDelay: GeofileUpdateRetryDelay}
+}
+
+// SetContext binds delayed retries to the web server lifecycle, so a stopped
+// server never fires a retry into its replacement instance.
+func (j *UpdateGeofileJob) SetContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	j.retryMu.Lock()
+	j.stopRetryLocked()
+	j.ctx = ctx
+	j.retryMu.Unlock()
+	if ctx.Done() != nil {
+		go func() {
+			<-ctx.Done()
+			j.cancelRetry()
+		}()
+	}
 }
 
 // Run refreshes the geo data files if auto-update is on, and does nothing at all
-// otherwise.
+// otherwise. A failed attempt schedules one retry four hours later.
 func (j *UpdateGeofileJob) Run() {
+	j.run(false, time.Time{})
+}
+
+func (j *UpdateGeofileJob) run(isRetry bool, retryScheduledFor time.Time) {
+	j.runMu.Lock()
+	defer j.runMu.Unlock()
+
+	j.retryMu.Lock()
+	now := time.Now()
+	if isRetry && (j.ctx == nil || j.ctx.Err() != nil) {
+		j.retryMu.Unlock()
+		return
+	}
+	if !isRetry && !j.retryDue.IsZero() && now.Before(j.retryDue) {
+		due := j.retryDue
+		j.retryMu.Unlock()
+		logger.Debug("geofiles: skipping the regular refresh; a retry is scheduled for", due.Format(time.RFC3339))
+		return
+	}
+	// The regular 24-hour schedule and the one-shot retry can fall on the same
+	// instant. Whichever runs first owns that attempt; do not immediately repeat it.
+	if !j.lastRunAt.IsZero() {
+		if (isRetry && !j.lastRunAt.Before(retryScheduledFor)) ||
+			(!isRetry && j.lastRunWasRetry && now.Sub(j.lastRunAt) < time.Minute) {
+			j.retryMu.Unlock()
+			return
+		}
+	}
+	j.lastRunAt = now
+	j.lastRunWasRetry = isRetry
+	j.retryMu.Unlock()
+
 	// The scheduler is built without cron.Recover (web.go), so a panic here takes
 	// the whole panel down rather than just this tick. Worth guarding: this job
-	// writes files the core parses at startup and then restarts that core.
+	// writes files the core parses at startup and can restart that core.
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("geofiles: the auto-update job panicked, the files were NOT refreshed:", r)
+			j.scheduleRetry()
 		}
 	}()
 
 	skipped, err := j.tick()
 	switch {
 	case err != nil:
-		// Warning, not Error: the files already on disk are untouched by a failed
-		// download (downloadGeofile renames a temp file into place only once it is
-		// complete), so the panel keeps working on yesterday's data.
+		// Keep the current Xray process up on download failures; successful files
+		// wait on disk until the complete retry succeeds.
 		logger.Warning("geofiles: the scheduled refresh failed:", err)
+		j.scheduleRetry()
+	case skipped == "auto-update is off":
+		logger.Debug("geofiles: skipping the scheduled refresh,", skipped)
+		j.cancelRetry()
 	case skipped != "":
 		logger.Debug("geofiles: skipping the scheduled refresh,", skipped)
+		j.scheduleRetry()
 	default:
-		logger.Info("geofiles: refreshed the built-in geo data files")
+		logger.Info("geofiles: scheduled refresh completed")
+		j.cancelRetry()
 	}
+}
+
+func (j *UpdateGeofileJob) scheduleRetry() {
+	j.retryMu.Lock()
+	defer j.retryMu.Unlock()
+	if j.ctx == nil || j.ctx.Err() != nil || j.retryTimer != nil {
+		return
+	}
+	delay := j.retryDelay
+	if delay <= 0 {
+		delay = GeofileUpdateRetryDelay
+	}
+	j.retryDue = time.Now().Add(delay)
+	j.retryID++
+	id := j.retryID
+	j.retryTimer = time.AfterFunc(delay, func() {
+		j.retryMu.Lock()
+		if j.retryID != id {
+			j.retryMu.Unlock()
+			return
+		}
+		j.retryTimer = nil
+		scheduledFor := j.retryDue
+		j.retryDue = time.Time{}
+		ctx := j.ctx
+		j.retryMu.Unlock()
+		if ctx != nil && ctx.Err() == nil {
+			j.run(true, scheduledFor)
+		}
+	})
+	logger.Warningf("geofiles: next refresh attempt scheduled in %s", delay)
+}
+
+func (j *UpdateGeofileJob) cancelRetry() {
+	j.retryMu.Lock()
+	j.stopRetryLocked()
+	j.retryMu.Unlock()
+}
+
+// stopRetryLocked invalidates an already-firing timer as well as a pending one.
+func (j *UpdateGeofileJob) stopRetryLocked() {
+	j.retryID++
+	if j.retryTimer != nil {
+		j.retryTimer.Stop()
+		j.retryTimer = nil
+	}
+	j.retryDue = time.Time{}
 }
 
 // tick is Run without the logging, so the skip paths can be asserted in a test.

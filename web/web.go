@@ -520,6 +520,7 @@ func (s *Server) startTask() {
 	// restart. Placed above the Telegram block for the same reason the SSL job is:
 	// that block returns early on a bad tgbot cron string.
 	geofileJob := job.NewUpdateGeofileJob()
+	geofileJob.SetContext(s.ctx)
 	s.cron.AddJob(job.GeofileUpdateSchedule, geofileJob)
 
 	go func() {

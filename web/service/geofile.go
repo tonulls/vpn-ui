@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net"
@@ -377,6 +378,13 @@ func clearAutoFetchCooldown(name string) {
 var (
 	geofileDownloadMu    sync.Mutex
 	geofileDownloadLocks = map[string]*sync.Mutex{}
+
+	// One batch owns Xray's geo-file reload decision. A successful file may be
+	// installed before a later download fails, so remember that Xray still needs a
+	// restart once a complete batch succeeds.
+	geofileRefreshMu             sync.Mutex
+	geofileRestartPending        bool
+	geofileFullRefreshIncomplete bool
 )
 
 // geofileDownloadLock serializes downloads of one file across the whole process.
@@ -409,8 +417,15 @@ func geofileDownloadLock(name string) *sync.Mutex {
 // file, and its fresh mtime then makes every later conditional GET answer 304,
 // so the Geofiles button reports success forever while the core stays down.
 func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
+	_, err := downloadGeofileResult(entry, maxTime)
+	return err
+}
+
+// downloadGeofileResult reports whether the destination's bytes changed. A 304
+// or a byte-identical 200 is success but does not require an Xray restart.
+func downloadGeofileResult(entry geofileEntry, maxTime time.Duration) (changed bool, err error) {
 	if !isSafeGeofileName(entry.FileName) {
-		return common.NewErrorf("Invalid geofile name: %q", entry.FileName)
+		return false, common.NewErrorf("Invalid geofile name: %q", entry.FileName)
 	}
 	mu := geofileDownloadLock(entry.FileName)
 	mu.Lock()
@@ -438,7 +453,7 @@ func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, entry.URL, nil)
 	if err != nil {
-		return common.NewErrorf("Failed to create HTTP request for %s: %v", entry.URL, err)
+		return false, common.NewErrorf("Failed to create HTTP request for %s: %v", entry.URL, err)
 	}
 	if localUsable {
 		if info, statErr := os.Stat(destPath); statErr == nil && !info.ModTime().IsZero() {
@@ -448,7 +463,7 @@ func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
 
 	resp, err := geofileHTTPClient.Do(req)
 	if err != nil {
-		return common.NewErrorf("Failed to download Geofile from %s: %v", entry.URL, err)
+		return false, common.NewErrorf("Failed to download Geofile from %s: %v", entry.URL, err)
 	}
 	defer resp.Body.Close()
 
@@ -473,25 +488,25 @@ func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
 		// Only trustworthy if the local copy is actually there. An unsolicited 304
 		// (an intercepting proxy) would otherwise report success with no file.
 		if !localUsable {
-			return common.NewErrorf("Failed to download Geofile from %s: 304 with no usable local copy", entry.URL)
+			return false, common.NewErrorf("Failed to download Geofile from %s: 304 with no usable local copy", entry.URL)
 		}
 		stampModTime()
-		return nil
+		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return common.NewErrorf("Failed to download Geofile from %s: received status code %d", entry.URL, resp.StatusCode)
+		return false, common.NewErrorf("Failed to download Geofile from %s: received status code %d", entry.URL, resp.StatusCode)
 	}
 	// A captive portal or a rate-limit page answers 200 with HTML. Renaming that
 	// over a geo file leaves something that satisfies every presence check and
 	// still refuses to parse.
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "application/json") {
-			return common.NewErrorf("Failed to download Geofile from %s: server returned %s, not geo data", entry.URL, ct)
+			return false, common.NewErrorf("Failed to download Geofile from %s: server returned %s, not geo data", entry.URL, ct)
 		}
 	}
 
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return common.NewErrorf("Failed to create bin folder for %s: %v", destPath, err)
+		return false, common.NewErrorf("Failed to create bin folder for %s: %v", destPath, err)
 	}
 	sweepStaleGeofileTemps()
 	// A unique temp name, not "<dest>.tmp": on one shared path a second writer
@@ -500,7 +515,7 @@ func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
 	// this also covers an older panel process still finishing a download.
 	tmp, err := os.CreateTemp(binDir, entry.FileName+".*.tmp")
 	if err != nil {
-		return common.NewErrorf("Failed to create Geofile %s: %v", destPath, err)
+		return false, common.NewErrorf("Failed to create Geofile %s: %v", destPath, err)
 	}
 	tmpPath := tmp.Name()
 
@@ -525,15 +540,64 @@ func downloadGeofile(entry geofileEntry, maxTime time.Duration) error {
 	}
 	if err != nil {
 		os.Remove(tmpPath)
-		return common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
+		return false, common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
+	}
+	if localUsable {
+		equal, compareErr := geofileFilesEqual(destPath, tmpPath)
+		if compareErr != nil {
+			os.Remove(tmpPath)
+			return false, common.NewErrorf("Failed to compare Geofile %s: %v", destPath, compareErr)
+		}
+		if equal {
+			os.Remove(tmpPath)
+			stampModTime()
+			return false, nil
+		}
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		os.Remove(tmpPath)
-		return common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
+		return false, common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
 	}
 
 	stampModTime()
-	return nil
+	return true, nil
+}
+
+func geofileFilesEqual(a, b string) (bool, error) {
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false, err
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false, err
+	}
+	if infoA.Size() != infoB.Size() {
+		return false, nil
+	}
+	hashFile := func(path string) ([32]byte, error) {
+		var sum [32]byte
+		f, err := os.Open(path)
+		if err != nil {
+			return sum, err
+		}
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return sum, err
+		}
+		copy(sum[:], h.Sum(nil))
+		return sum, nil
+	}
+	hashA, err := hashFile(a)
+	if err != nil {
+		return false, err
+	}
+	hashB, err := hashFile(b)
+	if err != nil {
+		return false, err
+	}
+	return hashA == hashB, nil
 }
 
 // stallWatchReader reports that bytes arrived, so a stall timer can be reset.
