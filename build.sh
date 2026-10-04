@@ -66,6 +66,7 @@ Environment (all still honored; the matching switch wins):
                    --network=host when the default bridge is firewalled)
   XRAY_SRC         build the core from another local checkout
   XRAY_REPO/REF    fork URL / git ref for the fallback clone
+  VPNUI_VERSION    version embedded in the binary (-v), e.g. v1.9.4.20-release
   CC               cgo cross compiler, required by -a/--arch off this host's arch
 
 Examples:
@@ -124,6 +125,10 @@ done
 command -v go >/dev/null 2>&1 || die "no 'go' in PATH. The panel, the Xray core and the arch default all need the Go toolchain."
 HOST_ARCH="$(go env GOARCH)"
 ARCH="${ARCH_FLAG:-$HOST_ARCH}"
+BUILD_VERSION="${VPNUI_VERSION:-$(tr -d '[:space:]' < config/version)}"
+if [[ ! "$BUILD_VERSION" =~ ^[vV]?[0-9]+(\.[0-9]+)*([-+][^[:space:]]+)?$ ]]; then
+    die "invalid VPNUI_VERSION '$BUILD_VERSION' (expected e.g. 1.9.4.20 or v1.9.4.20-release)"
+fi
 # sqlite needs cgo, so a build for another GOARCH invokes a C compiler for THAT arch.
 # Without CC set, go reaches for the host gcc and dies pages deep in linker errors
 # that say nothing about the real cause. Say it here instead.
@@ -301,14 +306,16 @@ OUT_DIR="$REPO_ROOT/build/out"
 OUT_BIN="$OUT_DIR/vpn-ui-$ARCH"
 step "compiling vpn-ui"
 if (( DRY_RUN )); then
-    info "would run: CGO_ENABLED=1 GOARCH=$ARCH go build -o build/out/vpn-ui-$ARCH main.go"
+    info "would run: CGO_ENABLED=1 GOARCH=$ARCH go build -ldflags '-X github.com/mhsanaei/3x-ui/v2/config.buildVersion=$BUILD_VERSION' -o build/out/vpn-ui-$ARCH main.go"
     hr
     ok "dry run: nothing was built"
     hr
     exit 0
 fi
 mkdir -p "$OUT_DIR"
-CGO_ENABLED=1 GOARCH="$ARCH" go build -o "$OUT_BIN" main.go
+CGO_ENABLED=1 GOARCH="$ARCH" go build \
+    -ldflags "-X github.com/mhsanaei/3x-ui/v2/config.buildVersion=$BUILD_VERSION" \
+    -o "$OUT_BIN" main.go
 
 hr
 ok "done: ${_CB:-}$(ls -lh "$OUT_BIN" | awk '{print $5}')${_CR:-} -> ${_CB:-}build/out/vpn-ui-${ARCH}${_CR:-}"

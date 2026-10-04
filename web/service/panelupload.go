@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -91,10 +90,8 @@ var (
 	stagedPanelAt   time.Time
 )
 
-// panelVersionPattern is what a version line has to look like. It is the cheapest test
-// that separates "a vpn-ui binary" from "some other ELF that printed its usage": the
-// panel answers -v with a bare dotted version and nothing else.
-var panelVersionPattern = regexp.MustCompile(`^v?\d+(\.\d+)*$`)
+// panel version lines must be parseable by parsePanelVersion; that keeps manual
+// binary validation and GitHub release comparison on the same accepted formats.
 
 // StagePanelBinary writes an uploaded binary next to the running one, checks it is
 // something this host can actually exec, reads its version, and holds it for a
@@ -332,7 +329,7 @@ func StagePanelBinaryFromURL(rawURL string) (StagedPanelInfo, error) {
 // info parse, and a -v probe that execs it), and reporting a download through all of
 // that shows a bar frozen at 99% with the speed decaying to zero.
 type phaseFlipReader struct {
-	r      io.Reader
+	r       io.Reader
 	flipped bool
 }
 
@@ -492,10 +489,10 @@ func panelBinaryVersion(path string) (string, error) {
 	if i := strings.IndexAny(version, "\r\n"); i >= 0 {
 		version = strings.TrimSpace(version[:i])
 	}
-	if !panelVersionPattern.MatchString(version) {
+	if !parsablePanelVersion(version) {
 		return "", errors.New("that file did not report a version number, so it is not a vpn-ui binary")
 	}
-	return strings.TrimPrefix(version, "v"), nil
+	return strings.TrimPrefix(strings.TrimPrefix(version, "v"), "V"), nil
 }
 
 // comparePanelVersions classifies the staged version against the running one. Reuses
@@ -521,10 +518,10 @@ func comparePanelVersions(staged, current string) string {
 	}
 }
 
-// parsablePanelVersion reports whether versionNewer can actually order this string:
-// a leading "v" and dotted decimal components, nothing else.
+// parsablePanelVersion reports whether versionNewer can order this string.
 func parsablePanelVersion(v string) bool {
-	return panelVersionPattern.MatchString(strings.TrimSpace(v))
+	_, ok := parsePanelVersion(v)
+	return ok
 }
 
 // cappedBuffer collects at most max bytes and silently drops the rest, so a binary

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/database"
@@ -115,7 +116,7 @@ func (s *ServerService) CheckPanelUpdate() (*PanelUpdateInfo, error) {
 		return info, err
 	}
 
-	latest := strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v")
+	latest := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v"), "V")
 	if latest != "" {
 		info.Latest = latest
 	}
@@ -331,6 +332,14 @@ func (s *ServerService) UpdatePanel() error {
 		}
 	}()
 
+	latestInfo, err := s.CheckPanelUpdate()
+	if err != nil {
+		return fmt.Errorf("cannot confirm the latest release version: %w", err)
+	}
+	if latestInfo == nil || !parsablePanelVersion(latestInfo.Latest) {
+		return errors.New("GitHub returned an unrecognized release version; refusing to update")
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot resolve own path: %w", err)
@@ -362,6 +371,15 @@ func (s *ServerService) UpdatePanel() error {
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		_ = os.Remove(tmp)
 		return err
+	}
+	stagedVersion, err := panelBinaryVersion(tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("downloaded release asset has no valid vpn-ui version: %w", err)
+	}
+	if comparePanelVersions(stagedVersion, latestInfo.Latest) != PanelUploadSame {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("release tag %q does not match binary version %q; refusing to report a false update", latestInfo.Latest, stagedVersion)
 	}
 
 	// A cancel can land between the download returning and the hook being dropped
@@ -635,28 +653,60 @@ func restartPanel(exe string) {
 	}
 }
 
-// versionNewer reports whether dotted version a is strictly newer than b (both
-// may carry a leading "v"). Non-numeric or unparseable tags yield false, so a
-// malformed release never spuriously advertises an update.
+// parsePanelVersion accepts a dotted numeric version with an optional v prefix
+// and an optional human-readable release suffix (for example, v1.9.4.20-fix).
+// Suffixes identify releases but do not affect numeric ordering.
+func parsePanelVersion(raw string) ([]uint64, bool) {
+	v := strings.TrimSpace(raw)
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	if v == "" {
+		return nil, false
+	}
+
+	core := v
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		suffix := v[i+1:]
+		if suffix == "" || strings.IndexFunc(suffix, func(r rune) bool {
+			return unicode.IsSpace(r) || unicode.IsControl(r)
+		}) >= 0 {
+			return nil, false
+		}
+		core = v[:i]
+	}
+	parts := strings.Split(core, ".")
+	components := make([]uint64, len(parts))
+	for i, part := range parts {
+		if part == "" {
+			return nil, false
+		}
+		n, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return nil, false
+		}
+		components[i] = n
+	}
+	return components, true
+}
+
+// versionNewer compares numeric components while accepting the version spelling
+// used by either config/version or a GitHub tag. Release suffixes are informational.
 func versionNewer(a, b string) bool {
-	a = strings.TrimPrefix(strings.TrimSpace(a), "v")
-	b = strings.TrimPrefix(strings.TrimSpace(b), "v")
-	if a == "" {
+	pa, okA := parsePanelVersion(a)
+	pb, okB := parsePanelVersion(b)
+	if !okA || !okB {
 		return false
 	}
-	pa := strings.Split(a, ".")
-	pb := strings.Split(b, ".")
 	n := len(pa)
 	if len(pb) > n {
 		n = len(pb)
 	}
 	for i := 0; i < n; i++ {
-		var x, y int
+		var x, y uint64
 		if i < len(pa) {
-			x, _ = strconv.Atoi(pa[i])
+			x = pa[i]
 		}
 		if i < len(pb) {
-			y, _ = strconv.Atoi(pb[i])
+			y = pb[i]
 		}
 		if x != y {
 			return x > y

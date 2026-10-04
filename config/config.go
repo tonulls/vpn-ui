@@ -13,6 +13,10 @@ import (
 //go:embed version
 var version string
 
+// buildVersion is optionally set by build.sh from VPNUI_VERSION. Keep the embedded
+// file as a sensible source-build default when no release version was supplied.
+var buildVersion string
+
 //go:embed name
 var name string
 
@@ -30,6 +34,9 @@ const (
 
 // GetVersion returns the version string of the vpn-ui application.
 func GetVersion() string {
+	if v := strings.TrimSpace(buildVersion); v != "" {
+		return v
+	}
 	return strings.TrimSpace(version)
 }
 

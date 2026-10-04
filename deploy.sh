@@ -18,6 +18,7 @@ UNIT_FALLBACK="vpn-ui"
 # a menu from a different release than the binary it drives.
 MENU="/usr/bin/vpn-ui"
 DL_URL="https://github.com/$REPO/releases/latest/download/$ASSET"
+RELEASES_API="https://api.github.com/repos/$REPO/releases?per_page=100"
 # The panel keeps its SQLite DB next to the binary (exe dir). Backups go beside it.
 DB="$DEST_DIR/vpn-ui.db"
 BACKUP_DIR="$DEST_DIR/backups"
@@ -74,6 +75,17 @@ fmt_time() {
     fi
 }
 
+# Numeric portion of a release/binary version. Release suffixes such as
+# "-telegram-xray-routing" are labels; trailing zero components are equivalent.
+version_core() {
+    local v="$1"
+    v="${v#v}"; v="${v#V}"
+    v="${v%%-*}"; v="${v%%+*}"
+    [[ "$v" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+    while [[ "$v" == *.0 ]]; do v="${v%.0}"; done
+    printf '%s' "$v"
+}
+
 # Real-SSL (Let's Encrypt via acme.sh) lives in ONE place: obtain_letsencrypt_cert
 # in vpn-ui.sh, which is sourced further below once the menu script is installed.
 # It used to be defined here and copied into the menu, which is exactly how two
@@ -115,16 +127,96 @@ if   command -v curl >/dev/null 2>&1; then DL="curl"
 elif command -v wget >/dev/null 2>&1; then DL="wget"
 else die "need 'curl' or 'wget' to download the release."; fi
 
-# Resolve + download the latest release asset
-msg "Fetching latest release of $REPO"
-
-# Best-effort: read the release tag from the /releases/latest redirect (display only).
-ver=""
+# Resolve a stable release with the required binary asset. When a controlling
+# terminal is available, let the operator choose the latest release or one of the
+# ten newest installable releases. Piped/non-interactive installs quietly default
+# to latest; pressing Enter at the prompt has the same default.
+msg "Loading releases of $REPO"
+release_json=""
 if [[ "$DL" == "curl" ]]; then
-    ver="$(curl -sILo /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null \
-           | grep -oE 'tag/[^/[:space:]]+$' | sed 's#tag/##' || true)"
+    release_json="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' \
+        -H 'User-Agent: vpn-ui-deploy' "$RELEASES_API" 2>/dev/null || true)"
+else
+    release_json="$(wget -qO- --timeout=20 --tries=1 "$RELEASES_API" 2>/dev/null || true)"
 fi
-[[ -n "$ver" ]] && act "latest release: ${GREEN}${ver}${R}" || act "asset: ${GREEN}${ASSET}${R}"
+release_rows=""
+if [[ -n "$release_json" ]] && command -v python3 >/dev/null 2>&1; then
+    release_rows="$(printf '%s' "$release_json" | python3 -c '
+import json, sys
+try:
+    releases = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if not isinstance(releases, list):
+    sys.exit(1)
+count = 0
+for release in releases:
+    if release.get("draft") or release.get("prerelease"):
+        continue
+    if not any(asset.get("name") == "vpn-ui-amd64" for asset in release.get("assets", [])):
+        continue
+    tag = release.get("tag_name", "")
+    if not tag or any(ord(ch) < 32 for ch in tag):
+        continue
+    print(tag)
+    count += 1
+    if count == 10:
+        break
+' 2>/dev/null || true)"
+fi
+release_tags=()
+if [[ -n "$release_rows" ]]; then
+    mapfile -t release_tags <<< "$release_rows"
+fi
+latest_tag="${release_tags[0]:-}"
+ver="$latest_tag"
+selected_tag="$latest_tag"
+
+# Fallback remains the stable /latest asset endpoint if GitHub's API is unavailable
+# or Python is absent. Curl can still resolve and display the tag via its redirect.
+if [[ -z "$latest_tag" && "$DL" == "curl" ]]; then
+    ver="$(curl -sILo /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null \
+        | grep -oE 'tag/[^/[:space:]]+$' | sed 's#tag/##' || true)"
+fi
+
+if [[ -r /dev/tty && -n "$latest_tag" ]]; then
+    {
+        printf '%s::%s %sRelease selection%s\n' "$B$BLUE" "$R" "$WHITE" "$R"
+        printf '    %s1)%s Default: %s%s%s [latest]\n' "$GREEN" "$R" "$TEAL" "$latest_tag" "$R"
+        printf '    %s2)%s Select others (up to 10 recent releases)\n' "$GREEN" "$R"
+        printf '  Select option 1 or 2 (default is 1): '
+    } > /dev/tty
+    read -r release_choice < /dev/tty || release_choice=""
+    if [[ "$release_choice" == "2" ]]; then
+        {
+            printf '%s::%s %sRecent releases%s\n' "$B$BLUE" "$R" "$WHITE" "$R"
+            for i in "${!release_tags[@]}"; do
+                printf '    %s%d)%s %s\n' "$GREEN" "$((i + 1))" "$R" "${release_tags[$i]}"
+            done
+            printf '  Select release number (1-%d, default is 1): ' "${#release_tags[@]}"
+        } > /dev/tty
+        read -r release_number < /dev/tty || release_number=""
+        [[ -n "$release_number" ]] || release_number=1
+        if [[ "$release_number" =~ ^[0-9]+$ ]] && (( release_number >= 1 && release_number <= ${#release_tags[@]} )); then
+            selected_tag="${release_tags[$((release_number - 1))]}"
+        else
+            warn "invalid release selection; using latest ${latest_tag}."
+            selected_tag="$latest_tag"
+        fi
+    elif [[ -n "$release_choice" && "$release_choice" != "1" ]]; then
+        warn "invalid option; using latest ${latest_tag}."
+    fi
+fi
+
+if [[ -n "$selected_tag" ]]; then
+    ver="$selected_tag"
+    DL_URL="https://github.com/$REPO/releases/download/$selected_tag/$ASSET"
+else
+    [[ -r /dev/tty ]] && warn "release list unavailable; falling back to the latest download."
+    ver="${ver:-latest}"
+fi
+msg "Downloading release of $REPO"
+[[ -n "$ver" ]] && act "selected release: ${GREEN}${ver}${R}" || act "asset: ${GREEN}${ASSET}${R}"
 if [[ "$MODE" == "update" ]]; then
     act "mode:   ${YELLOW}update${R} (${OLD_VER:-unknown} -> ${ver:-latest})"
 else
@@ -313,6 +405,13 @@ if command -v file >/dev/null 2>&1; then
     file -b "$tmp" | grep -qi 'ELF' || die "downloaded file is not an ELF binary (got: $(file -b "$tmp"))."
 else
     [[ "$(head -c4 "$tmp")" == $'\x7fELF' ]] || die "downloaded file is not an ELF binary."
+fi
+if [[ -n "$selected_tag" ]]; then
+    binary_ver="$("$tmp" -v 2>/dev/null | head -n1 | tr -d '[:space:]')" || binary_ver=""
+    expected_core="$(version_core "$selected_tag" 2>/dev/null || true)"
+    actual_core="$(version_core "$binary_ver" 2>/dev/null || true)"
+    [[ -n "$expected_core" && "$expected_core" == "$actual_core" ]] || \
+        die "release $selected_tag asset reports version '${binary_ver:-unknown}'; refusing to install a mismatched binary."
 fi
 ok "downloaded $(fmt_bytes "$DL_BYTES") in $(fmt_time "$DL_SECS")  (avg $(fmt_bytes "$DL_RATE")/s)"
 
