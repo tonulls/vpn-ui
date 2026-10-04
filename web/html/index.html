@@ -829,17 +829,19 @@
             @change="toggleGeofileXrayRouting"></a-switch>
         </div>
         <div v-if="geofileXrayRouting.enabled" class="mb-10">
-          <a-row :gutter="12">
-            <a-col :span="24" class="mb-8">
-              <div class="mb-5">inboundTag</div>
+          <a-row :gutter="12" type="flex" align="middle" class="mb-8">
+            <a-col :span="8">inboundTag</a-col>
+            <a-col :span="16">
               <a-select v-model="geofileXrayRouting.inboundTag" allow-clear
                 placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
                 :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%">
                 <a-select-option v-for="tag in geofileXrayRoutingOptions.inboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
               </a-select>
             </a-col>
-            <a-col :span="24" class="mb-8">
-              <div class="mb-5">outboundTag</div>
+          </a-row>
+          <a-row :gutter="12" type="flex" align="middle" class="mb-8">
+            <a-col :span="8">outboundTag</a-col>
+            <a-col :span="16">
               <a-select :value="geofileXrayRouting.outboundTag || undefined" allow-clear
                 placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
                 :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%"
@@ -847,8 +849,10 @@
                 <a-select-option v-for="tag in geofileXrayRoutingOptions.outboundTags" :key="tag" :value="tag">[[ tag ]]</a-select-option>
               </a-select>
             </a-col>
-            <a-col :span="24" class="mb-8">
-              <div class="mb-5">balancerTag</div>
+          </a-row>
+          <a-row :gutter="12" type="flex" align="middle" class="mb-8">
+            <a-col :span="8">balancerTag</a-col>
+            <a-col :span="16">
               <a-select :value="geofileXrayRouting.balancerTag || undefined" allow-clear
                 placeholder='{{ i18n "pages.index.geofileXraySelectPlaceholder" }}'
                 :dropdown-class-name="themeSwitcher.currentTheme" style="width: 100%"
@@ -857,9 +861,11 @@
               </a-select>
             </a-col>
           </a-row>
-          <a-button type="primary" class="mt-8" :loading="geofileXrayRoutingSaving"
-            :disabled="!geofileXrayRoutingChanged || !geofileXrayRoutingValid"
-            @click="saveGeofileXrayRouting">{{ i18n "pages.index.geofileXraySave" }}</a-button>
+          <div class="mt-5 d-flex justify-end">
+            <a-button :loading="geofileXrayRoutingSaving"
+              :disabled="!geofileXrayRoutingChanged || !geofileXrayRoutingValid"
+              @click="saveGeofileXrayRouting">{{ i18n "pages.index.geofileXraySave" }}</a-button>
+          </div>
         </div>
         <a-list class="ant-version-list w-100" bordered>
           <a-list-item class="ant-version-list-item"
