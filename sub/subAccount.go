@@ -61,6 +61,9 @@ type subScope struct {
 	// client_traffics row is read once however many memberships ask for it.
 	traffics map[string]identityTraffic
 
+	// membershipQuotas caches the separate per-inbound quota and manual membership flag.
+	membershipQuotas map[string]membershipQuotaState
+
 	// names is every node name already handed out in this response. See uniqueName.
 	names map[string]bool
 }
@@ -71,11 +74,17 @@ type identityTraffic struct {
 	ok      bool
 }
 
+type membershipQuotaState struct {
+	membership *model.AccountInbound
+	quota      service.MembershipTrafficQuota
+}
+
 func newSubScope() *subScope {
 	scope := &subScope{
-		accounts: map[string]*model.Account{},
-		traffics: map[string]identityTraffic{},
-		names:    map[string]bool{},
+		accounts:         map[string]*model.Account{},
+		traffics:         map[string]identityTraffic{},
+		membershipQuotas: map[string]membershipQuotaState{},
+		names:            map[string]bool{},
 	}
 	scope.migrated = scope.accountService.AccountsMigrated()
 	return scope
@@ -151,6 +160,47 @@ func (sc *subScope) traffic(email string) (xray.ClientTraffic, bool) {
 
 	sc.traffics[key] = identityTraffic{traffic: row, ok: true}
 	return row, true
+}
+
+// membershipQuota загружает отдельную квоту и ручной флаг одного членства.
+func (sc *subScope) membershipQuota(inbound *model.Inbound, email string) membershipQuotaState {
+	if sc == nil || inbound == nil || !inbound.PerUserTrafficLimitEnable {
+		return membershipQuotaState{}
+	}
+	account := sc.account(email)
+	if account == nil {
+		// Для локальной квоты достаточно строк членства этого inbound. Они могут
+		// быть созданы при сохранении лимита ещё до глобального backfill аккаунтов.
+		var err error
+		account, err = sc.accountService.GetAccountByEmail(email)
+		if err != nil {
+			logger.Error("SubService - account lookup for local quota", email, ":", err)
+			account = nil
+		}
+	}
+	if account == nil {
+		membership := &model.AccountInbound{InboundId: inbound.Id, QuotaUsedBytes: inbound.PerUserTrafficLimitBytes}
+		return membershipQuotaState{membership: membership, quota: service.ResolveMembershipTrafficQuota(inbound, membership)}
+	}
+	cacheKey := strconv.Itoa(inbound.Id) + "\x00" + identityKey(email)
+	if cached, ok := sc.membershipQuotas[cacheKey]; ok {
+		return cached
+	}
+
+	membership := &model.AccountInbound{AccountId: account.Id, InboundId: inbound.Id}
+	err := database.GetDB().Where("account_id = ? AND inbound_id = ?", account.Id, inbound.Id).First(membership).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		logger.Error("SubService - membership quota lookup for", email, "inbound", inbound.Id, ":", err)
+		// Ошибка чтения не должна превращать строгий лимит в безлимитный. Для
+		// отображения оставляем запись видимой с нулевым остатком.
+		membership.QuotaUsedBytes = inbound.PerUserTrafficLimitBytes
+	}
+	state := membershipQuotaState{
+		membership: membership,
+		quota:      service.ResolveMembershipTrafficQuota(inbound, membership),
+	}
+	sc.membershipQuotas[cacheKey] = state
+	return state
 }
 
 // accountTrafficRow reads the ONE client_traffics row an identity has.

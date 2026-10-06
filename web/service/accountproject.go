@@ -198,12 +198,12 @@ func renderClientEntry(account *model.Account, membership *model.AccountInbound,
 	entry["subId"] = account.SubID
 	entry["totalGB"] = account.TotalGB
 	entry["expiryTime"] = account.ExpiryTime
-	// The AND of the two questions the two flags answer: is this account live at
-	// all, and is it served on THIS inbound. Both have to say yes, and either one
-	// saying no has to reach the entry, because every enforcement path downstream
-	// reads exactly this per-inbound field (radius.go:765, wgc.go:400, gre.go:403,
-	// ssh.go:125, mtproto.go:629, and the core's own per-inbound user list).
-	entry["enable"] = account.Enable && MembershipEnabled(membership)
+	// Эффективное состояние складывается из трёх независимых условий: аккаунт
+	// включён глобально, ручное членство включено и локальная квота этого inbound
+	// не исчерпана. Исчерпание локальной квоты меняет только эту запись; общие
+	// флаги аккаунта и ручной переключатель членства не переписываются.
+	quota := ResolveMembershipTrafficQuota(inbound, membership)
+	entry["enable"] = account.Enable && MembershipEnabled(membership) && !quota.Exhausted
 	entry["reset"] = account.Reset
 	entry["limitIp"] = account.LimitIP
 	entry["tgId"] = account.TgID
@@ -433,7 +433,10 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int, creator
 			// served by nothing, and returning here without pruning left it
 			// listed forever on the Clients page and blocking revert-accounts.
 			// Found by deleting a test inbound on a live panel.
-			return s.pruneOrphanAccounts(tx, orphaned)
+			if err := s.pruneOrphanAccounts(tx, orphaned); err != nil {
+				return err
+			}
+			return s.markAccountsMigratedIfComplete(tx)
 		}
 		return err
 	}
@@ -480,7 +483,10 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int, creator
 		}
 		dropped = append(dropped, membership.AccountId)
 	}
-	return s.pruneOrphanAccounts(tx, dropped)
+	if err := s.pruneOrphanAccounts(tx, dropped); err != nil {
+		return err
+	}
+	return s.markAccountsMigratedIfComplete(tx)
 }
 
 // upsertAccountFromEntry creates or refreshes the account a client entry belongs
@@ -562,7 +568,22 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 	// An account with no inbound has no membership to explain anything, and
 	// membershipEnabledFor answers "enabled" for a row that is not there, so the
 	// posted entry decides - which is right: nothing else can.
-	if !s.membershipEnabledFor(tx, account.Id, inboundId) {
+	preserveAccountEnable := !s.membershipEnabledFor(tx, account.Id, inboundId)
+	localQuotaExhausted := false
+	if !updated.Enable {
+		var quotaErr error
+		localQuotaExhausted, quotaErr = accountHasExhaustedLocalQuota(tx, account.Id)
+		if quotaErr != nil {
+			return nil, quotaErr
+		}
+	}
+	if localQuotaExhausted {
+		// settings.clients.enable — эффективное состояние. false, возникшее только
+		// из-за исчерпания локальной квоты любого членства, не должно менять общий
+		// флаг аккаунта при следующей синхронизации inbound.
+		preserveAccountEnable = true
+	}
+	if preserveAccountEnable {
 		updated.Enable = account.Enable
 	}
 	// Credentials are per FIELD and are filled from whichever protocol supplies

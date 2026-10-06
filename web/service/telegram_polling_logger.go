@@ -9,7 +9,9 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/logger"
 )
 
-const telegramPollingLogInterval = time.Minute
+// Avoid filling the service log during a prolonged Telegram/network outage while
+// still emitting occasional reminders that polling is retrying in the background.
+const telegramPollingLogInterval = 15 * time.Minute
 
 type telegramPollingLogger struct {
 	mu       sync.Mutex

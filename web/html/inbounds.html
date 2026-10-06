@@ -675,47 +675,47 @@
   // for a breakpoint named "s" that antd does not have. Neither has rendered a
   // cell in a long time.
   //
-  // Widths are proportions, not pixels: the table scrolls at x:1000 and antd
-  // shares the surplus out in these ratios.
+  // Widths are proportions that add up to the table's 1000px scroll width;
+  // each column therefore keeps the intended share without squeezing its neighbors.
   const columns = [{
     align: 'center',
-    width: 25,
+    width: 46,
     slots: { title: 'selectAllHeader' },
     scopedSlots: { customRender: 'select' },
   }, {
     title: '{{ i18n "pages.inbounds.operate" }}',
     align: 'center',
-    width: 30,
+    width: 55,
     scopedSlots: { customRender: 'action' },
   }, {
     title: '{{ i18n "pages.inbounds.enable" }}',
     align: 'center',
-    width: 35,
+    width: 64,
     scopedSlots: { customRender: 'enable' },
   }, {
     title: '{{ i18n "pages.inbounds.inbound" }}',
     align: 'left',
-    width: 110,
+    width: 150,
     scopedSlots: { customRender: 'identity' },
   }, {
     title: '{{ i18n "pages.inbounds.endpoint" }}',
     align: 'right',
-    width: 120,
+    width: 220,
     scopedSlots: { customRender: 'endpoint' },
   }, {
     title: '{{ i18n "pages.inbounds.traffic" }}',
     align: 'left',
-    width: 90,
+    width: 165,
     scopedSlots: { customRender: 'data' },
   }, {
     title: '{{ i18n "clients" }}',
     align: 'left',
-    width: 80,
+    width: 140,
     scopedSlots: { customRender: 'accounts' },
   }, {
     title: '{{ i18n "pages.inbounds.expireDate" }}',
     align: 'center',
-    width: 48,
+    width: 160,
     scopedSlots: { customRender: 'expiryTime' },
   }];
 
@@ -1246,6 +1246,9 @@
           expiryTime: dbInbound.expiryTime,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
+          perUserTrafficLimitEnable: dbInbound.perUserTrafficLimitEnable,
+          perUserTrafficLimitBytes: dbInbound.perUserTrafficLimitBytes,
+          perUserTrafficLimitUnit: dbInbound.perUserTrafficLimitUnit,
           trafficMultiplierEnable: dbInbound.trafficMultiplierEnable,
           trafficMultiplierAfter: dbInbound.trafficMultiplierAfter,
           trafficMultiplier: dbInbound.trafficMultiplier,
@@ -1318,6 +1321,9 @@
           expiryTime: dbInbound.expiryTime,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
+          perUserTrafficLimitEnable: dbInbound.perUserTrafficLimitEnable,
+          perUserTrafficLimitBytes: dbInbound.perUserTrafficLimitBytes,
+          perUserTrafficLimitUnit: dbInbound.perUserTrafficLimitUnit,
           trafficMultiplierEnable: dbInbound.trafficMultiplierEnable,
           trafficMultiplierAfter: dbInbound.trafficMultiplierAfter,
           trafficMultiplier: dbInbound.trafficMultiplier,
@@ -1354,6 +1360,9 @@
           expiryTime: dbInbound.expiryTime,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
+          perUserTrafficLimitEnable: dbInbound.perUserTrafficLimitEnable,
+          perUserTrafficLimitBytes: dbInbound.perUserTrafficLimitBytes,
+          perUserTrafficLimitUnit: dbInbound.perUserTrafficLimitUnit,
           trafficMultiplierEnable: dbInbound.trafficMultiplierEnable,
           trafficMultiplierAfter: dbInbound.trafficMultiplierAfter,
           trafficMultiplier: dbInbound.trafficMultiplier,
@@ -1422,6 +1431,9 @@
           expiryTime: dbInbound.expiryTime,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
+          perUserTrafficLimitEnable: dbInbound.perUserTrafficLimitEnable,
+          perUserTrafficLimitBytes: dbInbound.perUserTrafficLimitBytes,
+          perUserTrafficLimitUnit: dbInbound.perUserTrafficLimitUnit,
           trafficMultiplierEnable: dbInbound.trafficMultiplierEnable,
           trafficMultiplierAfter: dbInbound.trafficMultiplierAfter,
           trafficMultiplier: dbInbound.trafficMultiplier,

@@ -1,5 +1,5 @@
 {{define "settings/panel/subscription/general"}}
-<a-collapse default-active-key="1">
+<a-collapse>
     <a-collapse-panel key="1" header='{{ i18n "pages.xray.generalConfigs"}}'>
         <a-setting-list-item paddings="small">
             <template #title>{{ i18n "pages.settings.subEnable"}}</template>
@@ -100,21 +100,16 @@
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.subSupportUrl"}}</template>
-            <template #description>{{ i18n
-                "pages.settings.subSupportUrlDesc"}}</template>
+            <template #title>{{ i18n "pages.settings.subShowSubscriptionUrl" }}</template>
+            <template #description>{{ i18n "pages.settings.subShowSubscriptionUrlDesc" }}</template>
             <template #control>
-                <a-input type="text" v-model="allSetting.subSupportUrl"
-                    placeholder="https://example.com"></a-input>
-            </template>
-        </a-setting-list-item>
-        <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.subProfileUrl"}}</template>
-            <template #description>{{ i18n
-                "pages.settings.subProfileUrlDesc"}}</template>
-            <template #control>
-                <a-input type="text" v-model="allSetting.subProfileUrl"
-                    placeholder="https://example.com"></a-input>
+                <div style="display:flex;align-items:center;gap:10px;width:100%">
+                    <a-switch v-model="allSetting.subShowSubscriptionUrl"></a-switch>
+                    <a-input v-if="allSetting.subShowSubscriptionUrl" type="text" :maxLength="80"
+                        v-model="allSetting.subSubscriptionButtonLabel"
+                        placeholder='{{ i18n "pages.settings.subSubscriptionButtonDefault" }}'
+                        style="flex:1;min-width:0"></a-input>
+                </div>
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
@@ -209,31 +204,86 @@
             </template>
         </a-setting-list-item>
         <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.subShowProfileUrl" }}</template>
-            <template #description>{{ i18n "pages.settings.subShowProfileUrlDesc" }}</template>
+            <template #title>{{ i18n "pages.settings.subSiteButtons" }}</template>
+            <template #description>{{ i18n "pages.settings.subSiteButtonsDesc" }}</template>
             <template #control>
                 <div style="display:flex;align-items:center;gap:10px;width:100%">
-                    <a-switch v-model="allSetting.subShowProfileUrl"></a-switch>
-                    <a-input v-if="allSetting.subShowProfileUrl" type="text"
-                        v-model="allSetting.subProfileButtonLabel"
-                        placeholder='{{ i18n "pages.settings.subButtonLabelPlaceholder" }}'
-                        style="flex:1;min-width:0"></a-input>
+                    <a-switch v-model="allSetting.subSiteButtonsEnable" @change="toggleSubSiteButtons"></a-switch>
+                    <a-button title='{{ i18n "pages.settings.subSiteButtonsSettings" }}'
+                        @click="subSiteButtonsSettingsVisible = true">
+                        <a-icon type="setting"></a-icon>
+                    </a-button>
                 </div>
             </template>
         </a-setting-list-item>
-        <a-setting-list-item paddings="small">
-            <template #title>{{ i18n "pages.settings.subShowSupport" }}</template>
-            <template #description>{{ i18n "pages.settings.subShowSupportDesc" }}</template>
-            <template #control>
-                <div style="display:flex;align-items:center;gap:10px;width:100%">
-                    <a-switch v-model="allSetting.subShowSupport"></a-switch>
-                    <a-input v-if="allSetting.subShowSupport" type="text"
-                        v-model="allSetting.subSupportButtonLabel"
-                        placeholder='{{ i18n "pages.settings.subButtonLabelPlaceholder" }}'
-                        style="flex:1;min-width:0"></a-input>
-                </div>
-            </template>
-        </a-setting-list-item>
+        <div v-if="allSetting.subSiteButtonsEnable" style="width:100%;">
+            <div v-for="(button, index) in siteUrlButtons" :key="button.id"
+                style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) 36px 36px 36px;gap:8px;width:100%;margin-top:8px">
+                <a-input type="text" v-model="button.label" :maxLength="80"
+                    placeholder='{{ i18n "pages.settings.subSiteButtonLabel" }}'
+                    @input="syncSubSiteButtons"></a-input>
+                <a-input :type="button.masked ? 'password' : 'url'" v-model="button.url" :maxLength="2048"
+                    placeholder="https://example.com" @input="syncSubSiteButtons"></a-input>
+                <a-button class="sub-site-icon-button" :title="subSiteButtonMaskTitle(button)"
+                    :aria-label="subSiteButtonMaskTitle(button)" @click="toggleSubSiteButtonMask(button)">
+                    <a-icon :type="button.masked ? 'eye-invisible' : 'eye'"></a-icon>
+                </a-button>
+                <a-button v-if="siteUrlButtons.length > 1" class="sub-site-icon-button" type="danger"
+                    title='{{ i18n "pages.settings.subSiteButtonDelete" }}'
+                    @click="removeSubSiteButton(index)"><a-icon type="delete"></a-icon></a-button>
+                <span v-else></span>
+                <a-button type="primary" class="sub-site-icon-button sub-site-button-add"
+                    style="background:#2e9d55;border-color:#2e9d55;color:#fff"
+                    title='{{ i18n "pages.settings.subSiteButtonAdd" }}'
+                    @click="addSubSiteButton"><a-icon type="plus"></a-icon></a-button>
+            </div>
+        </div>
+        <a-modal v-model="subSiteButtonsSettingsVisible"
+            title='{{ i18n "pages.settings.subSiteButtonsSettings" }}'
+            ok-text='{{ i18n "save" }}' cancel-text='{{ i18n "cancel" }}'
+            :class="themeSwitcher.currentTheme" :width="520"
+            @ok="subSiteButtonsSettingsVisible = false"
+            @cancel="subSiteButtonsSettingsVisible = false">
+            <div>{{ i18n "pages.settings.subSiteButtonsPerRow" }}</div>
+            <a-input-number v-model="allSetting.subSiteButtonsPerRow" :min="1" :max="6"
+                style="width:100%;margin-top:8px"></a-input-number>
+            <div style="margin-top:18px">{{ i18n "pages.settings.subSiteButtonsTextAlign" }}</div>
+            <a-radio-group v-model="allSetting.subSiteButtonsTextAlign" button-style="solid"
+                style="display:flex;width:100%;margin-top:8px">
+                <a-radio-button value="left" title='{{ i18n "pages.settings.subSiteButtonsAlignLeft" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsAlignLeft" }}'
+                    style="flex:1;text-align:center"><a-icon type="align-left"></a-icon><span style="margin-left:6px">{{ i18n "pages.settings.subSiteButtonsAlignLeft" }}</span></a-radio-button>
+                <a-radio-button value="center" title='{{ i18n "pages.settings.subSiteButtonsAlignCenter" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsAlignCenter" }}'
+                    style="flex:1;text-align:center"><a-icon type="align-center"></a-icon><span style="margin-left:6px">{{ i18n "pages.settings.subSiteButtonsAlignCenter" }}</span></a-radio-button>
+                <a-radio-button value="right" title='{{ i18n "pages.settings.subSiteButtonsAlignRight" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsAlignRight" }}'
+                    style="flex:1;text-align:center"><a-icon type="align-right"></a-icon><span style="margin-left:6px">{{ i18n "pages.settings.subSiteButtonsAlignRight" }}</span></a-radio-button>
+            </a-radio-group>
+            <div style="margin-top:18px">{{ i18n "pages.settings.subSiteButtonsTextStyle" }}</div>
+            <a-space style="display:flex;flex-wrap:wrap;margin-top:8px">
+                <a-button :type="allSetting.subSiteButtonsBold ? 'primary' : 'default'"
+                    title='{{ i18n "pages.settings.subSiteButtonsTextBold" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsTextBold" }}'
+                    @click="allSetting.subSiteButtonsBold = !allSetting.subSiteButtonsBold">
+                    <a-icon type="bold"></a-icon></a-button>
+                <a-button :type="allSetting.subSiteButtonsItalic ? 'primary' : 'default'"
+                    title='{{ i18n "pages.settings.subSiteButtonsTextItalic" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsTextItalic" }}'
+                    @click="allSetting.subSiteButtonsItalic = !allSetting.subSiteButtonsItalic">
+                    <a-icon type="italic"></a-icon></a-button>
+                <a-button :type="allSetting.subSiteButtonsUnderline ? 'primary' : 'default'"
+                    title='{{ i18n "pages.settings.subSiteButtonsTextUnderline" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsTextUnderline" }}'
+                    @click="allSetting.subSiteButtonsUnderline = !allSetting.subSiteButtonsUnderline">
+                    <a-icon type="underline"></a-icon></a-button>
+                <a-button :type="allSetting.subSiteButtonsStrike ? 'primary' : 'default'"
+                    title='{{ i18n "pages.settings.subSiteButtonsTextStrike" }}'
+                    aria-label='{{ i18n "pages.settings.subSiteButtonsTextStrike" }}'
+                    @click="allSetting.subSiteButtonsStrike = !allSetting.subSiteButtonsStrike">
+                    <a-icon type="strikethrough"></a-icon></a-button>
+            </a-space>
+        </a-modal>
     </a-collapse-panel>
 </a-collapse>
 {{end}}

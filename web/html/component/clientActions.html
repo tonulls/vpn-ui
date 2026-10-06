@@ -985,9 +985,6 @@
         // Fallback to simple date formatting if IntlUtil is not available
         return new Date(ts).toLocaleString()
       },
-      isRemovable(dbInboundId) {
-        return this.getInboundClients(this.dbInbounds.find(row => row.id === dbInboundId)).length > 1;
-      },
     },
   };
 </script>

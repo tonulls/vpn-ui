@@ -498,6 +498,42 @@
               <template slot="label">
                   <a-tooltip>
                       <template slot="title">
+                          {{ i18n "pages.inbounds.form.perUserTrafficLimitDesc" }}
+                      </template>
+                      {{ i18n "pages.inbounds.form.perUserTrafficLimitTitle" }}
+                      <a-icon type="question-circle"></a-icon>
+                  </a-tooltip>
+              </template>
+              <a-switch v-model="dbInbound.perUserTrafficLimitEnable"></a-switch>
+          </a-form-item>
+
+          <template v-if="dbInbound.perUserTrafficLimitEnable">
+              <a-form-item label='{{ i18n "pages.inbounds.form.perUserTrafficLimitAmount" }}'>
+                  <a-input-group compact>
+                      <a-input-number
+                          v-model.number="dbInbound.perUserTrafficLimitValue"
+                          :min="0.01"
+                          :step="0.01"
+                          :style="{ width: 'calc(100% - 90px)' }"
+                      ></a-input-number>
+                      <a-select
+                          v-model="dbInbound.perUserTrafficLimitUnit"
+                          :style="{ width: '90px' }"
+                          :dropdown-class-name="themeSwitcher.currentTheme"
+                      >
+                          <a-select-option value="MB">MB</a-select-option>
+                          <a-select-option value="GB">GB</a-select-option>
+                          <a-select-option value="TB">TB</a-select-option>
+                      </a-select>
+                  </a-input-group>
+              </a-form-item>
+              <p class="bo-if-d">{{ i18n "pages.inbounds.form.perUserTrafficLimitWindowDesc" }}</p>
+          </template>
+
+          <a-form-item>
+              <template slot="label">
+                  <a-tooltip>
+                      <template slot="title">
                           {{ i18n "pages.inbounds.trafficMultiplierDesc" }}
                       </template>
                       {{ i18n "pages.inbounds.trafficMultiplierTitle" }}

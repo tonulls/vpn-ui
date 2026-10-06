@@ -88,6 +88,11 @@ const ocInterimInterval = 60
 // takes over.
 const ocHeartbeatGrace = 150 * time.Second
 
+type radiusMembershipKey struct {
+	inboundId int
+	emailKey  string
+}
+
 type radiusSession struct {
 	email    string
 	ip       string
@@ -891,6 +896,22 @@ func (s *RadiusService) lookupEmail(protocol string, username string) string {
 //     their disable/eviction goes through occtl (OcservService.KillClient /
 //     killOcservByIP).
 func (s *RadiusService) KillSessionsByEmail(emails map[string]bool) {
+	s.killSessionsForDisabled(emails, nil)
+}
+
+// KillSessionsByMemberships отключает только перечисленные пары «inbound + аккаунт»;
+// disabledEmails остаётся глобальным переключателем для общей квоты и срока действия.
+func (s *RadiusService) KillSessionsByMemberships(memberships map[radiusMembershipKey]bool, disabledEmails map[string]bool) {
+	s.killSessionsForDisabled(disabledEmails, memberships)
+}
+
+func (s *RadiusService) killSessionsForDisabled(emails map[string]bool, memberships map[radiusMembershipKey]bool) {
+	globalDisabled := make(map[string]bool, len(emails))
+	for email, disabled := range emails {
+		if disabled {
+			globalDisabled[accountKey(email)] = true
+		}
+	}
 	s.mu.Lock()
 	var toKill []string
 	var sstpKill []string
@@ -899,7 +920,12 @@ func (s *RadiusService) KillSessionsByEmail(emails map[string]bool) {
 		if sess.protocol == "openconnect" {
 			continue
 		}
-		if emails[sess.email] {
+		emailKey := accountKey(sess.email)
+		disabled := globalDisabled[emailKey]
+		if !disabled && memberships != nil {
+			disabled = memberships[radiusMembershipKey{inboundId: sess.inboundId, emailKey: emailKey}]
+		}
+		if disabled {
 			if sess.protocol == "sstp" {
 				sstpKill = append(sstpKill, sess.ip)
 			} else if sess.protocol == "ikev2" {

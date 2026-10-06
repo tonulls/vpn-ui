@@ -89,6 +89,36 @@ type AccountsMigrationReport struct {
 // buried, and the pattern is clear long before that.
 const accountsConflictLogLimit = 50
 
+// markAccountsMigratedIfComplete stamps the accounts layer when its rows already
+// cover every settings.clients entry. This happens on a fresh panel as soon as the
+// normal inbound sync creates the first complete set of account rows; without the
+// stamp, subscription readers would stay on legacy per-inbound traffic forever.
+func (s *AccountService) markAccountsMigratedIfComplete(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	needed, entries, err := s.migrationNeeded(db)
+	if err != nil || needed || entries == 0 {
+		return err
+	}
+	var setting model.Setting
+	err = db.Where("key = ?", accountsMigratedKey).First(&setting).Error
+	if err == nil {
+		if setting.Value != "" {
+			return nil
+		}
+		setting.Value = fmt.Sprint(time.Now().UnixMilli())
+		return db.Save(&setting).Error
+	}
+	if !database.IsNotFound(err) {
+		return err
+	}
+	return db.Create(&model.Setting{
+		Key:   accountsMigratedKey,
+		Value: fmt.Sprint(time.Now().UnixMilli()),
+	}).Error
+}
+
 func (s *AccountService) MigrationAccounts() {
 	db := database.GetDB()
 	if db == nil {
@@ -101,6 +131,11 @@ func (s *AccountService) MigrationAccounts() {
 		return
 	}
 	if !needed {
+		if totalEntries > 0 {
+			if err := s.markAccountsMigratedIfComplete(db); err != nil {
+				logger.Warning("MigrationAccounts - could not mark the already-complete accounts layer: ", err)
+			}
+		}
 		return
 	}
 

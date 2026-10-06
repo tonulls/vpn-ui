@@ -24,6 +24,10 @@ type updateUserForm struct {
 	NewPassword string `json:"newPassword" form:"newPassword"`
 }
 
+type subSiteButtonURLRequest struct {
+	ID string `json:"id" form:"id"`
+}
+
 // SettingController handles settings and user management operations.
 type SettingController struct {
 	settingService service.SettingService
@@ -62,6 +66,7 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.Use(requirePerm(model.PermPanelSettings))
 
 	g.POST("/all", a.getAllSetting)
+	g.POST("/siteButtonUrl", a.getSubSiteButtonURL)
 	g.GET("/donationSettings", a.getDonationSettings)
 	g.POST("/donationSettings", a.updateDonationSettings)
 	g.GET("/telegramXrayRoutingOptions", a.telegramXrayRoutingOptions)
@@ -143,6 +148,20 @@ func (a *SettingController) getAllSetting(c *gin.Context) {
 		return
 	}
 	jsonObj(c, allSetting, nil)
+}
+
+func (a *SettingController) getSubSiteButtonURL(c *gin.Context) {
+	var request subSiteButtonURLRequest
+	if err := c.ShouldBind(&request); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
+		return
+	}
+	buttonURL, err := a.settingService.GetSubSiteButtonURL(request.ID)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.getSettings"), err)
+		return
+	}
+	jsonObj(c, gin.H{"url": buttonURL}, nil)
 }
 
 func (a *SettingController) telegramXrayRoutingOptions(c *gin.Context) {

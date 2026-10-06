@@ -267,6 +267,12 @@ type Inbound struct {
 	ExpiryTime           int64  `json:"expiryTime" form:"expiryTime"`                                                                    // Expiration timestamp
 	TrafficReset         string `json:"trafficReset" form:"trafficReset" gorm:"default:never;index:idx_enable_traffic_reset,priority:2"` // Traffic reset schedule
 	LastTrafficResetTime int64  `json:"lastTrafficResetTime" form:"lastTrafficResetTime" gorm:"default:0"`                               // Last traffic reset timestamp
+
+	// PerUserTrafficLimit задаёт одинаковую отдельную квоту каждому членству этого inbound.
+	// Сумма хранится в байтах; TrafficReset сбрасывает эти квоты, не меняя общую квоту аккаунта.
+	PerUserTrafficLimitEnable bool   `json:"perUserTrafficLimitEnable" form:"perUserTrafficLimitEnable" gorm:"default:0"`
+	PerUserTrafficLimitBytes  int64  `json:"perUserTrafficLimitBytes" form:"perUserTrafficLimitBytes" gorm:"default:0"`
+	PerUserTrafficLimitUnit   string `json:"perUserTrafficLimitUnit" form:"perUserTrafficLimitUnit" gorm:"default:GB"`
 	// ClientStats is the accounts this inbound SERVES, each with this inbound's share
 	// of their usage. Filled by InboundService.attachClientStats, which is what every
 	// list the panel renders goes through.
@@ -799,27 +805,24 @@ type AccountInbound struct {
 	// protocol fields added after this code was written.
 	Extra string `json:"-" gorm:"column:extra"`
 
-	// Up/Down/AllTime are this membership's SHARE of the account's usage: the bytes
-	// that entered through THIS inbound. They are a breakdown, never the truth.
+	// Up/Down/AllTime — приблизительная разбивка общего расхода аккаунта по inbound.
+	// Она остаётся только отображением и не используется для отключения по лимиту.
 	//
-	// client_traffics stays the authoritative counter and is written exactly as it
-	// was: it is the row RADIUS, the rbridge sink, the depletion sweep and every
-	// daemon read, and quota enforcement must not move onto a column added here.
-	// These are written alongside it from the same deltas, so they SUM TO IT, minus
-	// whatever could not be attributed. Never sum them to answer "how much has this
-	// account used".
+	// Общая квота аккаунта по-прежнему опирается на единственную строку client_traffics.
+	// Строгая локальная квота использует отдельный QuotaUsedBytes и только записи,
+	// однозначно указывающие inbound; неоднозначные Xray-дельты не приписываются наугад.
 	//
-	// The gap is real and is not a bug: a collected record with no source inbound
-	// (every Xray-native protocol, whose counter is named "user>>><email>>>>traffic"
-	// with no inbound component) reaches the account total and is deliberately left
-	// out of the breakdown rather than attributed to a guess. See attachClientStats
-	// for how the remainder is shown.
-	//
-	// Up/Down are BILLED bytes (multiplier applied) and AllTime is RAW, matching
-	// client_traffics column for column, so the two can be compared directly.
+	// Up/Down содержат учтённые байты с применённым multiplier, AllTime — сырые байты;
+	// не складывайте эти поля, чтобы получить точный расход аккаунта или inbound.
 	Up      int64 `json:"up" gorm:"column:up;default:0"`
 	Down    int64 `json:"down" gorm:"column:down;default:0"`
 	AllTime int64 `json:"allTime" gorm:"column:all_time;default:0"`
+
+	// QuotaUsedBytes — отдельный точный расход этой пары «аккаунт + inbound»
+	// с начала текущего периода TrafficReset. Он обновляется только из записей,
+	// для которых источник inbound определён однозначно; в отличие от Up/Down,
+	// используется для строгого per-user лимита.
+	QuotaUsedBytes int64 `json:"quotaUsedBytes" gorm:"column:quota_used_bytes;default:0"`
 
 	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
 }

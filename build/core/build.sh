@@ -18,9 +18,10 @@
 # Usage:
 #   build/core/build.sh [goarch...]        # default: amd64
 #
-# Источник — зафиксированный коммит подмодуля third_party/Xray-core. Patch для
-# доверенных proxy-заголовков хранится здесь и идемпотентно применяется перед
-# сборкой; clone ниже используется только при неинициализированном подмодуле.
+# Источник — зафиксированный коммит подмодуля third_party/Xray-core. Локальные
+# patch-и доверенных proxy-заголовков и точных счётчиков «inbound + участник»
+# хранятся здесь и идемпотентно применяются перед сборкой; clone ниже используется
+# только при неинициализированном подмодуле.
 #
 # Env:
 #   XRAY_SRC   path to a local Xray-core checkout (overrides the submodule)
@@ -221,14 +222,16 @@ build_core() {
     src="$(prepare_src)"
     bash "$REPO_ROOT/build/core/apply-xray-proxy-patch.sh" "$src"
 
-    # Ключ кэша включает и ревизию Xray, и хэш patch из основного репозитория.
-    # Поэтому изменение trusted-forwarded-IP patch пересобирает core без смены
-    # зафиксированного коммита подмодуля.
+    # Ключ кэша учитывает ревизию Xray и хэши всех локальных patch-файлов.
+    # Изменение любого patch пересобирает core без смены коммита подмодуля.
     local srccommit patch_hash source_key
     srccommit="$(git -C "$src" rev-parse HEAD 2>/dev/null || echo unknown)"
-    patch_hash="$(sha256sum "$REPO_ROOT/build/core/patches/trusted-forwarded-client-ip.patch" | awk '{print $1}')"
-    source_key="${srccommit}+trusted-proxy-${patch_hash}"
-    info "Xray source: $src @ ${srccommit:0:12}; trusted-proxy patch ${patch_hash:0:12}"
+    patch_hash="$(sha256sum \
+        "$REPO_ROOT/build/core/patches/trusted-forwarded-client-ip.patch" \
+        "$REPO_ROOT/build/core/patches/inbound-user-traffic-stats.patch" \
+        | sha256sum | awk '{print $1}')"
+    source_key="${srccommit}+xray-patches-${patch_hash}"
+    info "Xray source: $src @ ${srccommit:0:12}; local patches ${patch_hash:0:12}"
     for goarch in "${ARCHES[@]}"; do
         local outdir="$OUT_ROOT/$goarch"
         mkdir -p "$outdir"

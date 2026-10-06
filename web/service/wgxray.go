@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v2/database"
-	"github.com/mhsanaei/3x-ui/v2/util/common"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/util/common"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -346,6 +346,55 @@ func ReconcileAllWireguardXrayKeys() bool {
 		any = true
 	}
 	return any
+}
+
+// WgxrayAccountForSourceIP связывает внутренний адрес Xray-WireGuard peer с аккаунтом.
+// Адреса этого inbound назначаются устройствам как уникальные /32; более широкие или
+// неоднозначные записи намеренно не атрибутируются.
+func WgxrayAccountForSourceIP(inbound *model.Inbound, sourceIP string) (string, bool) {
+	if inbound == nil || inbound.Protocol != model.WireGuard {
+		return "", false
+	}
+	source := net.ParseIP(strings.Trim(strings.TrimSpace(sourceIP), "[]"))
+	if source == nil {
+		return "", false
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+		return "", false
+	}
+	clients, _ := settings["clients"].([]any)
+	found := ""
+	for _, item := range clients {
+		client, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		email, _ := client["email"].(string)
+		if strings.TrimSpace(email) == "" {
+			continue
+		}
+		addresses, _ := client["addresses"].([]any)
+		for _, raw := range addresses {
+			address, ok := raw.(string)
+			if !ok {
+				continue
+			}
+			ip, network, err := net.ParseCIDR(strings.TrimSpace(address))
+			if err != nil || network == nil {
+				continue
+			}
+			ones, bits := network.Mask.Size()
+			if ones != bits || !ip.Equal(source) {
+				continue
+			}
+			if found != "" && accountKey(found) != accountKey(email) {
+				return "", false
+			}
+			found = email
+		}
+	}
+	return found, found != ""
 }
 
 // applyWireguardClients rewrites one wireguard inbound's settings into the shape the

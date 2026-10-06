@@ -153,7 +153,17 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 			}
 		}
 		for _, client := range clients {
-			if client.Enable && client.SubID == subId {
+			if client.SubID != subId {
+				continue
+			}
+			quotaState := s.scope.membershipQuota(inbound, client.Email)
+			visible := client.Enable
+			if quotaState.quota.Enabled && quotaState.quota.Exhausted {
+				accountTraffic, accountBacked, _ := s.resolveTraffic(inbound, client.Email)
+				accountAllowed := !accountBacked || accountTraffic.Enable
+				visible = accountAllowed && service.MembershipEnabled(quotaState.membership)
+			}
+			if visible {
 				// Count every matching client's usage so the subscriber page shows the
 				// account's remaining traffic/days for ALL protocols, including ones with
 				// no raw link (wg-c/awg deliver via the Clash sub and gre via the page's
@@ -1496,6 +1506,30 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return cloned
 }
 
+// formatLocalQuotaRemaining returns a whole-number value in the largest useful
+// binary unit. Dropping below 1 TB switches to GB, below 1 GB to MB, and so on,
+// so a nonzero remainder never appears as 0 in a larger unit.
+func formatLocalQuotaRemaining(remainingBytes int64) string {
+	if remainingBytes <= 0 {
+		return "0МБ"
+	}
+	units := []struct {
+		bytes int64
+		label string
+	}{
+		{1 << 40, "ТБ"},
+		{1 << 30, "ГБ"},
+		{1 << 20, "МБ"},
+		{1 << 10, "КБ"},
+	}
+	for _, unit := range units {
+		if remainingBytes >= unit.bytes {
+			return strconv.FormatInt(remainingBytes/unit.bytes, 10) + unit.label
+		}
+	}
+	return strconv.FormatInt(remainingBytes, 10) + "Б"
+}
+
 // genRemark composes the node name a client displays: the inbound remark, the
 // email and a per-protocol extra, in the operator's configured order, plus the
 // remaining traffic and days when Show Info is on.
@@ -1533,20 +1567,15 @@ func (s *SubService) genRemark(inbound *model.Inbound, email string, extra strin
 	}
 
 	if s.showInfo {
-		// The account's own figures when it has an account, this inbound's preloaded
-		// row otherwise. Reading the preload alone is what left an account served on
-		// three inbounds showing its remaining traffic and days on ONE node and
-		// nothing on the other two, since its single client_traffics row can only
-		// name one of them.
+		// Account-wide traffic is shown in the subscription summary, not repeated in
+		// every node name. Keep the account status and expiry hint here; local
+		// per-inbound quota/reset details are appended below.
 		stats, _, statsExist := s.resolveTraffic(inbound, email)
 
 		// Get remained days
 		if statsExist {
 			if !stats.Enable {
 				return s.scope.uniqueName(fmt.Sprintf("⛔️N/A%s%s", separationChar, strings.Join(remark, separationChar)), inbound, separationChar)
-			}
-			if vol := stats.Total - (stats.Up + stats.Down); vol > 0 {
-				remark = append(remark, fmt.Sprintf("%s%s", common.FormatTraffic(vol), "📊"))
 			}
 			now := time.Now().Unix()
 			switch exp := stats.ExpiryTime / 1000; {
@@ -1584,6 +1613,21 @@ func (s *SubService) genRemark(inbound *model.Inbound, email string, extra strin
 			}
 		}
 	}
+
+	// Локальная квота показывается независимо от общей настройки Show Info: это
+	// единственный признак, почему именно этот узел отключён, и когда он вернётся.
+	if s.scope != nil {
+		quotaState := s.scope.membershipQuota(inbound, email)
+		if quota := quotaState.quota; quota.Enabled {
+			remark = append(remark, "📊"+formatLocalQuotaRemaining(quota.RemainingBytes))
+			if next, ok := service.NextInboundTrafficReset(inbound.TrafficReset, time.Now()); ok {
+				remark = append(remark, "🔄"+next.Format("02.01"))
+			} else {
+				remark = append(remark, "🔄∞")
+			}
+		}
+	}
+
 	// Every exit goes through the namer: a node name that collides with one already
 	// handed out in this response would REPLACE it in the client. See uniqueName.
 	return s.scope.uniqueName(strings.Join(remark, separationChar), inbound, separationChar)

@@ -1,4 +1,25 @@
 {{ template "page/head_start" .}}
+<style>
+  .sub-site-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    height: 32px;
+    padding: 0;
+    line-height: 1;
+  }
+
+  .sub-site-icon-button .anticon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    line-height: 1;
+  }
+</style>
 {{ template "page/head_end" .}}
 
 {{ template "page/body_start" .}}
@@ -222,6 +243,8 @@
       panelFaviconPreviewFailed: false,
       subFaviconUrlInput: '',
       subFaviconPreviewFailed: false,
+      siteUrlButtons: [],
+      subSiteButtonsSettingsVisible: false,
       donationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
       oldDonationSettings: { enabled: false, entries: [{ name: '', wallet: '' }] },
       telegramXrayRoutingOptions: { inboundTags: [], outboundTags: [], balancerTags: [] },
@@ -509,6 +532,71 @@
         reader.onerror = () => this.$message.error('{{ i18n "pages.settings.panelFaviconReadError" }}');
         reader.readAsDataURL(file);
       },
+      parseSubSiteButtons(raw) {
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+          if (!Array.isArray(parsed)) return [];
+          return parsed.map((button, index) => ({
+            id: String(button && button.id || `site-url-${index + 1}-${Date.now()}`),
+            label: String(button && button.label || ''),
+            url: String(button && button.url || ''),
+            masked: !!(button && button.masked),
+          }));
+        } catch (_) {
+          return [];
+        }
+      },
+      newSubSiteButton() {
+        return {
+          id: `site-url-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          label: '',
+          url: '',
+          masked: false,
+        };
+      },
+      syncSubSiteButtons() {
+        const buttons = Array.isArray(this.siteUrlButtons) ? this.siteUrlButtons : [];
+        this.allSetting.subSiteButtons = JSON.stringify(buttons.map(button => ({
+          id: String(button.id || ''),
+          label: String(button.label || '').trim(),
+          url: String(button.url || '').trim(),
+          masked: !!button.masked,
+        })));
+      },
+      async toggleSubSiteButtonMask(button) {
+        if (!button || typeof button !== 'object') return;
+        if (button.masked && button.url === '********') {
+          const msg = await HttpUtil.post('/panel/setting/siteButtonUrl', { id: button.id }, { suppressSuccessMessage: true });
+          if (!msg || !msg.success || !msg.obj || typeof msg.obj.url !== 'string') return;
+          button.url = msg.obj.url;
+        }
+        button.masked = !button.masked;
+        this.syncSubSiteButtons();
+      },
+      subSiteButtonMaskTitle(button) {
+        return button && button.masked
+          ? '{{ i18n "pages.settings.subSiteButtonShowUrl" }}'
+          : '{{ i18n "pages.settings.subSiteButtonHideUrl" }}';
+      },
+      toggleSubSiteButtons() {
+        if (this.allSetting.subSiteButtonsEnable && !this.siteUrlButtons.length) {
+          this.siteUrlButtons = [this.newSubSiteButton()];
+          this.syncSubSiteButtons();
+        }
+      },
+      addSubSiteButton() {
+        if (this.siteUrlButtons.length >= 32) {
+          this.$message.error('{{ i18n "pages.settings.subSiteButtonsLimit" }}');
+          return;
+        }
+        this.siteUrlButtons.push(this.newSubSiteButton());
+        this.syncSubSiteButtons();
+      },
+      removeSubSiteButton(index) {
+        if (this.siteUrlButtons.length <= 1) return;
+        this.siteUrlButtons.splice(index, 1);
+        this.syncSubSiteButtons();
+      },
       async loadTelegramXrayRoutingOptions() {
         const msg = await HttpUtil.get("/panel/setting/telegramXrayRoutingOptions");
         if (msg && msg.success && msg.obj) this.telegramXrayRoutingOptions = msg.obj;
@@ -523,6 +611,8 @@
 
           this.oldAllSetting = new AllSetting(msg.obj);
           this.allSetting = new AllSetting(msg.obj);
+          this.siteUrlButtons = this.parseSubSiteButtons(this.allSetting.subSiteButtons);
+          if (!this.siteUrlButtons.length) this.siteUrlButtons = [this.newSubSiteButton()];
           this.panelFaviconUrlInput = this.isUploadedPanelFavicon() ? '' : String(this.allSetting.webFaviconUrl || '');
           this.panelFaviconPreviewFailed = false;
           this.subFaviconUrlInput = this.isUploadedSubFavicon() ? '' : String(this.allSetting.subFaviconUrl || '');
@@ -1398,6 +1488,7 @@
         location.reload();
       },
       async updateAllSetting() {
+        this.syncSubSiteButtons();
         const forumChatId = String(this.allSetting.tgForumChatId || '').trim();
         const botToken = String(this.allSetting.tgBotToken || '').trim();
         const mainAdminIds = String(this.allSetting.tgBotChatId || '').trim();

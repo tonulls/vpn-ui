@@ -381,22 +381,21 @@ func (s *PptpService) KillDisabledSessions() {
 		return
 	}
 	disabledEmails := s.getDisabledEmails()
-
-	disabled := make(map[string]bool)
+	disabledMemberships := make(map[radiusMembershipKey]bool)
 	for _, inbound := range inbounds {
 		settings, err := s.parseSettings(inbound)
 		if err != nil {
 			continue
 		}
 		for _, client := range settings.Clients {
-			if !client.Enable || disabledEmails[client.Email] {
-				disabled[client.Email] = true
+			if !client.Enable {
+				disabledMemberships[radiusMembershipKey{inboundId: inbound.Id, emailKey: accountKey(client.Email)}] = true
 			}
 		}
 	}
 
-	if len(disabled) > 0 && s.radiusService != nil {
-		s.radiusService.KillSessionsByEmail(disabled)
+	if (len(disabledMemberships) > 0 || len(disabledEmails) > 0) && s.radiusService != nil {
+		s.radiusService.KillSessionsByMemberships(disabledMemberships, disabledEmails)
 	}
 }
 

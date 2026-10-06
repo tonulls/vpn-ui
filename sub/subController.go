@@ -190,55 +190,74 @@ func (a *SUBController) subs(c *gin.Context) {
 			if currentFaviconURL, err := settingService.GetSubFaviconUrl(); err == nil {
 				faviconURL = currentFaviconURL
 			}
+			// Custom site buttons are shared by the browser and in-app HTML view.
+			// Read them for every request so saved changes are live immediately.
+			showSiteButtons, siteButtonsPerRow, siteButtons, err := settingService.GetSubSiteButtons()
+			if err != nil {
+				showSiteButtons, siteButtonsPerRow, siteButtons = false, 2, nil
+			} else {
+				visibleButtons := make([]service.SubscriptionSiteButton, 0, len(siteButtons))
+				for _, button := range siteButtons {
+					if strings.TrimSpace(button.URL) != "" {
+						visibleButtons = append(visibleButtons, button)
+					}
+				}
+				siteButtons = visibleButtons
+				showSiteButtons = showSiteButtons && len(siteButtons) > 0
+			}
+			siteButtonsTextAlign, siteButtonsBold, siteButtonsItalic, siteButtonsUnderline, siteButtonsStrike, styleErr := settingService.GetSubSiteButtonsTextStyle()
+			if styleErr != nil {
+				siteButtonsTextAlign, siteButtonsBold, siteButtonsItalic, siteButtonsUnderline, siteButtonsStrike = "left", false, false, false, false
+			}
 			var faviconValue any = faviconURL
 			if strings.HasPrefix(strings.ToLower(faviconURL), "data:") && entity.ValidateFaviconURL(faviconURL) == nil {
 				faviconValue = template.URL(faviconURL)
 			}
 
 			c.HTML(200, "subpage.html", gin.H{
-				"title":                "subscription.title",
-				"page_title":           a.subPageTitle,
-				"subscription_page":    true,
-				"favicon_url":          faviconValue,
-				"support_url":          a.subSupportUrl,
-				"show_support":         a.subShowSupport,
-				"support_button_label": a.subSupportButtonLabel,
-				"profile_url":          a.subProfileUrl,
-				"show_profile_url":     a.subShowProfileUrl,
-				"profile_button_label": a.subProfileButtonLabel,
-				"cur_ver":              config.GetVersion(),
-				"asset_ver":            config.GetAssetVersion(),
-				"host":                 page.Host,
-				"base_path":            page.BasePath,
-				"sId":                  page.SId,
-				"download":             page.Download,
-				"upload":               page.Upload,
-				"total":                page.Total,
-				"used":                 page.Used,
-				"remained":             page.Remained,
-				"expire":               page.Expire,
-				"lastOnline":           page.LastOnline,
-				"datepicker":           page.Datepicker,
-				"downloadByte":         page.DownloadByte,
-				"uploadByte":           page.UploadByte,
-				"totalByte":            page.TotalByte,
-				"subUrl":               page.SubUrl,
-				"subJsonUrl":           page.SubJsonUrl,
-				"subClashUrl":          page.SubClashUrl,
-				"result":               page.Result,
-				"configs":              page.Configs,
-				"donate":               donationEntries,
+				"title":                   "subscription.title",
+				"page_title":              a.subPageTitle,
+				"subscription_page":       true,
+				"favicon_url":             faviconValue,
+				"site_buttons_enabled":    showSiteButtons,
+				"site_buttons_per_row":    siteButtonsPerRow,
+				"site_buttons":            siteButtons,
+				"site_buttons_text_align": siteButtonsTextAlign,
+				"site_buttons_bold":       siteButtonsBold,
+				"site_buttons_italic":     siteButtonsItalic,
+				"site_buttons_underline":  siteButtonsUnderline,
+				"site_buttons_strike":     siteButtonsStrike,
+				"cur_ver":                 config.GetVersion(),
+				"asset_ver":               config.GetAssetVersion(),
+				"host":                    page.Host,
+				"base_path":               page.BasePath,
+				"sId":                     page.SId,
+				"download":                page.Download,
+				"upload":                  page.Upload,
+				"total":                   page.Total,
+				"used":                    page.Used,
+				"remained":                page.Remained,
+				"expire":                  page.Expire,
+				"lastOnline":              page.LastOnline,
+				"datepicker":              page.Datepicker,
+				"downloadByte":            page.DownloadByte,
+				"uploadByte":              page.UploadByte,
+				"totalByte":               page.TotalByte,
+				"subUrl":                  page.SubUrl,
+				"subJsonUrl":              page.SubJsonUrl,
+				"subClashUrl":             page.SubClashUrl,
+				"result":                  page.Result,
+				"configs":                 page.Configs,
+				"donate":                  donationEntries,
 			})
 			return
 		}
 
-		// Add headers
+		// The app-only button points to the subscription's HTML page. The list of
+		// additional links is rendered inside that page, not as raw client metadata.
 		header := fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", traffic.Up, traffic.Down, traffic.Total, traffic.ExpiryTime/1000)
-		profileUrl := a.subProfileUrl
-		if profileUrl == "" {
-			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
-		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		profileURL, profileURLLabel := a.clientSubscriptionPageMetadata(scheme, hostWithPort, subId)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, "", profileURL, profileURLLabel, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
 
 		if a.subEncrypt {
 			c.String(200, base64.StdEncoding.EncodeToString([]byte(result)))
@@ -246,6 +265,30 @@ func (a *SUBController) subs(c *gin.Context) {
 			c.String(200, result)
 		}
 	}
+}
+
+// clientSubscriptionPageMetadata supplies the optional page link understood by
+// subscription clients. The legacy Profile-Web-Page-Url header is retained, but
+// now points at this subscription's HTML page instead of a separate profile URL.
+func (a *SUBController) clientSubscriptionPageMetadata(scheme, hostWithPort, subId string) (string, string) {
+	subURL, _, _ := a.subService.BuildURLs(scheme, hostWithPort, a.subPath, a.subJsonPath, a.subClashPath, subId)
+	var settingService service.SettingService
+	showSubscriptionURL := true
+	if current, err := settingService.GetSubShowSubscriptionUrl(); err == nil {
+		showSubscriptionURL = current
+	}
+	label := "Подписка"
+	if current, err := settingService.GetSubSubscriptionButtonLabel(); err == nil {
+		if strings.TrimSpace(current) != "" {
+			label = strings.TrimSpace(current)
+		}
+	} else if strings.TrimSpace(a.subProfileButtonLabel) != "" {
+		label = strings.TrimSpace(a.subProfileButtonLabel)
+	}
+	if !showSubscriptionURL {
+		return "", label
+	}
+	return subURL, label
 }
 
 // subConfig serves one client config file (an OpenVPN .ovpn or a WireGuard/AmneziaWG
@@ -272,11 +315,8 @@ func (a *SUBController) subJsons(c *gin.Context) {
 	if err != nil || len(jsonSub) == 0 {
 		c.String(400, "Error!")
 	} else {
-		profileUrl := a.subProfileUrl
-		if profileUrl == "" {
-			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
-		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		profileURL, profileURLLabel := a.clientSubscriptionPageMetadata(scheme, hostWithPort, subId)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, "", profileURL, profileURLLabel, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
 
 		c.String(200, jsonSub)
 	}
@@ -289,11 +329,8 @@ func (a *SUBController) subClashs(c *gin.Context) {
 	if err != nil || len(clashSub) == 0 {
 		c.String(400, "Error!")
 	} else {
-		profileUrl := a.subProfileUrl
-		if profileUrl == "" {
-			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
-		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		profileURL, profileURLLabel := a.clientSubscriptionPageMetadata(scheme, hostWithPort, subId)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, "", profileURL, profileURLLabel, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
 		c.Data(200, "application/yaml; charset=utf-8", []byte(clashSub))
 	}
 }
@@ -306,6 +343,7 @@ func (a *SUBController) ApplyCommonHeaders(
 	profileTitle string,
 	profileSupportUrl string,
 	profileUrl string,
+	profileUrlLabel string,
 	profileAnnounce string,
 	profileEnableRouting bool,
 	profileRoutingRules string,
@@ -322,6 +360,11 @@ func (a *SUBController) ApplyCommonHeaders(
 	}
 	if profileUrl != "" {
 		c.Writer.Header().Set("Profile-Web-Page-Url", profileUrl)
+		// Best-effort display label for clients that support this extension. Clients
+		// that only understand Profile-Web-Page-Url keep their built-in button text.
+		if profileUrlLabel != "" {
+			c.Writer.Header().Set("Profile-Web-Page-Title", profileUrlLabel)
+		}
 	}
 	if profileAnnounce != "" {
 		c.Writer.Header().Set("Announce", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileAnnounce)))

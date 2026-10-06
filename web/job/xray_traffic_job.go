@@ -108,13 +108,15 @@ func appendUnrecorded(existing, fallback []*xray.ClientTraffic) []*xray.ClientTr
 func (j *XrayTrafficJob) Run() {
 	var traffics []*xray.Traffic
 	var clientTraffics []*xray.ClientTraffic
+	var membershipTraffics []*xray.MembershipTraffic
 
 	if j.xrayService.IsXrayRunning() {
 		var err error
-		traffics, clientTraffics, err = j.xrayService.GetXrayTraffic()
+		traffics, clientTraffics, membershipTraffics, err = j.xrayService.GetXrayTraffic()
 		if err != nil {
 			traffics = nil
 			clientTraffics = nil
+			membershipTraffics = nil
 		}
 	}
 
@@ -272,7 +274,7 @@ func (j *XrayTrafficJob) Run() {
 		return
 	}
 
-	err, needRestart0, l2tpDisabledEmails, pptpDisabledEmails, ovpnDisabledEmails := j.inboundService.AddTraffic(traffics, clientTraffics)
+	err, needRestart0, l2tpDisabledEmails, pptpDisabledEmails, ovpnDisabledEmails, localQuotaDisabled := j.inboundService.AddTrafficWithMembership(traffics, clientTraffics, membershipTraffics)
 	if err != nil {
 		logger.Warning("add inbound traffic failed:", err)
 	}
@@ -305,6 +307,31 @@ func (j *XrayTrafficJob) Run() {
 	// Enforce limits on OpenVPN clients
 	if len(ovpnDisabledEmails) > 0 {
 		j.openvpnService.DisableClients(ovpnDisabledEmails)
+	}
+	if localQuotaDisabled {
+		// Повторная level-triggered сверка после записи дельты применяет локальный
+		// запрет в тот же тик, не распространяя его на другие inbound аккаунта.
+		j.l2tpService.KillDisabledSessions()
+		j.pptpService.KillDisabledSessions()
+		j.openvpnService.KillDisabledSessions()
+		j.ocservService.KillDisabledSessions()
+		j.sstpService.KillDisabledSessions()
+		j.ikev2Service.ReconcileDisabled()
+		j.ikev2Service.KillDisabledSessions()
+		j.mtprotoService.KillDisabledSessions()
+		j.sshService.KillDisabledSessions()
+		if err := j.wgcService.GenerateAllConfigs(); err != nil {
+			logger.Debug("wgc: локальная quota reconciliation failed:", err)
+		}
+		if err := j.awgService.GenerateAllConfigs(); err != nil {
+			logger.Debug("awg: локальная quota reconciliation failed:", err)
+		}
+		if err := j.greService.GenerateAllConfigs(); err != nil {
+			logger.Debug("gre: локальная quota reconciliation failed:", err)
+		}
+		if j.sweeper != nil {
+			j.sweeper.Tick()
+		}
 	}
 	err, needRestart1 := j.outboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {

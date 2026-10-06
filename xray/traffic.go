@@ -9,3 +9,13 @@ type Traffic struct {
 	Up         int64
 	Down       int64
 }
+
+// MembershipTraffic — точный расход одного inbound и одного аккаунта.
+// IdentityType равен "email" для обычных Xray users и "wireguard-ip" для peer Xray-WireGuard.
+type MembershipTraffic struct {
+	InboundTag   string
+	IdentityType string
+	Identity     string
+	Up           int64
+	Down         int64
+}

@@ -1164,6 +1164,23 @@ func (s *InboundService) validateInboundConfig(inbound *model.Inbound) error {
 		return common.NewError("Traffic multiplier threshold cannot be negative")
 	}
 
+	if inbound.PerUserTrafficLimitBytes < 0 {
+		return common.NewError("Лимит трафика на пользователя не может быть отрицательным")
+	}
+	unit := strings.ToUpper(strings.TrimSpace(inbound.PerUserTrafficLimitUnit))
+	switch unit {
+	case "MB", "GB", "TB":
+		inbound.PerUserTrafficLimitUnit = unit
+	default:
+		if inbound.PerUserTrafficLimitEnable {
+			return common.NewError("Единица лимита трафика должна быть MB, GB или TB")
+		}
+		inbound.PerUserTrafficLimitUnit = "GB"
+	}
+	if inbound.PerUserTrafficLimitEnable && inbound.PerUserTrafficLimitBytes == 0 {
+		return common.NewError("Лимит трафика на пользователя должен быть больше нуля")
+	}
+
 	// Speed limit. The form's :min="0" is not a guard: the API can be posted directly.
 	// A negative rate would reach the sidecar and become a negative rate.Limit, which
 	// blocks the account outright instead of throttling it, so reject it here rather
@@ -1711,6 +1728,10 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	if err != nil {
 		return inbound, false, err
 	}
+	previousQuotaInbound := *oldInbound
+	oldPerUserQuotaEnabled := oldInbound.PerUserTrafficLimitEnable
+	quotaConfigurationChanged := oldInbound.PerUserTrafficLimitEnable != inbound.PerUserTrafficLimitEnable ||
+		oldInbound.PerUserTrafficLimitBytes != inbound.PerUserTrafficLimitBytes
 
 	tag := oldInbound.Tag
 
@@ -1803,6 +1824,15 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	oldInbound.Enable = inbound.Enable
 	oldInbound.ExpiryTime = inbound.ExpiryTime
 	oldInbound.TrafficReset = inbound.TrafficReset
+	oldInbound.PerUserTrafficLimitEnable = inbound.PerUserTrafficLimitEnable
+	oldInbound.PerUserTrafficLimitBytes = inbound.PerUserTrafficLimitBytes
+	oldInbound.PerUserTrafficLimitUnit = inbound.PerUserTrafficLimitUnit
+	if !oldPerUserQuotaEnabled && inbound.PerUserTrafficLimitEnable {
+		if err = tx.Model(&model.AccountInbound{}).Where("inbound_id = ?", inbound.Id).
+			Update("quota_used_bytes", 0).Error; err != nil {
+			return inbound, false, err
+		}
+	}
 	oldInbound.TrafficMultiplierEnable = inbound.TrafficMultiplierEnable
 	oldInbound.TrafficMultiplierAfter = inbound.TrafficMultiplierAfter
 	oldInbound.TrafficMultiplier = inbound.TrafficMultiplier
@@ -1819,13 +1849,17 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	oldInbound.Settings = inbound.Settings
 	oldInbound.StreamSettings = inbound.StreamSettings
 	oldInbound.Sniffing = inbound.Sniffing
+	if err = projectQuotaTransitionEnables(tx, &previousQuotaInbound, oldInbound); err != nil {
+		return inbound, false, err
+	}
+	inbound.Settings = oldInbound.Settings
 	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
 		oldInbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
 	} else {
 		oldInbound.Tag = fmt.Sprintf("inbound-%v:%v", inbound.Listen, inbound.Port)
 	}
 
-	needRestart := false
+	needRestart := quotaConfigurationChanged
 	if hasDerivedXrayInbound(oldInbound.Protocol) {
 		// Leave the running dokodemo (VPN) or socks inbound (relay) in place. The live
 		// del/add API would drop it and be unable to recreate it, cutting the clients'
@@ -3370,6 +3404,15 @@ func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64
 }
 
 func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic) (error, bool, []string, []string, []string) {
+	err, needRestart, l2tpEmails, pptpEmails, openvpnEmails, _ := s.addTraffic(inboundTraffics, clientTraffics, nil)
+	return err, needRestart, l2tpEmails, pptpEmails, openvpnEmails
+}
+
+func (s *InboundService) AddTrafficWithMembership(inboundTraffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic, membershipTraffics []*xray.MembershipTraffic) (error, bool, []string, []string, []string, bool) {
+	return s.addTraffic(inboundTraffics, clientTraffics, membershipTraffics)
+}
+
+func (s *InboundService) addTraffic(inboundTraffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic, membershipTraffics []*xray.MembershipTraffic) (error, bool, []string, []string, []string, bool) {
 	var err error
 	db := database.GetDB()
 	tx := db.Begin()
@@ -3387,7 +3430,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	}
 	err = s.addInboundTraffic(tx, inboundTraffics)
 	if err != nil {
-		return err, false, nil, nil, nil
+		return err, false, nil, nil, nil, false
 	}
 	// Before the client records are applied, and with the inbound totals in hand:
 	// Xray's per-account stat names no inbound, and this is where that gap is closed
@@ -3396,7 +3439,17 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	attributeCoreRecords(tx, inboundTraffics, clientTraffics)
 	err = s.addClientTraffic(tx, clientTraffics)
 	if err != nil {
-		return err, false, nil, nil, nil
+		return err, false, nil, nil, nil, false
+	}
+	quotaDisableCandidates, quotaErr := s.addMembershipQuotaTraffic(tx, clientTraffics, membershipTraffics)
+	if quotaErr != nil {
+		return quotaErr, false, nil, nil, nil, false
+	}
+	quotaNeedRestart := false
+	for _, candidate := range quotaDisableCandidates {
+		if s.disableMembershipInXray(candidate) {
+			quotaNeedRestart = true
+		}
 	}
 
 	needRestart0, count, err := s.autoRenewClients(tx)
@@ -3419,7 +3472,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	} else if count > 0 {
 		logger.Debugf("%v inbounds disabled", count)
 	}
-	return nil, (needRestart0 || needRestart1 || needRestart2), l2tpDisabledEmails, pptpDisabledEmails, ovpnDisabledEmails
+	return nil, (needRestart0 || needRestart1 || needRestart2 || quotaNeedRestart), l2tpDisabledEmails, pptpDisabledEmails, ovpnDisabledEmails, len(quotaDisableCandidates) > 0
 }
 
 func (s *InboundService) addInboundTraffic(tx *gorm.DB, traffics []*xray.Traffic) error {
@@ -4771,145 +4824,158 @@ func (s *InboundService) ResetClientTrafficLimitByEmail(clientEmail string, tota
 
 func (s *InboundService) ResetClientTrafficByEmail(clientEmail string) error {
 	db := database.GetDB()
-
-	// Reset traffic stats in ClientTraffic table
-	result := db.Model(xray.ClientTraffic{}).
-		Where("email = ?", clientEmail).
-		Updates(map[string]any{"enable": true, "up": 0, "down": 0})
-
-	err := result.Error
+	var restoreCandidates []membershipQuotaResetCandidate
+	var wasGloballyDisabled bool
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var prior xray.ClientTraffic
+		priorErr := tx.Where("LOWER(TRIM(email)) = ?", accountKey(clientEmail)).First(&prior).Error
+		if priorErr != nil && priorErr != gorm.ErrRecordNotFound {
+			return priorErr
+		}
+		wasGloballyDisabled = priorErr == nil && !prior.Enable
+		result := tx.Model(xray.ClientTraffic{}).
+			Where("LOWER(TRIM(email)) = ?", accountKey(clientEmail)).
+			Updates(map[string]any{"enable": true, "up": 0, "down": 0})
+		if result.Error != nil {
+			return result.Error
+		}
+		resetMembershipUsage(tx, []string{clientEmail})
+		var resetErr error
+		restoreCandidates, resetErr = resetAccountMembershipQuotaCounters(tx, clientEmail)
+		if resetErr != nil {
+			return resetErr
+		}
+		if wasGloballyDisabled {
+			extra, candidateErr := s.enabledMembershipRestoreCandidates(tx, []string{clientEmail})
+			if candidateErr != nil {
+				return candidateErr
+			}
+			restoreCandidates = append(restoreCandidates, extra...)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-
-	// The per-inbound breakdown of the row just zeroed. Left behind, it would keep
-	// claiming bytes the account no longer has, so the split would total more than
-	// the account itself.
-	resetMembershipUsage(db, []string{clientEmail})
-
+	s.restoreMembershipUsers(restoreCandidates)
 	return nil
 }
 
 func (s *InboundService) ResetClientTraffic(id int, clientEmail string) (bool, error) {
-	needRestart := false
-
-	traffic, err := s.GetClientTrafficByEmail(clientEmail)
-	if err != nil {
-		return false, err
-	}
-
-	if !traffic.Enable {
-		inbound, err := s.GetInbound(id)
-		if err != nil {
-			return false, err
-		}
-		clients, err := s.GetClients(inbound)
-		if err != nil {
-			return false, err
-		}
-		for _, client := range clients {
-			if client.Email == clientEmail && client.Enable {
-				s.xrayApi.Init(p.GetAPIPort())
-				cipher := ""
-				if string(inbound.Protocol) == "shadowsocks" {
-					var oldSettings map[string]any
-					err = json.Unmarshal([]byte(inbound.Settings), &oldSettings)
-					if err != nil {
-						return false, err
-					}
-					cipher = oldSettings["method"].(string)
-				}
-				err1 := s.xrayApi.AddUser(string(inbound.Protocol), inbound.Tag, map[string]any{
-					"email":    client.Email,
-					"id":       client.ID,
-					"auth":     client.Auth,
-					"security": client.Security,
-					"flow":     client.Flow,
-					"password": client.Password,
-					"username": client.Username,
-					"cipher":   cipher,
-				})
-				if err1 == nil {
-					logger.Debug("Client enabled due to reset traffic:", clientEmail)
-				} else {
-					logger.Debug("Error in enabling client by api:", err1)
-					needRestart = true
-				}
-				s.xrayApi.Close()
-				break
-			}
-		}
-	}
-
-	// Targeted update, not db.Save(traffic): `traffic` was read at the top of this
-	// function, so saving the whole struct would also write back the all_time and
-	// last_online it held then, discarding whatever the 10s accounting job committed
-	// meanwhile. A reset zeroes up/down and re-enables; it must not rewind the lifetime
-	// counter. Mirrors ResetClientTrafficByEmail, which already updates by column.
 	db := database.GetDB()
-	err = db.Model(xray.ClientTraffic{}).Where("id = ?", traffic.Id).Updates(map[string]any{
-		"up":     0,
-		"down":   0,
-		"enable": true,
-	}).Error
+	var restoreCandidates []membershipQuotaResetCandidate
+	var wasGloballyDisabled bool
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var prior xray.ClientTraffic
+		priorErr := tx.Where("LOWER(TRIM(email)) = ?", accountKey(clientEmail)).First(&prior).Error
+		if priorErr != nil && priorErr != gorm.ErrRecordNotFound {
+			return priorErr
+		}
+		wasGloballyDisabled = priorErr == nil && !prior.Enable
+		result := tx.Model(xray.ClientTraffic{}).
+			Where("LOWER(TRIM(email)) = ?", accountKey(clientEmail)).
+			Updates(map[string]any{"enable": true, "up": 0, "down": 0})
+		if result.Error != nil {
+			return result.Error
+		}
+		resetMembershipUsage(tx, []string{clientEmail})
+		var resetErr error
+		restoreCandidates, resetErr = resetAccountMembershipQuotaCounters(tx, clientEmail)
+		if resetErr != nil {
+			return resetErr
+		}
+		if wasGloballyDisabled {
+			extra, candidateErr := s.enabledMembershipRestoreCandidates(tx, []string{clientEmail})
+			if candidateErr != nil {
+				return candidateErr
+			}
+			restoreCandidates = append(restoreCandidates, extra...)
+		}
+		return nil
+	})
 	if err != nil {
 		return false, err
 	}
-	// Same zeroing on the per-inbound breakdown, see ResetClientTrafficByEmail.
-	resetMembershipUsage(db, []string{traffic.Email})
-
-	return needRestart, nil
+	return s.restoreMembershipUsers(restoreCandidates), nil
 }
 
 func (s *InboundService) ResetAllClientTraffics(id int) error {
 	db := database.GetDB()
 	now := time.Now().Unix() * 1000
+	var restoreCandidates []membershipQuotaResetCandidate
 
-	return db.Transaction(func(tx *gorm.DB) error {
-		whereText := "inbound_id "
-		if id == -1 {
-			whereText += " > ?"
-		} else {
-			whereText += " = ?"
-		}
+	whereText := "inbound_id "
+	if id == -1 {
+		whereText += " > ?"
+	} else {
+		whereText += " = ?"
+	}
 
-		// Exactly the accounts the update below zeroes, read first because after it
-		// there is nothing left to identify them by. Note this is the accounts HOMED
-		// on the inbound rather than the ones it serves, which is what this route has
-		// always reset; the breakdown only has to follow it, not correct it.
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// Сначала сохраняем аккаунты, чьи общие счётчики ниже будут сброшены.
 		var affected []string
 		if err := tx.Model(xray.ClientTraffic{}).Where(whereText, id).
 			Pluck("email", &affected).Error; err != nil {
 			return err
 		}
+		var globallyDisabled []string
+		if err := tx.Model(xray.ClientTraffic{}).Where(whereText, id).
+			Where("enable = ?", false).Pluck("email", &globallyDisabled).Error; err != nil {
+			return err
+		}
 
-		// Reset client traffics
 		result := tx.Model(xray.ClientTraffic{}).
 			Where(whereText, id).
 			Updates(map[string]any{"enable": true, "up": 0, "down": 0})
-
 		if result.Error != nil {
 			return result.Error
 		}
-
-		// The per-inbound breakdown of the rows just zeroed, or the split would keep
-		// claiming bytes the accounts no longer have.
 		resetMembershipUsage(tx, affected)
 
-		// Update lastTrafficResetTime for the inbound(s)
+		// Локальные лимиты сбрасываются по membership inbound, а не по HOME inbound
+		// строки client_traffics. Это позволяет сбросить подключение, не меняя квоты
+		// аккаунта и его членств на остальных подключениях.
+		accountKeys := make([]string, 0, len(affected))
+		for _, email := range affected {
+			if key := accountKey(email); key != "" {
+				accountKeys = append(accountKeys, key)
+			}
+		}
+		var accountIDs []int
+		if len(accountKeys) > 0 {
+			if err := tx.Model(&model.Account{}).Where("LOWER(TRIM(email)) IN ?", accountKeys).
+				Pluck("id", &accountIDs).Error; err != nil {
+				return err
+			}
+		}
+		candidates, resetErr := resetMembershipQuotaCounters(tx, whereText, []any{id}, accountIDs)
+		if resetErr != nil {
+			return resetErr
+		}
+		restoreCandidates = candidates
+		if len(globallyDisabled) > 0 {
+			extra, candidateErr := s.enabledMembershipRestoreCandidates(tx, globallyDisabled)
+			if candidateErr != nil {
+				return candidateErr
+			}
+			restoreCandidates = append(restoreCandidates, extra...)
+		}
+
+		// Update lastTrafficResetTime for the inbound(s).
 		inboundWhereText := "id "
 		if id == -1 {
 			inboundWhereText += " > ?"
 		} else {
 			inboundWhereText += " = ?"
 		}
-
-		result = tx.Model(model.Inbound{}).
-			Where(inboundWhereText, id).
-			Update("last_traffic_reset_time", now)
-
-		return result.Error
+		return tx.Model(model.Inbound{}).Where(inboundWhereText, id).
+			Update("last_traffic_reset_time", now).Error
 	})
+	if err != nil {
+		return err
+	}
+	s.restoreMembershipUsers(restoreCandidates)
+	return nil
 }
 
 // ResetAllTraffics zeroes inbound counters. ownerId scopes it to one admin's

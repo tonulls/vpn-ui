@@ -1201,7 +1201,10 @@ func (s *Ikev2Service) KillDisabledSessions() {
 			continue
 		}
 		for _, c := range settings.Clients {
-			if !c.Enable || disabled[c.Email] {
+			// client.Enable включает ручной флаг конкретного членства и его локальную
+			// квоту. Их убирает rbridge sweeper, который знает inbound и SA; killByUser
+			// адресует лишь общий логин и мог бы оборвать другое членство аккаунта.
+			if disabled[c.Email] {
 				s.killByUser(c.ID)
 			}
 		}

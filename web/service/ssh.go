@@ -227,6 +227,7 @@ func (s *SshService) getDisabledEmails() map[string]bool {
 	}
 	for _, t := range traffics {
 		disabled[t.Email] = true
+		disabled[accountKey(t.Email)] = true
 	}
 	return disabled
 }
@@ -375,7 +376,7 @@ func (s *SshService) lookupAccount(inboundId int, username, password string) (ss
 		if c.ID != username {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(c.Password), []byte(password)) == 1 && !disabled[c.Email] {
+		if c.Enable && subtle.ConstantTimeCompare([]byte(c.Password), []byte(password)) == 1 && !disabled[c.Email] && !disabled[accountKey(c.Email)] {
 			return c, true
 		}
 		return sshClient{}, false
@@ -416,6 +417,25 @@ func (s *SshService) accountLimit(inboundId int, email string) (int, string) {
 		}
 	}
 	return k, normUserLimitStrategy(settings.UserLimitStrategy)
+}
+
+// membershipEnabled проверяет effective enable только на указанном SSH inbound.
+func (s *SshService) membershipEnabled(inboundID int, email string) bool {
+	inbound, err := s.inboundService.GetInbound(inboundID)
+	if err != nil || inbound == nil || !inbound.Enable {
+		return false
+	}
+	settings, err := s.parseSettings(inbound)
+	if err != nil {
+		return false
+	}
+	key := accountKey(email)
+	for _, client := range settings.Clients {
+		if accountKey(client.Email) == key {
+			return client.Enable
+		}
+	}
+	return false
 }
 
 // SshClientConfig is one rendered client artifact for an account/endpoint.

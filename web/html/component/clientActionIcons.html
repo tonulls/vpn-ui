@@ -46,17 +46,15 @@
       <template slot="title">{{ i18n "pages.inbounds.exportPdf" }}</template>
       <a-icon class="normal-icon" type="file-pdf" @click="exportClientPdf(record,client);"></a-icon>
     </a-tooltip>
-    <!-- Removes the account from THIS inbound only, which is the one destructive
-         act that is genuinely per-membership. The whole account is deleted from the
-         row above. Hidden when it would be the inbound's last client, which the
-         panel refuses anyway. -->
+    <!-- Удаляет клиента из этого подключения. Пустое подключение допустимо, поэтому
+         действие доступно и для последнего клиента; остальные членства сохраняются. -->
     <a-tooltip>
       <template slot="title">
         <span :style="{ color: 'var(--error)' }">{{ i18n "pages.clients.removeFromInbound" }}</span>
       </template>
       <a-popconfirm @confirm="delClient(record.id,client,false)" title='{{ i18n "pages.clients.removeFromInboundContent"}}' :overlay-class-name="themeSwitcher.currentTheme" ok-text='{{ i18n "delete"}}' ok-type="danger" cancel-text='{{ i18n "cancel"}}'>
         <a-icon slot="icon" type="question-circle-o" :style="{ color: 'var(--error)' }"></a-icon>
-        <a-icon :style="{ cursor: 'pointer' }" class="delete-icon" type="disconnect" v-if="isRemovable(record.id)"></a-icon>
+        <a-icon :style="{ cursor: 'pointer' }" class="delete-icon" type="disconnect"></a-icon>
       </a-popconfirm>
     </a-tooltip>
   </div>

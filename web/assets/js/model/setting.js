@@ -27,7 +27,7 @@ class AllSetting {
         this.tgBotChatId = "";
         this.tgBotAdditionalChatId = "";
         this.tgRunTime = "@daily";
-        this.tgLang = "en-US";
+        this.tgLang = "ru-RU";
         this.tgForumEnable = false;
         this.tgForumChatId = "";
         this.tgNotifyDirect = true;
@@ -58,6 +58,17 @@ class AllSetting {
         this.subShowProfileUrl = false;
         this.subProfileButtonLabel = "";
         this.subProfileUrl = "";
+        this.subMaskUrls = false;
+        this.subShowSubscriptionUrl = true;
+        this.subSubscriptionButtonLabel = "Подписка";
+        this.subSiteButtonsEnable = false;
+        this.subSiteButtons = "[]";
+        this.subSiteButtonsPerRow = 2;
+        this.subSiteButtonsTextAlign = "left";
+        this.subSiteButtonsBold = false;
+        this.subSiteButtonsItalic = false;
+        this.subSiteButtonsUnderline = false;
+        this.subSiteButtonsStrike = false;
         this.subAnnounce = "";
         this.subEnableRouting = true;
         this.subRoutingRules = "";

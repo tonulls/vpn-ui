@@ -1,5 +1,5 @@
 {{define "settings/panel/service"}}
-<a-collapse default-active-key="1">
+<a-collapse>
     <a-collapse-panel key="1" header='{{ i18n "pages.settings.serviceSettings" }}'>
         <a-alert v-if="serviceState.available === false" type="warning" show-icon banner
             message='{{ i18n "pages.settings.service.noSystemd" }}' :style="{ marginBottom: '16px' }"></a-alert>

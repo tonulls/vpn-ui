@@ -5,6 +5,7 @@ package xray
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -410,9 +411,9 @@ func (x *XrayAPI) RemoveUser(inboundTag, email string) error {
 }
 
 // GetTraffic queries traffic statistics from the Xray core, optionally resetting counters.
-func (x *XrayAPI) GetTraffic(reset bool) ([]*Traffic, []*ClientTraffic, error) {
+func (x *XrayAPI) GetTraffic(reset bool) ([]*Traffic, []*ClientTraffic, []*MembershipTraffic, error) {
 	if x.grpcClient == nil {
-		return nil, nil, common.NewError("xray api is not initialized")
+		return nil, nil, nil, common.NewError("xray api is not initialized")
 	}
 
 	clientTrafficRegex := regexp.MustCompile(`user>>>([^>]+)>>>traffic>>>(downlink|uplink)`)
@@ -421,26 +422,66 @@ func (x *XrayAPI) GetTraffic(reset bool) ([]*Traffic, []*ClientTraffic, error) {
 	defer cancel()
 
 	if x.StatsServiceClient == nil {
-		return nil, nil, common.NewError("xray StatusServiceClient is not initialized")
+		return nil, nil, nil, common.NewError("xray StatusServiceClient is not initialized")
 	}
 
 	resp, err := (*x.StatsServiceClient).QueryStats(ctx, &statsService.QueryStatsRequest{Reset_: reset})
 	if err != nil {
 		logger.Debug("Failed to query Xray stats:", err)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	tagTrafficMap := make(map[string]*Traffic)
 	emailTrafficMap := make(map[string]*ClientTraffic)
+	membershipTrafficMap := make(map[string]*MembershipTraffic)
 
 	for _, stat := range resp.GetStat() {
+		if processMembershipTraffic(stat.Name, stat.Value, membershipTrafficMap) {
+			continue
+		}
 		if matches := trafficStatRegex.FindStringSubmatch(stat.Name); len(matches) == 4 {
 			processTraffic(matches, stat.Value, tagTrafficMap)
 		} else if matches := clientTrafficRegex.FindStringSubmatch(stat.Name); len(matches) == 3 {
 			processClientTraffic(matches, stat.Value, emailTrafficMap)
 		}
 	}
-	return mapToSlice(tagTrafficMap), mapToSlice(emailTrafficMap), nil
+	return mapToSlice(tagTrafficMap), mapToSlice(emailTrafficMap), mapToSlice(membershipTrafficMap), nil
+}
+
+// membershipTrafficRegex разбирает параллельные счётчики патча vpn-ui отдельно
+// от неизменённого пространства legacy user>>>email>>>traffic.
+var membershipTrafficRegex = regexp.MustCompile(`^inbound-user>>>v1>>>(email|wireguard-ip)>>>([^>]+)>>>((?:[^>]+))>>>traffic>>>(downlink|uplink)$`)
+
+func processMembershipTraffic(name string, value int64, trafficMap map[string]*MembershipTraffic) bool {
+	matches := membershipTrafficRegex.FindStringSubmatch(name)
+	if len(matches) != 5 {
+		return false
+	}
+	tagBytes, tagErr := base64.RawURLEncoding.DecodeString(matches[2])
+	if tagErr != nil {
+		tagBytes, tagErr = base64.URLEncoding.DecodeString(matches[2])
+	}
+	identityBytes, identityErr := base64.RawURLEncoding.DecodeString(matches[3])
+	if identityErr != nil {
+		identityBytes, identityErr = base64.URLEncoding.DecodeString(matches[3])
+	}
+	if tagErr != nil || identityErr != nil || len(tagBytes) == 0 || len(identityBytes) == 0 {
+		logger.Debug("Пропущено некорректное имя inbound-user traffic stat:", name)
+		return true
+	}
+	tag, identity := string(tagBytes), string(identityBytes)
+	key := matches[1] + "\x00" + tag + "\x00" + identity
+	traffic := trafficMap[key]
+	if traffic == nil {
+		traffic = &MembershipTraffic{InboundTag: tag, IdentityType: matches[1], Identity: identity}
+		trafficMap[key] = traffic
+	}
+	if matches[4] == "downlink" {
+		traffic.Down = value
+	} else {
+		traffic.Up = value
+	}
+	return true
 }
 
 // trafficStatRegex splits an Xray traffic stat name into direction, tag and link.

@@ -85,12 +85,23 @@ type AllSetting struct {
 	SubTitle                    string `json:"subTitle" form:"subTitle"`                                       // Subscription title for client configuration
 	SubPageTitle                string `json:"subPageTitle" form:"subPageTitle"`                               // Browser title for the subscription page
 	SubFaviconUrl               string `json:"subFaviconUrl" form:"subFaviconUrl"`                             // Favicon URL for the subscription page
-	SubShowSupport              bool   `json:"subShowSupport" form:"subShowSupport"`                           // Show support link on the subscription page
-	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Hidden by settings API; emitted when a subscriber enables this link
-	SubSupportButtonLabel       string `json:"subSupportButtonLabel" form:"subSupportButtonLabel"`             // Label for the support button on the subscription page
-	SubShowProfileUrl           bool   `json:"subShowProfileUrl" form:"subShowProfileUrl"`                     // Show profile URL button on the subscription page
-	SubProfileButtonLabel       string `json:"subProfileButtonLabel" form:"subProfileButtonLabel"`             // Label for the profile URL button on the subscription page
-	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Hidden by settings API; emitted when a subscriber enables this link
+	SubShowSupport              bool   `json:"subShowSupport" form:"subShowSupport"`                           // Legacy visibility flag for the support URL
+	SubSupportUrl               string `json:"subSupportUrl" form:"subSupportUrl"`                             // Legacy support URL migrated into the URL button list
+	SubSupportButtonLabel       string `json:"subSupportButtonLabel" form:"subSupportButtonLabel"`             // Legacy support button label
+	SubShowProfileUrl           bool   `json:"subShowProfileUrl" form:"subShowProfileUrl"`                     // Legacy visibility flag for the profile URL
+	SubProfileButtonLabel       string `json:"subProfileButtonLabel" form:"subProfileButtonLabel"`             // Legacy profile button label
+	SubProfileUrl               string `json:"subProfileUrl" form:"subProfileUrl"`                             // Legacy profile URL migrated into the URL button list
+	SubMaskUrls                 bool   `json:"subMaskUrls" form:"subMaskUrls"`                                 // Mask subscription link URLs in settings responses
+	SubShowSubscriptionUrl      bool   `json:"subShowSubscriptionUrl" form:"subShowSubscriptionUrl"`           // Send the subscription page URL to compatible clients
+	SubSubscriptionButtonLabel  string `json:"subSubscriptionButtonLabel" form:"subSubscriptionButtonLabel"`   // Best-effort label for the client subscription-page link
+	SubSiteButtonsEnable        bool   `json:"subSiteButtonsEnable" form:"subSiteButtonsEnable"`               // Show custom links on the subscription page
+	SubSiteButtons              string `json:"subSiteButtons" form:"subSiteButtons"`                           // JSON-encoded custom subscription-page link buttons
+	SubSiteButtonsPerRow        int    `json:"subSiteButtonsPerRow" form:"subSiteButtonsPerRow"`               // Number of custom link buttons per row
+	SubSiteButtonsTextAlign     string `json:"subSiteButtonsTextAlign" form:"subSiteButtonsTextAlign"`         // Text alignment for custom buttons
+	SubSiteButtonsBold          bool   `json:"subSiteButtonsBold" form:"subSiteButtonsBold"`                   // Bold text for custom buttons
+	SubSiteButtonsItalic        bool   `json:"subSiteButtonsItalic" form:"subSiteButtonsItalic"`               // Italic text for custom buttons
+	SubSiteButtonsUnderline     bool   `json:"subSiteButtonsUnderline" form:"subSiteButtonsUnderline"`         // Underline text for custom buttons
+	SubSiteButtonsStrike        bool   `json:"subSiteButtonsStrike" form:"subSiteButtonsStrike"`               // Strike through text for custom buttons
 	SubAnnounce                 string `json:"subAnnounce" form:"subAnnounce"`                                 // Subscription announce
 	SubEnableRouting            bool   `json:"subEnableRouting" form:"subEnableRouting"`                       // Enable routing for subscription
 	SubRoutingRules             string `json:"subRoutingRules" form:"subRoutingRules"`                         // Subscription global routing rules (Only for Happ)

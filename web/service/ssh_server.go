@@ -476,9 +476,9 @@ func (m *sshManager) collect() []*xray.ClientTraffic {
 	return out
 }
 
-// enforce closes the sessions of disabled accounts and trims every account to its
-// User Limit K (oldest devices out). Called each traffic tick, so a disable or a
-// lowered K takes effect within a tick without a reconnect.
+// enforce закрывает глобально отключённые аккаунты и отдельно отключённые членства;
+// User Limit K применяется к каждому inbound независимо. Проверка вызывается каждый
+// тик, поэтому новый локальный лимит действует без повторного подключения.
 func (m *sshManager) enforce(svc *SshService, disabled map[string]bool) {
 	var toClose []*sshSession
 	m.mu.Lock()
@@ -486,40 +486,61 @@ func (m *sshManager) enforce(svc *SshService, disabled map[string]bool) {
 		if len(set) == 0 {
 			continue
 		}
-		if disabled[email] {
-			for s := range set {
-				toClose = append(toClose, s)
+		if disabled[email] || disabled[accountKey(email)] {
+			for session := range set {
+				toClose = append(toClose, session)
 			}
 			continue
 		}
-		inboundId := 0
-		ipFirst := map[string]time.Time{}
-		for s := range set {
-			inboundId = s.inboundId
-			if t, seen := ipFirst[s.srcIP]; !seen || s.since.Before(t) {
-				ipFirst[s.srcIP] = s.since
+
+		byInbound := map[int][]*sshSession{}
+		ipByInbound := map[int]map[string]time.Time{}
+		enabledByInbound := map[int]bool{}
+		checkedInbound := map[int]bool{}
+		for session := range set {
+			inboundID := session.inboundId
+			if !checkedInbound[inboundID] {
+				enabledByInbound[inboundID] = svc.membershipEnabled(inboundID, email)
+				checkedInbound[inboundID] = true
+			}
+			if !enabledByInbound[inboundID] {
+				toClose = append(toClose, session)
+				continue
+			}
+			byInbound[inboundID] = append(byInbound[inboundID], session)
+			ipFirst := ipByInbound[inboundID]
+			if ipFirst == nil {
+				ipFirst = map[string]time.Time{}
+				ipByInbound[inboundID] = ipFirst
+			}
+			if t, seen := ipFirst[session.srcIP]; !seen || session.since.Before(t) {
+				ipFirst[session.srcIP] = session.since
 			}
 		}
-		k, _ := svc.accountLimit(inboundId, email)
-		if k <= 0 || len(ipFirst) <= k {
-			continue
-		}
-		type ipt struct {
-			ip string
-			t  time.Time
-		}
-		arr := make([]ipt, 0, len(ipFirst))
-		for ip, t := range ipFirst {
-			arr = append(arr, ipt{ip, t})
-		}
-		sort.Slice(arr, func(i, j int) bool { return arr[i].t.Before(arr[j].t) })
-		evictIP := map[string]bool{}
-		for _, e := range arr[:len(arr)-k] {
-			evictIP[e.ip] = true
-		}
-		for s := range set {
-			if evictIP[s.srcIP] {
-				toClose = append(toClose, s)
+
+		for inboundID, sessions := range byInbound {
+			k, _ := svc.accountLimit(inboundID, email)
+			ipFirst := ipByInbound[inboundID]
+			if k <= 0 || len(ipFirst) <= k {
+				continue
+			}
+			type ipt struct {
+				ip string
+				t  time.Time
+			}
+			arr := make([]ipt, 0, len(ipFirst))
+			for ip, t := range ipFirst {
+				arr = append(arr, ipt{ip, t})
+			}
+			sort.Slice(arr, func(i, j int) bool { return arr[i].t.Before(arr[j].t) })
+			evictIP := map[string]bool{}
+			for _, e := range arr[:len(arr)-k] {
+				evictIP[e.ip] = true
+			}
+			for _, session := range sessions {
+				if evictIP[session.srcIP] {
+					toClose = append(toClose, session)
+				}
 			}
 		}
 	}

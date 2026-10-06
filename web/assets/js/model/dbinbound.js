@@ -12,6 +12,9 @@ class DBInbound {
         this.expiryTime = 0;
         this.trafficReset = "never";
         this.lastTrafficResetTime = 0;
+        this.perUserTrafficLimitEnable = false;
+        this.perUserTrafficLimitBytes = 0;
+        this.perUserTrafficLimitUnit = "GB";
         this.trafficMultiplierEnable = false;
         this.trafficMultiplierAfter = 0;
         this.trafficMultiplier = 1;
@@ -47,6 +50,29 @@ class DBInbound {
 
     set totalGB(gb) {
         this.total = NumberFormatter.toFixed(gb * SizeFormatter.ONE_GB, 0);
+    }
+
+    get perUserTrafficLimitValue() {
+        const bytes = Number(this.perUserTrafficLimitBytes);
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+            return null;
+        }
+        const unitBytes = this.perUserTrafficLimitUnit === "MB"
+            ? SizeFormatter.ONE_MB
+            : this.perUserTrafficLimitUnit === "TB"
+                ? SizeFormatter.ONE_TB
+                : SizeFormatter.ONE_GB;
+        return NumberFormatter.toFixed(bytes / unitBytes, 2);
+    }
+
+    set perUserTrafficLimitValue(value) {
+        const unitBytes = this.perUserTrafficLimitUnit === "MB"
+            ? SizeFormatter.ONE_MB
+            : this.perUserTrafficLimitUnit === "TB"
+                ? SizeFormatter.ONE_TB
+                : SizeFormatter.ONE_GB;
+        const amount = Math.max(0, Number(value) || 0);
+        this.perUserTrafficLimitBytes = NumberFormatter.toFixed(amount * unitBytes, 0);
     }
 
     // The traffic-multiplier threshold is stored in bytes, like total, so accounting

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database"
@@ -57,7 +59,7 @@ var defaultValueMap = map[string]string{
 	"tgRunTime":                   "@daily",
 	"tgBotBackup":                 "false", // Legacy key; automatic reports are no longer scheduled.
 	"tgBotLoginNotify":            "true",  // Legacy key; per-event switches below are authoritative.
-	"tgLang":                      "en-US",
+	"tgLang":                      "ru-RU",
 	"tgForumEnable":               "false",
 	"tgForumChatId":               "",
 	"tgNotifyDirect":              "true",
@@ -89,6 +91,17 @@ var defaultValueMap = map[string]string{
 	"subShowProfileUrl":           "false",
 	"subProfileButtonLabel":       "",
 	"subProfileUrl":               "",
+	"subMaskUrls":                 "false",
+	"subShowSubscriptionUrl":      "true",
+	"subSubscriptionButtonLabel":  "Подписка",
+	"subSiteButtonsEnable":        "false",
+	"subSiteButtons":              "[]",
+	"subSiteButtonsPerRow":        "2",
+	"subSiteButtonsTextAlign":     "left",
+	"subSiteButtonsBold":          "false",
+	"subSiteButtonsItalic":        "false",
+	"subSiteButtonsUnderline":     "false",
+	"subSiteButtonsStrike":        "false",
 	"subAnnounce":                 "",
 	"subEnableRouting":            "true",
 	"subRoutingRules":             "",
@@ -176,6 +189,10 @@ var defaultValueMap = map[string]string{
 	"coreConfigOverrides": "",
 }
 
+const telegramLanguageDefaultMigrationKey = "migration_tg_lang_russian_default_v1"
+
+var telegramLanguageDefaultMigrationMu sync.Mutex
+
 // SettingService provides business logic for application settings management.
 // It handles configuration storage, retrieval, and validation for all system settings.
 type SettingService struct{}
@@ -201,8 +218,86 @@ var writeOnlyURLSettings = map[string]struct{}{
 	"tgBotProxy":               {},
 	"tgBotAPIServer":           {},
 	"externalTrafficInformURI": {},
-	"subSupportUrl":            {},
-	"subProfileUrl":            {},
+}
+
+// Subscription site links are public by default, but operators can opt into
+// masking them through the subscription settings page.
+var maskableSubscriptionURLSettings = map[string]struct{}{
+	"subSupportUrl": {},
+	"subProfileUrl": {},
+}
+
+type SubscriptionSiteButton struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	URL    string `json:"url"`
+	Masked bool   `json:"masked,omitempty"`
+}
+
+const maxSubscriptionSiteButtons = 32
+
+func parseSubscriptionSiteButtons(raw string) ([]SubscriptionSiteButton, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	buttons := make([]SubscriptionSiteButton, 0)
+	if err := json.Unmarshal([]byte(raw), &buttons); err != nil {
+		return nil, common.NewErrorf("invalid subscription URL buttons: %v", err)
+	}
+	if len(buttons) > maxSubscriptionSiteButtons {
+		return nil, common.NewErrorf("subscription URL buttons exceed limit %d", maxSubscriptionSiteButtons)
+	}
+	seenIDs := make(map[string]struct{}, len(buttons))
+	for i := range buttons {
+		button := &buttons[i]
+		button.ID = strings.TrimSpace(button.ID)
+		if button.ID == "" {
+			button.ID = fmt.Sprintf("site-url-%d", i+1)
+		}
+		if len(button.ID) > 80 {
+			return nil, common.NewErrorf("subscription URL button %d has an invalid ID", i+1)
+		}
+		if _, exists := seenIDs[button.ID]; exists {
+			button.ID = fmt.Sprintf("%s-%d", button.ID, i+1)
+		}
+		seenIDs[button.ID] = struct{}{}
+		button.Label = strings.TrimSpace(button.Label)
+		button.URL = strings.TrimSpace(button.URL)
+		if len(button.Label) > 80 || len(button.URL) > 2048 || strings.ContainsAny(button.Label, "\r\n") {
+			return nil, common.NewErrorf("subscription URL button %d exceeds its length limit or contains line breaks", i+1)
+		}
+		if button.URL == "" || button.URL == redactedSecretValue {
+			continue
+		}
+		parsed, err := url.Parse(button.URL)
+		scheme := ""
+		if parsed != nil {
+			scheme = strings.ToLower(parsed.Scheme)
+		}
+		if err != nil || parsed == nil || parsed.Host == "" || (scheme != "http" && scheme != "https") {
+			return nil, common.NewErrorf("subscription URL button %d must use an http or https URL", i+1)
+		}
+	}
+	return buttons, nil
+}
+
+func legacySubscriptionSiteButtons(settings *entity.AllSetting) []SubscriptionSiteButton {
+	buttons := make([]SubscriptionSiteButton, 0, 2)
+	if settings.SubShowSupport && strings.TrimSpace(settings.SubSupportUrl) != "" {
+		label := strings.TrimSpace(settings.SubSupportButtonLabel)
+		if label == "" {
+			label = "Поддержка"
+		}
+		buttons = append(buttons, SubscriptionSiteButton{ID: "legacy-support", Label: label, URL: strings.TrimSpace(settings.SubSupportUrl)})
+	}
+	if settings.SubShowProfileUrl && strings.TrimSpace(settings.SubProfileUrl) != "" {
+		label := strings.TrimSpace(settings.SubProfileButtonLabel)
+		if label == "" {
+			label = "Сайт"
+		}
+		buttons = append(buttons, SubscriptionSiteButton{ID: "legacy-profile", Label: label, URL: strings.TrimSpace(settings.SubProfileUrl)})
+	}
+	return buttons
 }
 
 func allSettingURLValue(settings *entity.AllSetting, key string) *string {
@@ -223,6 +318,9 @@ func allSettingURLValue(settings *entity.AllSetting, key string) *string {
 }
 
 func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
+	if err := s.migrateTelegramLanguageDefault(); err != nil {
+		return nil, err
+	}
 	db := database.GetDB()
 	settings := make([]*model.Setting, 0)
 	err := db.Model(model.Setting{}).Not("key = ?", "xrayTemplateConfig").Find(&settings).Error
@@ -294,6 +392,49 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		}
 	}
 
+	// Migrate the old global URL-masking switch to per-button masks. The legacy
+	// fields and setting remain readable for migration, but the current UI masks
+	// each button independently.
+	legacyMaskURLs := allSetting.SubMaskUrls
+	if !keyMap["subSiteButtons"] {
+		legacyButtons := legacySubscriptionSiteButtons(allSetting)
+		if legacyMaskURLs {
+			for i := range legacyButtons {
+				legacyButtons[i].Masked = true
+			}
+		}
+		if len(legacyButtons) > 0 {
+			allSetting.SubSiteButtonsEnable = true
+			encoded, err := json.Marshal(legacyButtons)
+			if err != nil {
+				return nil, err
+			}
+			allSetting.SubSiteButtons = string(encoded)
+		}
+	}
+	buttons, err := parseSubscriptionSiteButtons(allSetting.SubSiteButtons)
+	if err != nil {
+		return nil, err
+	}
+	if legacyMaskURLs {
+		for i := range buttons {
+			if buttons[i].URL != "" {
+				buttons[i].Masked = true
+			}
+		}
+	}
+	allSetting.SubMaskUrls = false
+	for i := range buttons {
+		if buttons[i].Masked && buttons[i].URL != "" {
+			buttons[i].URL = redactedSecretValue
+		}
+	}
+	encodedButtons, err := json.Marshal(buttons)
+	if err != nil {
+		return nil, err
+	}
+	allSetting.SubSiteButtons = string(encodedButtons)
+
 	// Credentials are write-only. Return a fixed marker so the settings form can
 	// preserve configured values without exposing them through the settings API.
 	if allSetting.TgBackupPassword != "" {
@@ -312,6 +453,13 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		allSetting.TwoFactorToken = redactedSecretValue
 	}
 	for key := range writeOnlyURLSettings {
+		if urlValue := allSettingURLValue(allSetting, key); urlValue != nil && *urlValue != "" {
+			*urlValue = redactedSecretValue
+		}
+	}
+	// The legacy URL fields are no longer editable; never expose their duplicate
+	// values after migration into the independently masked button list.
+	for key := range maskableSubscriptionURLSettings {
 		if urlValue := allSettingURLValue(allSetting, key); urlValue != nil && *urlValue != "" {
 			*urlValue = redactedSecretValue
 		}
@@ -614,7 +762,34 @@ func (s *SettingService) SetTgBackupLastSentAt(value time.Time) error {
 }
 
 func (s *SettingService) GetTgLang() (string, error) {
+	if err := s.migrateTelegramLanguageDefault(); err != nil {
+		return "", err
+	}
 	return s.getString("tgLang")
+}
+
+func (s *SettingService) migrateTelegramLanguageDefault() error {
+	telegramLanguageDefaultMigrationMu.Lock()
+	defer telegramLanguageDefaultMigrationMu.Unlock()
+
+	migration, err := s.getSetting(telegramLanguageDefaultMigrationKey)
+	if err == nil && migration.Value == "true" {
+		return nil
+	}
+	if err != nil && !database.IsNotFound(err) {
+		return err
+	}
+
+	language, err := s.getString("tgLang")
+	if err != nil {
+		return err
+	}
+	if language == "en-US" {
+		if err := s.setString("tgLang", "ru-RU"); err != nil {
+			return err
+		}
+	}
+	return s.setString(telegramLanguageDefaultMigrationKey, "true")
 }
 
 func (s *SettingService) GetTwoFactorEnable() (bool, error) {
@@ -929,6 +1104,107 @@ func (s *SettingService) GetSubProfileButtonLabel() (string, error) {
 
 func (s *SettingService) GetSubProfileUrl() (string, error) {
 	return s.getString("subProfileUrl")
+}
+
+func (s *SettingService) GetSubShowSubscriptionUrl() (bool, error) {
+	return s.getBool("subShowSubscriptionUrl")
+}
+
+func (s *SettingService) GetSubSubscriptionButtonLabel() (string, error) {
+	return s.getString("subSubscriptionButtonLabel")
+}
+
+func (s *SettingService) GetSubSiteButtons() (bool, int, []SubscriptionSiteButton, error) {
+	enabled, err := s.getBool("subSiteButtonsEnable")
+	if err != nil {
+		return false, 0, nil, err
+	}
+	perRow, err := s.getInt("subSiteButtonsPerRow")
+	if err != nil {
+		return false, 0, nil, err
+	}
+	if perRow < 1 || perRow > 6 {
+		perRow = 2
+	}
+	raw, err := s.getString("subSiteButtons")
+	if err != nil {
+		return false, 0, nil, err
+	}
+	buttons, err := parseSubscriptionSiteButtons(raw)
+	if err != nil {
+		return false, 0, nil, err
+	}
+
+	// Old databases do not have the new list setting row. Keep their configured
+	// support/profile links visible until the operator saves the new list once.
+	_, settingErr := s.getSetting("subSiteButtons")
+	if database.IsNotFound(settingErr) {
+		showSupport, _ := s.GetSubShowSupport()
+		supportURL, _ := s.GetSubSupportUrl()
+		supportLabel, _ := s.GetSubSupportButtonLabel()
+		showProfile, _ := s.GetSubShowProfileUrl()
+		profileURL, _ := s.GetSubProfileUrl()
+		profileLabel, _ := s.GetSubProfileButtonLabel()
+		legacy := legacySubscriptionSiteButtons(&entity.AllSetting{
+			SubShowSupport:        showSupport,
+			SubSupportUrl:         supportURL,
+			SubSupportButtonLabel: supportLabel,
+			SubShowProfileUrl:     showProfile,
+			SubProfileUrl:         profileURL,
+			SubProfileButtonLabel: profileLabel,
+		})
+		if len(legacy) > 0 {
+			buttons = legacy
+			enabled = true
+		}
+	} else if settingErr != nil {
+		return false, 0, nil, settingErr
+	}
+	return enabled, perRow, buttons, nil
+}
+
+func (s *SettingService) GetSubSiteButtonsTextStyle() (string, bool, bool, bool, bool, error) {
+	align, err := s.getString("subSiteButtonsTextAlign")
+	if err != nil {
+		return "left", false, false, false, false, err
+	}
+	if align != "left" && align != "center" && align != "right" {
+		align = "left"
+	}
+	bold, err := s.getBool("subSiteButtonsBold")
+	if err != nil {
+		return align, false, false, false, false, err
+	}
+	italic, err := s.getBool("subSiteButtonsItalic")
+	if err != nil {
+		return align, bold, false, false, false, err
+	}
+	underline, err := s.getBool("subSiteButtonsUnderline")
+	if err != nil {
+		return align, bold, italic, false, false, err
+	}
+	strike, err := s.getBool("subSiteButtonsStrike")
+	if err != nil {
+		return align, bold, italic, underline, false, err
+	}
+	return align, bold, italic, underline, strike, nil
+}
+
+func (s *SettingService) GetSubSiteButtonURL(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", common.NewError("subscription URL button ID is required")
+	}
+	_, _, buttons, err := s.GetSubSiteButtons()
+	if err != nil {
+		return "", err
+	}
+	for _, button := range buttons {
+		if button.ID == id {
+			return button.URL, nil
+		}
+	}
+	return "", common.NewError("subscription URL button not found")
 }
 
 func (s *SettingService) GetSubAnnounce() (string, error) {
@@ -1273,6 +1549,77 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		oldTopicIDs[key], _ = s.getString(key)
 	}
 
+	if strings.TrimSpace(allSetting.SubSiteButtons) == "" {
+		// Preserve the configured list when an older settings client omits the new
+		// field entirely; the current UI sends an explicit JSON array, including [].
+		enabled, perRow, storedButtons, err := s.GetSubSiteButtons()
+		if err != nil {
+			return err
+		}
+		allSetting.SubSiteButtonsEnable = enabled
+		allSetting.SubSiteButtonsPerRow = perRow
+		encoded, err := json.Marshal(storedButtons)
+		if err != nil {
+			return err
+		}
+		allSetting.SubSiteButtons = string(encoded)
+	}
+	legacyMaskURLs := allSetting.SubMaskUrls
+	allSetting.SubMaskUrls = false
+	if allSetting.SubSiteButtonsPerRow == 0 {
+		allSetting.SubSiteButtonsPerRow = 2
+	}
+	if strings.TrimSpace(allSetting.SubSiteButtonsTextAlign) == "" {
+		allSetting.SubSiteButtonsTextAlign = "left"
+	}
+	switch allSetting.SubSiteButtonsTextAlign {
+	case "left", "center", "right":
+	default:
+		return common.NewError("subscription URL button text alignment must be left, center, or right")
+	}
+	allSetting.SubSubscriptionButtonLabel = strings.TrimSpace(allSetting.SubSubscriptionButtonLabel)
+	if len(allSetting.SubSubscriptionButtonLabel) > 80 || strings.ContainsAny(allSetting.SubSubscriptionButtonLabel, "\r\n") {
+		return common.NewError("subscription button label is invalid")
+	}
+	if allSetting.SubSiteButtonsPerRow < 1 || allSetting.SubSiteButtonsPerRow > 6 {
+		return common.NewErrorf("subscription URL buttons per row must be between 1 and 6")
+	}
+	buttons, err := parseSubscriptionSiteButtons(allSetting.SubSiteButtons)
+	if err != nil {
+		return err
+	}
+	if legacyMaskURLs {
+		for i := range buttons {
+			if buttons[i].URL != "" {
+				buttons[i].Masked = true
+			}
+		}
+	}
+	if len(buttons) > 0 {
+		_, _, storedButtons, err := s.GetSubSiteButtons()
+		if err != nil {
+			return err
+		}
+		storedURLs := make(map[string]string, len(storedButtons))
+		for _, button := range storedButtons {
+			storedURLs[button.ID] = button.URL
+		}
+		for i := range buttons {
+			if buttons[i].URL == redactedSecretValue {
+				storedURL, ok := storedURLs[buttons[i].ID]
+				if !ok {
+					return common.NewErrorf("masked URL button %q no longer exists", buttons[i].ID)
+				}
+				buttons[i].URL = storedURL
+			}
+		}
+	}
+	encodedButtons, err := json.Marshal(buttons)
+	if err != nil {
+		return err
+	}
+	allSetting.SubSiteButtons = string(encodedButtons)
+
 	v := reflect.ValueOf(allSetting).Elem()
 	t := reflect.TypeFor[entity.AllSetting]()
 	fields := reflect_util.GetFields(t)
@@ -1291,11 +1638,14 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 			// encryption off is controlled by its own switch.
 			continue
 		}
-		if _, ok := writeOnlyURLSettings[key]; ok && value == redactedSecretValue {
-			// Preserve the server-side URL exactly. Even a syntactically ordinary
-			// path can contain a provider's opaque bearer credential; empty input
-			// remains the explicit way to clear the setting.
-			continue
+		if value == redactedSecretValue {
+			_, writeOnly := writeOnlyURLSettings[key]
+			_, maskable := maskableSubscriptionURLSettings[key]
+			if writeOnly || maskable {
+				// A marker returned by the settings API means "unchanged". Preserve the
+				// stored URL, including when masking is switched off in this same save.
+				continue
+			}
 		}
 		err := s.saveSetting(key, value)
 		if err != nil {
