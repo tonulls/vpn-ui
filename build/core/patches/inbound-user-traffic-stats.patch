@@ -78,7 +78,7 @@ index b3828fb7..ed4563f4 100644
  	// Speed limiting is keyed by account email, so one bucket covers every
  	// connection an account has open. It is looked up outside the block above
  	// because it must also fire when the email is empty: see LookupSession.
-@@ -239,6 +294,13 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
+@@ -239,5 +294,12 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
  		}
  	}
  
