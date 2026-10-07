@@ -22,6 +22,7 @@ type ExternalSubscriptionSlot struct {
 	ID                           int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	SortOrder                    int    `json:"sortOrder" gorm:"not null;default:0"`
 	Name                         string `json:"name" gorm:"not null"`
+	ShowName                     bool   `json:"showName" gorm:"column:show_name;not null;default:true"`
 	SelectionMode                string `json:"selectionMode" gorm:"not null;default:auto"`
 	SourceURL                    string `json:"sourceUrl" gorm:"not null"`
 	RefreshIntervalMinutes       int    `json:"refreshIntervalMinutes" gorm:"not null;default:30"`

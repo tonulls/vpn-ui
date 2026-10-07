@@ -105,6 +105,7 @@ func bindExternalSubscriptionSlotInput(c *gin.Context) (service.ExternalSubscrip
 	}
 	var form struct {
 		Name                         string `form:"name"`
+		ShowName                     *bool  `form:"showName"`
 		SourceURL                    string `form:"sourceUrl"`
 		RefreshIntervalMinutes       int    `form:"refreshIntervalMinutes"`
 		CheckIntervalMinutes         int    `form:"checkIntervalMinutes"`
@@ -118,6 +119,7 @@ func bindExternalSubscriptionSlotInput(c *gin.Context) (service.ExternalSubscrip
 		return input, err
 	}
 	input.Name = form.Name
+	input.ShowName = form.ShowName
 	input.SourceURL = form.SourceURL
 	input.RefreshIntervalMinutes = form.RefreshIntervalMinutes
 	input.CheckIntervalMinutes = form.CheckIntervalMinutes

@@ -22,7 +22,8 @@
   .external-subscriptions-page .ext-slot-name { display: flex; align-items: center; gap: 8px; }
   .ext-slot-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; align-items: center; }
   .ext-form-label { display: block; margin: 3px 0 0; font-weight: 500; }
-  .ext-enabled-label { display: flex; align-items: center; justify-content: flex-end; }
+  .ext-enabled-label { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  .ext-enabled-label .ant-checkbox-wrapper { margin-left: 0; }
   .ext-slot-form-grid .ant-input-number { width: 100%; }
   .ext-slot-form-grid .ext-url-input-wide { grid-column: 1 / -1; }
   .external-subscriptions-page .ext-intervals { white-space: nowrap; }
@@ -233,6 +234,7 @@
       <label class="ext-form-label">Название подмодуля:</label>
       <div class="ext-form-label ext-enabled-label">
         <a-checkbox v-model="edit.form.enabled">Включено</a-checkbox>
+        <a-checkbox v-model="edit.form.showName">Название</a-checkbox>
       </div>
       <a-input v-model="edit.form.name" maxlength="64" placeholder="Название"></a-input>
       <div></div>
@@ -475,7 +477,7 @@
           visible: true, saving: false, id: 0,
           form: { name: '', sourceUrl: '', refreshIntervalMinutes: 30, checkIntervalMinutes: 5,
             subscriptionKeyCount: 1, forceRotationIntervalMinutes: null, filterMode: 'include',
-            selectionMode: 'auto', countryFlags: [], enabled: true },
+            selectionMode: 'auto', countryFlags: [], enabled: true, showName: true },
         };
       },
       editSlot(slot) {
@@ -486,7 +488,7 @@
             subscriptionKeyCount: slot.subscriptionKeyCount || 1,
             forceRotationIntervalMinutes: slot.forceRotationIntervalMinutes || null, filterMode: slot.filterMode,
             selectionMode: slot.selectionMode || 'auto', countryFlags: (slot.countryFlags || []).slice(),
-             enabled: slot.enabled },
+             enabled: slot.enabled, showName: slot.showName !== false },
         };
       },
       async saveSlot() {

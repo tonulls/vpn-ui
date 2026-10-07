@@ -58,6 +58,7 @@ type ExternalSubscriptionSettingsView struct {
 
 type ExternalSubscriptionSlotInput struct {
 	Name                         string   `json:"name" form:"name"`
+	ShowName                     *bool    `json:"showName" form:"showName"`
 	SourceURL                    string   `json:"sourceUrl" form:"sourceUrl"`
 	RefreshIntervalMinutes       int      `json:"refreshIntervalMinutes" form:"refreshIntervalMinutes"`
 	CheckIntervalMinutes         int      `json:"checkIntervalMinutes" form:"checkIntervalMinutes"`
@@ -72,6 +73,7 @@ type ExternalSubscriptionSlotInput struct {
 type ExternalSubscriptionSlotView struct {
 	ID                           int      `json:"id"`
 	Name                         string   `json:"name"`
+	ShowName                     bool     `json:"showName"`
 	SourceURL                    string   `json:"sourceUrl"`
 	RefreshIntervalMinutes       int      `json:"refreshIntervalMinutes"`
 	CheckIntervalMinutes         int      `json:"checkIntervalMinutes"`
@@ -428,6 +430,7 @@ func (s *DynamicSubscriptionService) CreateSlot(input ExternalSubscriptionSlotIn
 	}
 	now := s.clock().UnixMilli()
 	enabled := row.Enabled
+	showName := row.ShowName
 	row.CandidateDataJSON = "[]"
 	row.Status = "pending"
 	row.NextFetchAt = now
@@ -452,6 +455,12 @@ func (s *DynamicSubscriptionService) CreateSlot(input ExternalSubscriptionSlotIn
 		}
 		row.Enabled = false
 	}
+	if !showName {
+		if err := db.Model(&row).UpdateColumn("show_name", false).Error; err != nil {
+			return ExternalSubscriptionSlotView{}, err
+		}
+		row.ShowName = false
+	}
 	return externalSlotView(&row), nil
 }
 
@@ -469,6 +478,10 @@ func (s *DynamicSubscriptionService) UpdateSlot(id int, input ExternalSubscripti
 			input.SubscriptionKeyCount = 1
 		}
 	}
+	if input.ShowName == nil {
+		showName := row.ShowName
+		input.ShowName = &showName
+	}
 	updated, err := normalizeExternalSlotInput(input)
 	if err != nil {
 		return ExternalSubscriptionSlotView{}, err
@@ -478,6 +491,7 @@ func (s *DynamicSubscriptionService) UpdateSlot(id int, input ExternalSubscripti
 	changedKeyCount := row.SubscriptionKeyCount != updated.SubscriptionKeyCount
 	changedForceRotation := row.ForceRotationIntervalMinutes != updated.ForceRotationIntervalMinutes
 	row.Name = updated.Name
+	row.ShowName = updated.ShowName
 	row.SourceURL = updated.SourceURL
 	row.RefreshIntervalMinutes = updated.RefreshIntervalMinutes
 	row.CheckIntervalMinutes = updated.CheckIntervalMinutes
@@ -632,9 +646,10 @@ func (s *DynamicSubscriptionService) ActiveURIForSubscription(slotID int) (strin
 }
 
 // ActiveURIsForSubscription is intentionally the only manager API returning
-// third-party URIs. It prefixes each displayed fragment with the slot name while
-// leaving the stored URI and all connection parameters unchanged. Callers must invoke
-// it only after their usual subscription token, membership, enable and quota checks.
+// third-party URIs. It optionally prefixes each displayed fragment with the slot name
+// when ShowName is enabled, while leaving the stored URI and connection parameters
+// unchanged. Callers must invoke it only after their usual subscription token,
+// membership, enable and quota checks.
 func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]string, bool) {
 	if slotID < 1 || !externalSelectorEnabled() {
 		return nil, false
@@ -678,9 +693,14 @@ func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]st
 	}
 	uris := make([]string, 0, len(selected))
 	for _, candidate := range selected {
-		if candidate.URI != "" {
-			uris = append(uris, prefixExternalSubscriptionURIName(candidate.URI, row.Name))
+		if candidate.URI == "" {
+			continue
 		}
+		uri := candidate.URI
+		if row.ShowName {
+			uri = prefixExternalSubscriptionURIName(uri, row.Name)
+		}
+		uris = append(uris, uri)
 	}
 	return uris, len(uris) > 0
 }
@@ -1385,8 +1405,13 @@ func normalizeExternalSlotInput(input ExternalSubscriptionSlotInput) (model.Exte
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
+	showName := true
+	if input.ShowName != nil {
+		showName = *input.ShowName
+	}
 	return model.ExternalSubscriptionSlot{
 		Name:                         name,
+		ShowName:                     showName,
 		SourceURL:                    sourceURL,
 		RefreshIntervalMinutes:       input.RefreshIntervalMinutes,
 		CheckIntervalMinutes:         input.CheckIntervalMinutes,
@@ -1488,6 +1513,7 @@ func externalSlotView(slot *model.ExternalSubscriptionSlot) ExternalSubscription
 	return ExternalSubscriptionSlotView{
 		ID:                           slot.ID,
 		Name:                         slot.Name,
+		ShowName:                     slot.ShowName,
 		SourceURL:                    slot.SourceURL,
 		RefreshIntervalMinutes:       slot.RefreshIntervalMinutes,
 		CheckIntervalMinutes:         slot.CheckIntervalMinutes,
