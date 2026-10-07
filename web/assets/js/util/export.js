@@ -25,6 +25,9 @@ const AccountExport = {
       try {
         const dbInbound = app.dbInbounds.find(r => r.id === t.inboundId);
         if (!dbInbound) continue;
+        // External subscription URIs are source credentials. They are emitted only by
+        // authorized subscription endpoints, never by admin-side card/export tools.
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) continue;
         const inbound = dbInbound.toInbound();
         const clients = app.getInboundClients(dbInbound) || [];
         const client = clients.find(c => c.email === t.email);

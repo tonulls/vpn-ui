@@ -54,6 +54,11 @@ func IsHysteria(p Protocol) bool {
 	return p == Hysteria || p == Hysteria2
 }
 
+// ExternalSubscription is a virtual, subscription-only panel connection. It is not
+// an Xray protocol and must never be passed to GenXrayInboundConfig or a listener
+// lifecycle operation.
+const ExternalSubscription Protocol = "external_subscription"
+
 // ClientExternalProxy is one alternate endpoint rendered into an account's links
 // instead of this server's own address (a relay/CDN in front of the proxy). It
 // affects generated links only: no daemon ever reads it.
@@ -369,6 +374,7 @@ type Inbound struct {
 	Listen         string   `json:"listen" form:"listen"`
 	Port           int      `json:"port" form:"port"`
 	Protocol       Protocol `json:"protocol" form:"protocol"`
+	ProtocolName   string   `json:"protocolName" gorm:"-"`
 	Settings       string   `json:"settings" form:"settings"`
 	StreamSettings string   `json:"streamSettings" form:"streamSettings"`
 	Tag            string   `json:"tag" form:"tag" gorm:"unique"`

@@ -290,8 +290,10 @@
             :class="{ on: clientMembershipModal.selected.includes(ib.inboundId) }">
             <a-checkbox :value="ib.inboundId">
               [[ ib.remark || ('#' + ib.inboundId) ]]
-              <a-tag>[[ ib.protocol ]]</a-tag>
-              <span class="bo-dim">:[[ ib.port ]]</span>
+              <a-tag v-if="ib.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
+                [[ ib.protocolName || ProtocolLabels[ib.protocol] || ib.protocol ]]
+              </a-tag>
+              <span v-if="ib.protocol !== Protocols.EXTERNAL_SUBSCRIPTION" class="bo-dim">:[[ ib.port ]]</span>
             </a-checkbox>
           </div>
         </a-checkbox-group>

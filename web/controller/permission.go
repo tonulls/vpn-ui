@@ -324,11 +324,11 @@ func requirePerm(perm model.Permission) gin.HandlerFunc {
 	}
 }
 
-// requireSuperAdmin gates actions that remain intentionally reserved for the
-// super-admin role: managing other admins, changing protected core/systemd/SSL
-// configuration, uninstalling a core, and rebooting the host. Global config and
-// full database reads have their own explicit permission gate; see
-// requireSensitiveExports.
+// requireSuperAdmin gates actions intentionally reserved for the super-admin role:
+// managing other admins, changing protected core/systemd/SSL configuration,
+// uninstalling a core, rebooting the host, and changing the global external
+// subscription selector. Global config and full database reads have their own
+// explicit permission gate; see requireSensitiveExports.
 func requireSuperAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := session.GetLoginUser(c)

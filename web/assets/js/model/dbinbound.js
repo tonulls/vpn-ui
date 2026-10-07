@@ -33,6 +33,7 @@ class DBInbound {
         this.listen = "";
         this.port = 0;
         this.protocol = "";
+        this.protocolName = "";
         this.settings = "";
         this.streamSettings = "";
         this.tag = "";
@@ -216,6 +217,7 @@ class DBInbound {
 
     isMultiUser() {
         switch (this.protocol) {
+            case Protocols.EXTERNAL_SUBSCRIPTION:
             case Protocols.VMESS:
             case Protocols.VLESS:
             case Protocols.TROJAN:

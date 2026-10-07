@@ -95,6 +95,10 @@
                       <template v-if="!isMobile">{{ i18n
                         "pages.inbounds.addInbound" }}</template>
                     </a-button>
+                    <a-button v-if="!RESELLER.isReseller && externalSelectorInstalled" icon="global"
+                      @click="openExternalSubscriptionDialog()">
+                      <template v-if="!isMobile">Внешнее подключение</template>
+                    </a-button>
                     <a-dropdown :trigger="['click']">
                       <a-button type="primary" icon="menu">
                         <template v-if="!isMobile">{{ i18n
@@ -307,7 +311,7 @@
                               <a-icon type="qrcode"></a-icon>
                               {{ i18n "qrCode" }}
                             </a-menu-item>
-                            <template v-if="dbInbound.isMultiUser()">
+                            <template v-if="dbInbound.isMultiUser() && dbInbound.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
                               <a-menu-item key="export">
                                 <a-icon type="export"></a-icon>
                                 {{ i18n "pages.inbounds.export"}}
@@ -319,20 +323,20 @@
                               </a-menu-item>
                             </template>
                             <template v-else>
-                              <a-menu-item key="showInfo">
+                              <a-menu-item key="showInfo" v-if="dbInbound.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
                                 <a-icon type="info-circle"></a-icon>
                                 {{ i18n "info"}}
                               </a-menu-item>
                             </template>
-                            <a-menu-item key="clipboard">
+                            <a-menu-item key="clipboard" v-if="dbInbound.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
                               <a-icon type="copy"></a-icon>
                               {{ i18n "pages.inbounds.exportInbound" }}
                             </a-menu-item>
-                            <a-menu-item key="resetTraffic">
+                            <a-menu-item key="resetTraffic" v-if="dbInbound.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
                               <a-icon type="retweet"></a-icon> {{ i18n
                               "pages.inbounds.resetTraffic" }}
                             </a-menu-item>
-                            <a-menu-item key="clone">
+                            <a-menu-item key="clone" v-if="dbInbound.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
                               <a-icon type="block"></a-icon> {{ i18n
                               "pages.inbounds.clone"}}
                             </a-menu-item>
@@ -365,7 +369,7 @@
                         <span class="bo-il-lines">
                           <span class="bo-il-name">[[ dbInbound.remark ]]</span>
                           <span class="bo-il-meta">
-                            <b>[[ ProtocolLabels[dbInbound.protocol] ||
+                            <b>[[ dbInbound.protocolName || ProtocolLabels[dbInbound.protocol] ||
                               dbInbound.protocol ]]</b><!--
                             OpenVPN's artifact is a FILE the operator hands to a
                             person, not a share link, and it is the reason most
@@ -428,8 +432,9 @@
                              no address for a client to dial - which is a
                              different thing from an empty cell, and worth
                              saying rather than dashing out. -->
-                        <span class="bo-il-none" v-else
+                        <span class="bo-il-none" v-else-if="dbInbound.protocol === 'gre'"
                           title="GRE is IP protocol 47 and has no ports">proto 47</span>
+                        <span class="bo-il-none" v-else>&mdash;</span>
                       </div>
                     </template>
                     <!-- Used against cap, over a meter, over the all-time figure
@@ -551,7 +556,8 @@
                                   <a-icon type="copy" class="bo-il-ep-copy"></a-icon>
                                 </span>
                               </template>
-                              <span class="bo-il-none" v-else>proto 47</span>
+                              <span class="bo-il-none" v-else-if="dbInbound.protocol === 'gre'">proto 47</span>
+                              <span class="bo-il-none" v-else>&mdash;</span>
                             </div>
                             <div class="bo-il-rule"></div>
                             <div class="bo-il-top">
@@ -630,6 +636,34 @@
           </a-row>
         </transition>
       </a-spin>
+      <a-modal :visible="externalSubscriptionModalVisible"
+        :title="externalSubscriptionEditing ? 'Редактировать внешнее подключение' : 'Новое внешнее подключение'"
+        :confirm-loading="externalSubscriptionSaving"
+        :ok-text="externalSubscriptionEditing ? 'Сохранить' : 'Создать'"
+        cancel-text="Закрыть" :class="themeSwitcher.currentTheme"
+        @ok="saveExternalSubscriptionInbound"
+        @cancel="externalSubscriptionModalVisible = false">
+        <a-alert type="info" show-icon
+          message="Будет создана виртуальная связь с подмодулем. Порт не открывается, Xray не перенастраивается."></a-alert>
+        <a-form layout="vertical" :style="{ marginTop: '16px' }">
+          <a-form-item label="Название подключения">
+            <a-input v-model="externalSubscriptionForm.remark" maxlength="128"></a-input>
+          </a-form-item>
+          <a-form-item label="Подмодуль">
+            <a-select v-model="externalSubscriptionForm.slotId"
+              :dropdown-class-name="themeSwitcher.currentTheme">
+              <a-select-option v-for="slot in externalSubscriptionSlots"
+                :key="slot.id" :value="slot.id"
+                :disabled="!slot.enabled && slot.id !== externalSubscriptionForm.slotId">
+                [[ slot.name ]][[ slot.enabled ? '' : ' (отключён)' ]]
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item v-if="externalSubscriptionEditing" label="Подключение включено">
+            <a-switch v-model="externalSubscriptionForm.enable"></a-switch>
+          </a-form-item>
+        </a-form>
+      </a-modal>
 {{template "page/shell_end" . }}
 {{template "page/body_scripts" .}}
 <script
@@ -760,7 +794,7 @@
       pageClass: 'inbounds-page',
       persianDatepicker,
       loadingStates: {
-        fetched: false,
+        fetched: true,
         spinning: false
       },
       inbounds: [],
@@ -778,6 +812,12 @@
       sslCertificates: [],
       defaultKey: '',
       clientCount: [],
+      externalSubscriptionSlots: [],
+      externalSelectorInstalled: false,
+      externalSubscriptionModalVisible: false,
+      externalSubscriptionEditing: false,
+      externalSubscriptionSaving: false,
+      externalSubscriptionForm: { id: 0, slotId: null, remark: '', enable: true },
       onlineClients: [],
       // "<inboundId>:<email>" for each pair seen in the last traffic tick. Consumed
       // by membershipOnline (component/clientActions.html), which is what the
@@ -834,14 +874,27 @@
           return;
         }
 
-        await this.getLastOnlineMap();
-        await this.getOnlineUsers();
-        await this.getOnlineMemberships();
-
-        this.setInbounds(msg.obj);
+        // Paint the connection rows as soon as their own response arrives. Online
+        // counters and selector metadata are auxiliary and must never hold up the list.
+        this.setInbounds(msg.obj || []);
         setTimeout(() => {
           this.refreshing = false;
         }, 500);
+        Promise.all([
+          this.getLastOnlineMap(),
+          this.getOnlineUsers(),
+          this.getOnlineMemberships(),
+        ]).then(() => {
+          this.refreshClientCounts();
+        }).catch((error) => console.error('Auxiliary inbound data load failed:', error));
+      },
+      refreshClientCounts() {
+        for (let index = 0; index < this.dbInbounds.length; index++) {
+          const dbInbound = this.dbInbounds[index];
+          if (Object.prototype.hasOwnProperty.call(this.clientCount, dbInbound.id)) {
+            this.clientCount[dbInbound.id] = this.getClientCounts(dbInbound, this.inbounds[index]);
+          }
+        }
       },
       // Re-reads the caller's own reseller balance after anything that can move it.
       // Deliberately failure-tolerant: the chip is informational, the server is what
@@ -932,10 +985,22 @@
         this.clientCount.splice(0);
         for (const inbound of dbInbounds) {
           const dbInbound = new DBInbound(inbound);
-          to_inbound = dbInbound.toInbound()
+          let to_inbound;
+          if (inbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+            let settings = {};
+            try { settings = JSON.parse(inbound.settings || '{}'); } catch (_) {}
+            to_inbound = {
+              id: inbound.id,
+              protocol: inbound.protocol,
+              settings,
+              clients: Array.isArray(settings.clients) ? settings.clients : [],
+            };
+          } else {
+            to_inbound = dbInbound.toInbound();
+          }
           this.inbounds.push(to_inbound);
           this.dbInbounds.push(dbInbound);
-          if ([Protocols.VMESS, Protocols.VLESS, Protocols.TROJAN, Protocols.SHADOWSOCKS, Protocols.ANYTLS, Protocols.TUIC, Protocols.NAIVE, Protocols.L2TP, Protocols.PPTP, Protocols.OPENVPN, Protocols.OPENCONNECT, Protocols.SSTP, Protocols.IKEV2, Protocols.WGC, Protocols.AWG, Protocols.MTPROTO, Protocols.SSH].includes(inbound.protocol)) {
+          if ([Protocols.EXTERNAL_SUBSCRIPTION, Protocols.VMESS, Protocols.VLESS, Protocols.TROJAN, Protocols.SHADOWSOCKS, Protocols.ANYTLS, Protocols.TUIC, Protocols.NAIVE, Protocols.L2TP, Protocols.PPTP, Protocols.OPENVPN, Protocols.OPENCONNECT, Protocols.SSTP, Protocols.IKEV2, Protocols.WGC, Protocols.AWG, Protocols.MTPROTO, Protocols.SSH].includes(inbound.protocol)) {
             if (dbInbound.isSS && (!to_inbound.isSSMultiUser)) {
               continue;
             }
@@ -1031,7 +1096,9 @@
                     searchedSettings.clients.push(client);
                   }
                 });
-                newInbound.settings = Inbound.Settings.fromJson(inbound.protocol, searchedSettings);
+                newInbound.settings = inbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION
+                  ? JSON.stringify(searchedSettings)
+                  : Inbound.Settings.fromJson(inbound.protocol, searchedSettings);
               }
               this.searchedInbounds.push(newInbound);
             }
@@ -1059,7 +1126,9 @@
                     }
                   });
                 }
-                newInbound.settings = Inbound.Settings.fromJson(inbound.protocol, filteredSettings);
+                newInbound.settings = inbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION
+                  ? JSON.stringify(filteredSettings)
+                  : Inbound.Settings.fromJson(inbound.protocol, filteredSettings);
                 this.searchedInbounds.push(newInbound);
               }
             }
@@ -1269,6 +1338,65 @@
         };
         await this.submit('/panel/api/inbounds/add', data, inModal);
       },
+      async loadExternalSubscriptionSlots() {
+        const msg = await HttpUtil.get('/panel/api/inbounds/externalSubscriptionSlots');
+        if (!msg.success) return false;
+        this.externalSelectorInstalled = !!(msg.obj && msg.obj.installed);
+        this.externalSubscriptionSlots = msg.obj && Array.isArray(msg.obj.slots) ? msg.obj.slots : [];
+        return true;
+      },
+      externalSubscriptionSettings(dbInbound) {
+        try {
+          return typeof dbInbound.settings === 'string'
+            ? JSON.parse(dbInbound.settings || '{}')
+            : (dbInbound.settings || {});
+        } catch (_) {
+          return {};
+        }
+      },
+      async openExternalSubscriptionDialog(inboundId = 0) {
+        if (!await this.loadExternalSubscriptionSlots()) return;
+        const existing = inboundId ? this.dbInbounds.find(row => row.id === inboundId) : null;
+        const settings = existing ? this.externalSubscriptionSettings(existing) : {};
+        const firstEnabled = this.externalSubscriptionSlots.find(slot => slot.enabled);
+        this.externalSubscriptionForm = {
+          id: existing ? existing.id : 0,
+          slotId: existing ? Number(settings.slotId) || null : (firstEnabled ? firstEnabled.id : null),
+          remark: existing ? existing.remark : '',
+          enable: existing ? !!existing.enable : true,
+        };
+        this.externalSubscriptionEditing = !!existing;
+        this.externalSubscriptionModalVisible = true;
+      },
+      async saveExternalSubscriptionInbound() {
+        const form = this.externalSubscriptionForm;
+        if (!String(form.remark || '').trim()) {
+          this.$message.error('Укажите название подключения');
+          return;
+        }
+        if (!(Number(form.slotId) > 0)) {
+          this.$message.error('Выберите подмодуль');
+          return;
+        }
+        this.externalSubscriptionSaving = true;
+        try {
+          const editing = this.externalSubscriptionEditing;
+          const url = editing
+            ? '/panel/api/inbounds/externalSubscription/' + form.id
+            : '/panel/api/inbounds/externalSubscription';
+          const msg = await HttpUtil.post(url, {
+            slotId: Number(form.slotId),
+            remark: String(form.remark).trim(),
+            enable: !!form.enable,
+          });
+          if (msg.success) {
+            this.externalSubscriptionModalVisible = false;
+            await this.getDBInbounds();
+          }
+        } finally {
+          this.externalSubscriptionSaving = false;
+        }
+      },
       openAddInbound() {
         inModal.show({
           title: '{{ i18n "pages.inbounds.addInbound"}}',
@@ -1282,6 +1410,10 @@
       },
       openEditInbound(dbInboundId) {
         dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
+        if (dbInbound && dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          this.openExternalSubscriptionDialog(dbInboundId);
+          return;
+        }
         const inbound = dbInbound.toInbound();
         inModal.show({
           title: '{{ i18n "pages.inbounds.modifyInbound"}}',
@@ -1417,10 +1549,25 @@
           onOk: () => this.submit('/panel/api/inbounds/del/' + dbInboundId),
         });
       },
-      switchEnable(dbInboundId, state) {
+      async switchEnable(dbInboundId, state) {
         let dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
         if (!dbInbound) return;
         dbInbound.enable = state;
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          const slotId = Number(this.externalSubscriptionSettings(dbInbound).slotId) || 0;
+          try {
+            const msg = await HttpUtil.post('/panel/api/inbounds/externalSubscription/' + dbInbound.id, {
+              slotId,
+              remark: dbInbound.remark,
+              enable: !!state,
+            });
+            if (msg.success) await this.getDBInbounds();
+            else dbInbound.enable = !state;
+          } catch (_) {
+            dbInbound.enable = !state;
+          }
+          return;
+        }
         let inbound = dbInbound.toInbound();
         const data = {
           up: dbInbound.up,
@@ -1524,6 +1671,11 @@
       // Transport and security only exist on the Xray-carried protocols; asking
       // for .stream on an L2TP row would reach into an object that has none.
       inboundMeta(dbInbound) {
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          const slotId = Number(this.externalSubscriptionSettings(dbInbound).slotId) || 0;
+          const slot = this.externalSubscriptionSlots.find(item => item.id === slotId);
+          return slot ? 'Подмодуль: ' + slot.name : (slotId ? 'Подмодуль #' + slotId : '');
+        }
         const parts = [];
         if (dbInbound.isVMess || dbInbound.isVLess || dbInbound.isTrojan || dbInbound.isSS) {
           const stream = dbInbound.toInbound().stream;
@@ -1552,7 +1704,7 @@
       // transport. GRE answers on none: it is IP protocol 47 and has no port
       // for a client to dial, which is a different thing from an empty cell.
       inboundEndpoints(dbInbound) {
-        if (dbInbound.protocol === 'gre') return [];
+        if (dbInbound.protocol === 'gre' || dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) return [];
         const inbound = dbInbound.toInbound();
         const proxies =
           (inbound.stream && !ObjectUtil.isArrEmpty(inbound.stream.externalProxy)
@@ -1616,6 +1768,11 @@
       // panel does not record that.
       inboundState(dbInbound) {
         if (!dbInbound.enable) return 'off';
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          const slotId = Number(this.externalSubscriptionSettings(dbInbound).slotId) || 0;
+          const slot = this.externalSubscriptionSlots.find(item => item.id === slotId);
+          return slot && slot.enabled && slot.ready ? 'ok' : 'error';
+        }
         const now = new Date().getTime();
         const used = dbInbound.up + dbInbound.down;
         if (dbInbound.expiryTime > 0 && dbInbound.expiryTime <= now) return 'error';
@@ -1628,6 +1785,13 @@
       // the whole message.
       inboundStateText(dbInbound) {
         if (!dbInbound.enable) return '{{ i18n "disabled" }}';
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          const slotId = Number(this.externalSubscriptionSettings(dbInbound).slotId) || 0;
+          const slot = this.externalSubscriptionSlots.find(item => item.id === slotId);
+          if (!slot) return 'Подмодуль не найден';
+          if (!slot.enabled) return 'Подмодуль выключен';
+          return slot.ready ? 'Активный ключ проверен' : 'Нет здорового ключа';
+        }
         const now = new Date().getTime();
         if (dbInbound.expiryTime > 0 && dbInbound.expiryTime <= now) {
           return '{{ i18n "pages.settings.ssl.expired" }}';
@@ -1880,13 +2044,11 @@
       if (window.location.protocol !== "https:" && !SecAlertDismissal.isDismissed()) {
         this.showAlert = true;
       }
-      this.loading();
       this.getDefaultSettings();
-      
-      // Initial data fetch
-      this.getDBInbounds().then(() => {
-        this.loading(false);
-      });
+      this.loadExternalSubscriptionSlots().catch((error) => console.error('External selector metadata load failed:', error));
+
+      // Render the page immediately; connection rows hydrate independently of counters.
+      this.getDBInbounds().catch((error) => console.error('Initial inbound load failed:', error));
 
       // Setup WebSocket for real-time updates
       if (window.wsClient) {

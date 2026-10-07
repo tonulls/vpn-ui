@@ -27,7 +27,7 @@
   <div v-if="membershipInfoModal.record" class="mi-wrap">
 
     <div class="mi-head">
-      <span class="ai-chip">[[ ProtocolLabels[record.protocol] || record.protocol ]]</span>
+      <span class="ai-chip" v-if="record.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">[[ record.protocolName || ProtocolLabels[record.protocol] || record.protocol ]]</span>
       <span class="ai-chip" :class="enabled ? 'ok' : 'err'">
         [[ enabled ? '{{ i18n "enable" }}' : '{{ i18n "disabled" }}' ]]
       </span>
@@ -106,7 +106,7 @@
         <span class="k">{{ i18n "pages.inbounds.protocol" }}</span>
         <span class="v">[[ ProtocolLabels[record.protocol] || record.protocol ]]</span>
       </div>
-      <div class="ai-kv">
+      <div class="ai-kv" v-if="record.protocol !== Protocols.EXTERNAL_SUBSCRIPTION">
         <span class="k">{{ i18n "pages.xray.outbound.address" }}</span>
         <span class="v mono">[[ record.address ]]:[[ record.port ]]</span>
       </div>

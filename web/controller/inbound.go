@@ -72,6 +72,9 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.GET("/getClientTrafficsById/:id", read, a.getClientTrafficsById)
 
 	g.POST("/add", requirePerm(model.PermCreateInbound), a.addInbound)
+	g.GET("/externalSubscriptionSlots", read, a.externalSubscriptionSlotOptions)
+	g.POST("/externalSubscription", requirePerm(model.PermCreateInbound), a.createExternalSubscriptionInbound)
+	g.POST("/externalSubscription/:id", requirePerm(model.PermEditInbound), owns, a.updateExternalSubscriptionInbound)
 	// Display order only. Gated on editInbound rather than on the read bit because
 	// the order is the PANEL's, not the viewer's: one admin's drag moves the row in
 	// every other admin's list too, which is not something a read-only account (or a
@@ -762,10 +765,10 @@ func (a *InboundController) delInbound(c *gin.Context) {
 		return
 	}
 	// The inbound is gone, so reconcile every surviving membership mirror too; this
-	// also repairs stale rows left by older delete sequences. Attempt settlement even
-	// if mirroring fails: DropInbound checks live settings, so the ledger must not be
-	// stranded after the data-plane delete.
-	syncErr := a.syncInboundAccountsAll(-1)
+	// also repairs stale rows left by older delete sequences. Reconcile only this
+	// deleted inbound: a panel-wide sweep makes one delete scale with every inbound.
+	// Attempt settlement even if mirroring fails so the ledger is not stranded.
+	syncErr := a.syncInboundAccounts(id)
 	var postErr error
 	if rerr := resellerService.DropInbound(id, resellerOwned, resellerUsage); rerr != nil {
 		postErr = fmt.Errorf("inbound was deleted but reseller settlement failed: %w", rerr)
@@ -3135,7 +3138,13 @@ func (a *InboundController) reconcileForInbounds(inboundIds []int, needRestart b
 		if err != nil || inbound == nil {
 			continue
 		}
+		if inbound.Protocol == model.ExternalSubscription {
+			continue
+		}
 		protocols[inbound.Protocol] = true
+	}
+	if len(protocols) == 0 {
+		return
 	}
 
 	// Each VPN hook regenerates its own daemon config and requests the Xray

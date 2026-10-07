@@ -739,6 +739,15 @@
       },
       getInboundClients(dbInbound) {
         if (!dbInbound) return null;
+        if (dbInbound.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+          try {
+            const settings = typeof dbInbound.settings === 'string'
+              ? JSON.parse(dbInbound.settings || '{}') : (dbInbound.settings || {});
+            return Array.isArray(settings.clients) ? settings.clients : [];
+          } catch (_) {
+            return [];
+          }
+        }
         const inbound = dbInbound.toInbound();
         return inbound && inbound.clients ? inbound.clients : null;
       },

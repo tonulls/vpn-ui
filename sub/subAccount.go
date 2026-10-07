@@ -66,6 +66,10 @@ type subScope struct {
 
 	// names is every node name already handed out in this response. See uniqueName.
 	names map[string]bool
+
+	// externalURIs groups credential identities already emitted for equivalent
+	// External Selector source/filter slots. The map is request-scoped with names.
+	externalURIs map[string]map[string]struct{}
 }
 
 // identityTraffic is a cached answer, including the negative one.
@@ -85,6 +89,7 @@ func newSubScope() *subScope {
 		traffics:         map[string]identityTraffic{},
 		membershipQuotas: map[string]membershipQuotaState{},
 		names:            map[string]bool{},
+		externalURIs:     map[string]map[string]struct{}{},
 	}
 	scope.migrated = scope.accountService.AccountsMigrated()
 	return scope

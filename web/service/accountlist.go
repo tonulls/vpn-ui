@@ -25,12 +25,13 @@ import (
 // AccountMembershipView is one inbound an account is served on, named the way an
 // operator recognises it rather than by id alone.
 type AccountMembershipView struct {
-	InboundId int    `json:"inboundId"`
-	Protocol  string `json:"protocol"`
-	Remark    string `json:"remark"`
-	Port      int    `json:"port"`
-	Enable    bool   `json:"enable"`
-	Slot      *int   `json:"slot"`
+	InboundId    int    `json:"inboundId"`
+	Protocol     string `json:"protocol"`
+	ProtocolName string `json:"protocolName,omitempty"`
+	Remark       string `json:"remark"`
+	Port         int    `json:"port"`
+	Enable       bool   `json:"enable"`
+	Slot         *int   `json:"slot"`
 	// Method is the shadowsocks cipher, and empty for every other protocol. It is
 	// reported because a 2022-blake3 cipher refuses a user password that is not
 	// base64 of its exact key length, so a form offering ONE password for an
@@ -419,11 +420,12 @@ func (s *AccountService) membershipViews() (map[int][]AccountMembershipView, err
 
 	var inbounds []model.Inbound
 	if err := db.Model(&model.Inbound{}).
-		Select("id", "protocol", "remark", "port", "enable").Find(&inbounds).Error; err != nil {
+		Select("id", "protocol", "remark", "port", "enable", "settings").Find(&inbounds).Error; err != nil {
 		return nil, err
 	}
 	byId := make(map[int]*model.Inbound, len(inbounds))
 	for i := range inbounds {
+		(&DynamicSubscriptionService{}).SetInboundProtocolName(&inbounds[i])
 		byId[inbounds[i].Id] = &inbounds[i]
 	}
 
@@ -475,7 +477,7 @@ func (s *AccountService) membershipViews() (map[int][]AccountMembershipView, err
 			continue
 		}
 		view := AccountMembershipView{
-			InboundId: inbound.Id, Protocol: string(inbound.Protocol),
+			InboundId: inbound.Id, Protocol: string(inbound.Protocol), ProtocolName: inbound.ProtocolName,
 			Remark: inbound.Remark, Port: inbound.Port, Enable: inbound.Enable,
 			Slot: m.Slot,
 		}
@@ -612,6 +614,7 @@ func (s *AccountService) AssignableInboundsFor(user *model.User) ([]AccountMembe
 		if !allowed(in.Id) {
 			continue
 		}
+		(&DynamicSubscriptionService{}).SetInboundProtocolName(in)
 		// An inbound with no client list has nothing to be a member OF, and
 		// offering it only produces a save the server refuses. Same rule the
 		// client form's own checklist applies (modals/client_modal.html).
@@ -619,7 +622,7 @@ func (s *AccountService) AssignableInboundsFor(user *model.User) ([]AccountMembe
 			continue
 		}
 		out = append(out, AccountMembershipView{
-			InboundId: in.Id, Protocol: string(in.Protocol),
+			InboundId: in.Id, Protocol: string(in.Protocol), ProtocolName: in.ProtocolName,
 			Remark: in.Remark, Port: in.Port, Enable: in.Enable,
 			Method: inboundMethod(in.Settings),
 		})

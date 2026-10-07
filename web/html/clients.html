@@ -316,14 +316,17 @@
                           [[ m.remark || ('#' + m.inboundId) ]]
                           <span v-if="!m.enable"> &middot; {{ i18n "disabled" }}</span>
                         </template>
-                        <a-tag class="bo-proto" :class="'bo-proto--' + protocolFamily(m.protocol)">
-                          [[ ProtocolLabels[m.protocol] || m.protocol ]]<span class="bo-lg-port">:[[ m.port ]]</span>
+                        <a-tag v-if="m.protocol === Protocols.EXTERNAL_SUBSCRIPTION" class="bo-proto bo-proto--vpn">
+                          [[ m.remark || ('#' + m.inboundId) ]]
+                        </a-tag>
+                        <a-tag v-else class="bo-proto" :class="'bo-proto--' + protocolFamily(m.protocol)">
+                          [[ m.protocolName || ProtocolLabels[m.protocol] || m.protocol ]]<span class="bo-lg-port">:[[ m.port ]]</span>
                         </a-tag>
                       </a-tooltip>
                       <a-tooltip v-if="hiddenMemberships(row).length">
                         <template slot="title">
                           <div v-for="m in hiddenMemberships(row)" :key="m.inboundId">
-                            [[ m.remark || ('#' + m.inboundId) ]] ([[ m.protocol ]]:[[ m.port ]])
+                            [[ m.remark || ('#' + m.inboundId) ]]<template v-if="m.protocol !== Protocols.EXTERNAL_SUBSCRIPTION"> ([[ m.protocolName || ProtocolLabels[m.protocol] || m.protocol ]]:[[ m.port ]])</template>
                           </div>
                         </template>
                         <a-tag class="bo-proto">+[[ hiddenMemberships(row).length ]]</a-tag>
@@ -456,12 +459,12 @@
                               <span class="bo-mb-lamp"
                                 :class="membershipLampClass(record, client.email)"></span>
                             </a-tooltip>
-                            <a-tag :style="{ margin: '0' }" class="bo-proto"
+                            <a-tag v-if="record.protocol !== Protocols.EXTERNAL_SUBSCRIPTION" :style="{ margin: '0' }" class="bo-proto"
                               :class="'bo-proto--' + protocolFamily(record.protocol)">
-                              [[ ProtocolLabels[record.protocol] || record.protocol ]]
+                              [[ record.protocolName || ProtocolLabels[record.protocol] || record.protocol ]]
                             </a-tag>
                             <span class="bo-mb-name">[[ record.remark || ('#' + record.id) ]]</span>
-                            <span class="bo-mb-port">:[[ record.port ]]</span>
+                            <span v-if="record.protocol !== Protocols.EXTERNAL_SUBSCRIPTION" class="bo-mb-port">:[[ record.port ]]</span>
                           </div>
 
                           <!-- What the operator hands the customer FOR THIS INBOUND,
@@ -921,9 +924,11 @@
       // both halves: the inbounds every action reads through, and the account rows
       // the table lists.
       async getDBInbounds() {
-        const msg = await HttpUtil.get('/panel/api/inbounds/list');
+        const [msg] = await Promise.all([
+          HttpUtil.get('/panel/api/inbounds/list'),
+          this.loadClients(),
+        ]);
         if (msg.success) this.setInbounds(msg.obj || []);
-        await this.loadClients();
       },
       // Not called getLastOnline: that name is the mixin's per-email LOOKUP, and
       // shadowing it made every rendered row fire two requests and then format a
@@ -956,7 +961,18 @@
         this.dbInbounds.splice(0);
         for (const row of rows) {
           const dbInbound = new DBInbound(row);
-          this.inbounds.push(dbInbound.toInbound());
+          if (row.protocol === Protocols.EXTERNAL_SUBSCRIPTION) {
+            let settings = {};
+            try { settings = JSON.parse(row.settings || '{}'); } catch (_) {}
+            this.inbounds.push({
+              id: row.id,
+              protocol: row.protocol,
+              settings,
+              clients: Array.isArray(settings.clients) ? settings.clients : [],
+            });
+          } else {
+            this.inbounds.push(dbInbound.toInbound());
+          }
           this.dbInbounds.push(dbInbound);
         }
       },
@@ -980,12 +996,14 @@
       },
 
       async loadClients() {
-        const statsMsg = await HttpUtil.get('/panel/api/server/userStats');
-        if (statsMsg && statsMsg.success && statsMsg.obj) this.clientStats = statsMsg.obj;
         const q = `?page=${this.pagination.current}&size=${this.pagination.pageSize}`
           + `&search=${encodeURIComponent(this.search || '')}`
           + `&sort=${encodeURIComponent(this.sortKey)}`;
-        const msg = await HttpUtil.get('/panel/api/clients/list' + q);
+        const [statsMsg, msg] = await Promise.all([
+          HttpUtil.get('/panel/api/server/userStats'),
+          HttpUtil.get('/panel/api/clients/list' + q),
+        ]);
+        if (statsMsg && statsMsg.success && statsMsg.obj) this.clientStats = statsMsg.obj;
         if (!msg || !msg.success) return;
         this.clients = (msg.obj && msg.obj.rows) || [];
         this.pagination.total = (msg.obj && msg.obj.total) || 0;
@@ -1455,8 +1473,8 @@
     async mounted() {
       this._boundViewportResize = this.onViewportResize.bind(this);
       window.addEventListener('resize', this._boundViewportResize, { passive: true });
-      await this.getDefaultSettings();
-      await this.reload(true);
+      // Show the page immediately and populate stats/rows without the full-page spinner.
+      await Promise.all([this.getDefaultSettings(), this.reload(false)]);
       if (this.isRefreshEnabled) this.startDataRefreshLoop();
     },
     beforeDestroy() {

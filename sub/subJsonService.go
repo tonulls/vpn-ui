@@ -125,7 +125,14 @@ func (s *SubJsonService) GetJson(subId string, host string) (string, string, err
 		}
 
 		for _, client := range clients {
-			if client.Enable && client.SubID == subId {
+			if client.SubID == subId {
+				if inbound.Protocol == model.ExternalSubscription {
+					if !s.SubService.subscriptionMemberVisible(inbound, client.Email, client.Enable) {
+						continue
+					}
+				} else if !client.Enable {
+					continue
+				}
 				ct, accountBacked, _ := s.SubService.resolveTraffic(inbound, client.Email)
 				usage.add(client.Email, ct, accountBacked)
 				newConfigs := s.getConfig(inbound, client, host)
@@ -156,6 +163,41 @@ func (s *SubJsonService) GetJson(subId string, host string) (string, string, err
 }
 
 func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, host string) []json_util.RawMessage {
+	if inbound.Protocol == model.ExternalSubscription {
+		uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
+		if !ok {
+			return nil
+		}
+		uris = s.SubService.uniqueExternalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound), uris)
+		configs := make([]json_util.RawMessage, 0, len(uris))
+		for index, uri := range uris {
+			candidate, err := service.ParseExternalVLESSURI(uri)
+			if err != nil {
+				continue
+			}
+			name := candidate.Name
+			if len(uris) > 1 {
+				name = fmt.Sprintf("%s (%d)", name, index+1)
+			}
+			tag := s.SubService.genRemark(inbound, client.Email, name)
+			outbound, err := service.ExternalVLESSOutboundJSON(candidate, "", tag)
+			if err != nil {
+				continue
+			}
+			outbounds := []json_util.RawMessage{json_util.RawMessage(outbound)}
+			outbounds = append(outbounds, s.defaultOutbounds...)
+			config := make(map[string]any)
+			maps.Copy(config, s.configJson)
+			config["outbounds"] = outbounds
+			config["remarks"] = name
+			encoded, err := json.MarshalIndent(config, "", "  ")
+			if err != nil {
+				continue
+			}
+			configs = append(configs, json_util.RawMessage(encoded))
+		}
+		return configs
+	}
 	// The Xray-JSON sub can only carry protocols Xray-core has an outbound for. The new
 	// protocols (mtproto/ssh/wg-c/awg/gre + the credential VPNs) have no such outbound, so
 	// they are delivered via the raw and Clash subs and skipped here rather than emitting

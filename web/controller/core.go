@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
@@ -12,7 +13,8 @@ import (
 // CoreController exposes status and control for the backend "cores"
 // (Xray, L2TP/IPsec, PPTP, OpenVPN, RADIUS) shown in the Core Settings panel.
 type CoreController struct {
-	coreService service.CoreService
+	coreService                service.CoreService
+	dynamicSubscriptionService service.DynamicSubscriptionService
 }
 
 // NewCoreController creates a new CoreController and initializes its routes.
@@ -27,6 +29,7 @@ func (a *CoreController) initRouter(g *gin.RouterGroup) {
 	g = g.Group("/core")
 	g.Use(requirePerm(model.PermCoreSettings))
 	g.GET("/status", a.status)
+	g.POST("/reorder", a.reorderCores)
 	g.GET("/catalog", a.catalog)
 	g.POST("/provision", a.provision)
 	g.GET("/provision-status", a.provisionStatus)
@@ -36,6 +39,10 @@ func (a *CoreController) initRouter(g *gin.RouterGroup) {
 	g.GET("/uninstall-status", a.uninstallStatus)
 	// Reboots the HOST: escalation-class.
 	g.POST("/reboot", requireSuperAdmin(), a.reboot)
+	// The external selector is global and changes the keys issued to every
+	// subscriber, so delegated Core Settings access cannot stop or restart it.
+	g.POST("/restart/external-selector", requireSuperAdmin(), a.restart)
+	g.POST("/stop/external-selector", requireSuperAdmin(), a.stop)
 	g.POST("/restart/:core", a.restart)
 	g.POST("/restart-all", a.restartAll)
 	g.POST("/stop/:core", a.stop)
@@ -48,14 +55,29 @@ func (a *CoreController) initRouter(g *gin.RouterGroup) {
 	// Core Settings bit, since the same operator can already read the same text
 	// through the logs endpoint.
 	g.POST("/config/:core", requireSuperAdmin(), a.saveCoreConfig)
+	// Reading the selector state stays available to Core Settings delegates. Any
+	// mutation is global (it can change subscription output), so writes are
+	// super-admin-only even when the caller has the Core Settings permission.
+	externalSubscriptions := g.Group("/external-subscriptions")
+	externalSubscriptions.GET("/list", a.externalSubscriptionList)
+	externalSubscriptionWrites := externalSubscriptions.Group("")
+	externalSubscriptionWrites.Use(requireSuperAdmin())
+	externalSubscriptionWrites.POST("/settings", a.updateExternalSubscriptionSettings)
+	externalSubscriptionWrites.POST("/slots", a.createExternalSubscriptionSlot)
+	externalSubscriptionWrites.POST("/reorder-slots", a.reorderExternalSubscriptionSlots)
+	externalSubscriptionWrites.POST("/slots/:id", a.updateExternalSubscriptionSlot)
+	externalSubscriptionWrites.POST("/slots/:id/delete", a.deleteExternalSubscriptionSlot)
+	externalSubscriptionWrites.POST("/slots/:id/refresh", a.refreshExternalSubscriptionSlot)
+	externalSubscriptionWrites.POST("/slots/:id/next", a.nextExternalSubscriptionSlotCandidate)
 }
 
 // status returns the status of all cores plus the host/kernel system status and
 // whether the VPN backend has been provisioned (setup completed).
 func (a *CoreController) status(c *gin.Context) {
 	prov := a.coreService.ProvisionState()
+	cores := a.coreService.ApplyCoreDisplayOrder(a.coreService.GetCoresStatus())
 	jsonObj(c, gin.H{
-		"cores":            a.coreService.GetCoresStatus(),
+		"cores":            cores,
 		"system":           a.coreService.GetSystemStatus(),
 		"provisioned":      a.coreService.IsProvisioned(),
 		"missingProtocols": a.coreService.MissingProtocols(),
@@ -67,6 +89,22 @@ func (a *CoreController) status(c *gin.Context) {
 
 // catalog lists every core with its install state, for the setup / add-core /
 // uninstall-core dialogs.
+func (a *CoreController) reorderCores(c *gin.Context) {
+	var body struct {
+		Data string `form:"data" json:"data"`
+	}
+	if err := c.ShouldBind(&body); err != nil {
+		jsonObj(c, nil, err)
+		return
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(body.Data), &names); err != nil {
+		jsonObj(c, nil, err)
+		return
+	}
+	jsonMsg(c, "Порядок модулей сохранён", a.coreService.ReorderCores(names))
+}
+
 func (a *CoreController) catalog(c *gin.Context) {
 	jsonObj(c, gin.H{
 		"cores":       a.coreService.CoreCatalog(),

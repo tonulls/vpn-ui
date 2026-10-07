@@ -4,6 +4,8 @@ import (
 	"sort"
 
 	"github.com/mhsanaei/3x-ui/v2/backend"
+	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/database/model"
 )
 
 // The core catalog: what each installable VPN core actually needs from the host.
@@ -77,10 +79,12 @@ type coreSpec struct {
 	paths []string
 	globs []string
 
-	// builtin marks a core with no host prerequisites at all: it runs inside
-	// the panel process. Those are always available and never offered for
-	// install or removal.
+	// builtin marks a core that is always available and never offered for
+	// installation or removal.
 	builtin bool
+	// panelOnly marks a selectable feature that is activated in panel state but
+	// owns no host packages, daemons, kernel modules, or files.
+	panelOnly bool
 
 	// usesRadius marks a core that authenticates against the in-binary RADIUS
 	// server. RADIUS ships inside the panel and has no install step of its own,
@@ -213,6 +217,13 @@ var coreCatalog = []coreSpec{
 		globs: []string{"/etc/vpn-ui-mtproto/server-*"},
 	},
 	{
+		name:      "external-selector",
+		title:     "External Selector",
+		backend:   "Built-in (vpn-ui)",
+		desc:      "Selects a healthy VLESS node from configured subscriptions; no host daemon or packages",
+		panelOnly: true,
+	},
+	{
 		name: "ssh", title: "SSH", backend: "Built-in (vpn-ui)",
 		desc: "SSH tunnel gateway, served by the panel itself", builtin: true,
 	},
@@ -241,9 +252,9 @@ func coreSpecFor(name string) *coreSpec {
 	return nil
 }
 
-// installableCores are the cores an operator can choose to install: everything
-// in the catalog that actually needs something from the host. Built-in cores are
-// excluded because there is nothing to install or remove.
+// installableCores are the modules an operator can activate from the picker.
+// Host-backed cores and panel-only features are included; always-on built-ins are
+// excluded because there is nothing to activate or remove.
 func installableCores() []string {
 	var out []string
 	for _, c := range coreCatalog {
@@ -400,6 +411,8 @@ type CoreOption struct {
 	// Builtin cores are listed for completeness but cannot be installed or
 	// removed; the dialog renders them as always-on.
 	Builtin bool `json:"builtin"`
+	// PanelOnly is selectable in setup but has no host artifacts to install.
+	PanelOnly bool `json:"panelOnly,omitempty"`
 }
 
 // coreShouldProbeConflicts decides whether to run the pre-flight host probe for
@@ -442,11 +455,11 @@ func (s *CoreService) CoreCatalog() []CoreOption {
 			Inbounds:  counts[c.name],
 			Shares:    sharersOf(c.name),
 			Builtin:   c.builtin,
+			PanelOnly: c.panelOnly,
 		}
-		// Probed for a core the operator can still choose to install: once it really
-		// is installed the artifacts are ours and the manifest is the record that
-		// matters. "Really" is the load-bearing word; see coreShouldProbeConflicts.
-		if coreShouldProbeConflicts(c.builtin, installed[c.name], recorded) {
+		// Probed for a host-backed core the operator can choose to install. A
+		// panel-only feature has no host artifacts it could conflict with.
+		if !c.panelOnly && coreShouldProbeConflicts(c.builtin, installed[c.name], recorded) {
 			opt.Conflicts = coreConflictProbe(c.name)
 		}
 		out = append(out, opt)
@@ -486,6 +499,13 @@ func (s *CoreService) inboundCountsByCore() map[string]int {
 	add("mtproto", len(mt), err)
 	ssh, err := s.sshService.GetSshInbounds()
 	add("ssh", len(ssh), err)
+	var externalInbounds int64
+	if db := database.GetDB(); db != nil {
+		if err := db.Model(&model.Inbound{}).
+			Where("protocol = ?", string(model.ExternalSubscription)).Count(&externalInbounds).Error; err == nil {
+			counts["external-selector"] = int(externalInbounds)
+		}
+	}
 	return counts
 }
 
@@ -515,6 +535,8 @@ func protocolCoreName(protocol string) string {
 	switch protocol {
 	case "wg-c":
 		return "wgc"
+	case "external_subscription":
+		return "external-selector"
 	}
 	if c := coreSpecFor(protocol); c != nil && !c.builtin {
 		return c.name
@@ -530,6 +552,19 @@ func validCoreNames(names []string) []string {
 	var out []string
 	for _, c := range specsFor(names) {
 		out = append(out, c.name)
+	}
+	return out
+}
+
+// hostCoreNames filters panel-only features out of operations that can alter the
+// host. They remain in the recorded selection, but never drive package or daemon
+// installation/removal.
+func hostCoreNames(names []string) []string {
+	var out []string
+	for _, name := range validCoreNames(names) {
+		if c := coreSpecFor(name); c != nil && !c.panelOnly {
+			out = append(out, name)
+		}
 	}
 	return out
 }

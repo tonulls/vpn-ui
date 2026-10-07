@@ -23,6 +23,7 @@ const Protocols = {
     GRE: 'gre',
     MTPROTO: 'mtproto',
     SSH: 'ssh',
+    EXTERNAL_SUBSCRIPTION: 'external_subscription',
 };
 
 // The panel-wide client identity: the value that goes in the URL of
@@ -114,6 +115,7 @@ const ProtocolLabels = {
     gre: 'GRE',
     mtproto: 'MTProto Proxy',
     ssh: 'SSH',
+    external_subscription: 'Внешнее подключение',
 };
 
 const SSMethods = {

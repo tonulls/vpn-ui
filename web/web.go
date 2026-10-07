@@ -473,6 +473,20 @@ func (s *Server) startTask() {
 		s.radiusService.CleanStaleSessions()
 	})
 
+	// External subscription slots persist their own independent source/probe deadlines;
+	// this inexpensive poll only performs network work once a slot is due. Bind the job
+	// to the server context so a restart cannot leave a probe running in the old server.
+	dynamicSubscriptionJob := job.NewDynamicSubscriptionJob()
+	dynamicSubscriptionJob.SetContext(s.ctx)
+	s.cron.AddJob("@every 10s", dynamicSubscriptionJob)
+	go func() {
+		select {
+		case <-time.After(5 * time.Second):
+			dynamicSubscriptionJob.Run()
+		case <-s.ctx.Done():
+		}
+	}()
+
 	// check client ips from log file every 10 sec
 	s.cron.AddJob("@every 10s", job.NewCheckClientIpJob())
 

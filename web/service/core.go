@@ -335,6 +335,7 @@ func (s *CoreService) GetCoresStatus() []CoreStatus {
 		s.mtprotoStatus(),
 		s.sshStatus(),
 		s.radiusStatus(),
+		s.externalSelectorStatus(),
 	}
 
 	// A core the operator never installed reads as "not installed", whatever the
@@ -354,6 +355,29 @@ func (s *CoreService) GetCoresStatus() []CoreStatus {
 		}
 	}
 	return all
+}
+
+func (s *CoreService) externalSelectorStatus() CoreStatus {
+	status := CoreStatus{Name: "external-selector"}
+	if s.provisionedProtocolSet()["external-selector"] {
+		settings, err := (&DynamicSubscriptionService{}).Settings()
+		status.Version = "Built-in"
+		if err != nil {
+			status.State = CoreError
+			status.Detail = "cannot read module settings"
+		} else if settings.Enabled {
+			status.State = CoreRunning
+		} else {
+			status.State = CoreStopped
+		}
+	}
+	var inbounds int64
+	if db := database.GetDB(); db != nil {
+		_ = db.Model(&model.Inbound{}).
+			Where("protocol = ?", string(model.ExternalSubscription)).Count(&inbounds).Error
+	}
+	status.Inbounds = int(inbounds)
+	return status
 }
 
 // coreInstalled answers "has this host been set up for this core" for each of the
@@ -944,6 +968,8 @@ func (s *CoreService) RestartCore(name string) error {
 		return s.greService.RestartServices()
 	case "mtproto":
 		return s.mtprotoService.RestartServices()
+	case "external-selector":
+		return (&DynamicSubscriptionService{}).RestartModule()
 	case "ssh":
 		return s.sshService.RestartServices()
 	case "radius":
@@ -1001,6 +1027,8 @@ func (s *CoreService) StopCore(name string) error {
 		return s.greService.StopServices()
 	case "mtproto":
 		return s.mtprotoService.StopServices()
+	case "external-selector":
+		return (&DynamicSubscriptionService{}).StopModule()
 	case "ssh":
 		return s.sshService.StopServices()
 	case "radius":
@@ -1062,6 +1090,12 @@ func (s *CoreService) CoreLogs(name string) string {
 		return fmt.Sprintf("GRE runs in-kernel via netlink (no daemon log).\nTunnel(s) up: %s\nFOU (UDP encap) available: %s", up, fou)
 	case "mtproto":
 		return procMgr.LogsByPrefix("mtproto-server-")
+	case "external-selector":
+		logs, err := (&DynamicSubscriptionService{}).ModuleLogSummary()
+		if err != nil {
+			return "Не удалось прочитать состояние External Selector."
+		}
+		return logs
 	case "ssh":
 		running := "no"
 		if s.sshService.AnyRunning() {
@@ -1137,7 +1171,12 @@ func (s *CoreService) runProvisionSteps(emit func(ProvisionStep), cores []string
 	if len(selected) == 0 {
 		selected = installableCores()
 	}
-	target := dedupe(append(append([]string{}, s.installedCoreNames()...), selected...))
+	selected = hostCoreNames(selected)
+	if len(selected) == 0 {
+		emit(ProvisionStep{Name: "activate External Selector", OK: true, Msg: "panel-managed; no host packages or daemons"})
+		return nil, ""
+	}
+	target := dedupe(append(append([]string{}, hostCoreNames(s.installedCoreNames())...), selected...))
 
 	requiredModules := requiredModulesFor(target)
 	optionalModules := optionalModulesFor(target)
@@ -1469,6 +1508,7 @@ func (s *CoreService) StartProvision(cores []string) bool {
 	if len(selected) == 0 {
 		selected = installableCores()
 	}
+	hostSelected := hostCoreNames(selected)
 	// Captured BEFORE the run: runProvisionSteps provisions for the union of this
 	// and the selection, and the same union is what gets persisted below.
 	already := s.installedCoreNames()
@@ -1499,8 +1539,9 @@ func (s *CoreService) StartProvision(cores []string) bool {
 		// exist (a no-op when there are none, e.g. provision-then-add-inbound), and
 		// a forced xray restart binds the per-inbound dokodemo ports. When a reboot
 		// IS required (kernel modules only load into the freshly booted kernel) this
-		// is skipped: the post-reboot panel start runs the same Init* path.
-		if len(mods) == 0 {
+		// is skipped: the post-reboot panel start runs the same Init* path. A
+		// panel-only feature such as External Selector must not restart host cores.
+		if len(mods) == 0 && len(hostSelected) > 0 {
 			cs.l2tpService.InitL2tp()
 			cs.pptpService.InitPptp()
 			cs.openvpnService.InitOpenVpn()

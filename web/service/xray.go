@@ -244,7 +244,8 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	}
 
 	for _, inbound := range inbounds {
-		if !inbound.Enable {
+		if !inbound.Enable || inbound.Protocol == model.ExternalSubscription {
+			// External subscriptions are virtual account memberships, never listeners.
 			continue
 		}
 		// Skip L2TP/PPTP/OpenVPN/OpenConnect/SSTP/IKEv2/WireGuard/MTProto inbounds, they

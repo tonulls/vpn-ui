@@ -2,6 +2,8 @@ package sub
 
 import (
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -66,7 +68,14 @@ func (s *SubClashService) GetClash(subId string, host string) (string, string, e
 			}
 		}
 		for _, client := range clients {
-			if client.Enable && client.SubID == subId {
+			if client.SubID == subId {
+				if inbound.Protocol == model.ExternalSubscription {
+					if !s.SubService.subscriptionMemberVisible(inbound, client.Email, client.Enable) {
+						continue
+					}
+				} else if !client.Enable {
+					continue
+				}
 				ct, accountBacked, _ := s.SubService.resolveTraffic(inbound, client.Email)
 				usage.add(client.Email, ct, accountBacked)
 				proxies = append(proxies, s.getProxies(inbound, client, host)...)
@@ -109,7 +118,163 @@ func (s *SubClashService) GetClash(subId string, host string) (string, string, e
 	return string(finalYAML), header, nil
 }
 
+func splitExternalClashValues(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			values = append(values, part)
+		}
+	}
+	return values
+}
+
+func (s *SubClashService) externalVLESSProxies(inbound *model.Inbound, client model.Client) []map[string]any {
+	uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
+	if !ok {
+		return nil
+	}
+	uris = s.SubService.uniqueExternalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound), uris)
+	proxies := make([]map[string]any, 0, len(uris))
+	usedNames := make(map[string]struct{}, len(uris))
+	for _, uri := range uris {
+		proxy := s.externalVLESSProxy(inbound, client, uri)
+		if proxy == nil {
+			continue
+		}
+		baseName, _ := proxy["name"].(string)
+		uniqueName := baseName
+		for suffix := 2; ; suffix++ {
+			if _, used := usedNames[uniqueName]; !used {
+				break
+			}
+			uniqueName = fmt.Sprintf("%s (%d)", baseName, suffix)
+		}
+		proxy["name"] = uniqueName
+		usedNames[uniqueName] = struct{}{}
+		proxies = append(proxies, proxy)
+	}
+	return proxies
+}
+
+func (s *SubClashService) externalVLESSProxy(inbound *model.Inbound, client model.Client, uri string) map[string]any {
+	candidate, err := service.ParseExternalVLESSURI(uri)
+	if err != nil {
+		return nil
+	}
+	u, err := url.Parse(candidate.URI)
+	if err != nil {
+		return nil
+	}
+	query := u.Query()
+	encryption := query.Get("encryption")
+	if encryption != "" && encryption != "none" {
+		return nil
+	}
+	network := strings.ToLower(strings.TrimSpace(query.Get("type")))
+	if network == "" || network == "raw" {
+		network = "tcp"
+	}
+	if network != "tcp" && network != "ws" && network != "grpc" {
+		// These transports have no supported Clash representation in this renderer.
+		return nil
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil
+	}
+	proxy := map[string]any{
+		"name":    s.SubService.genRemark(inbound, client.Email, candidate.Name),
+		"type":    "vless",
+		"server":  u.Hostname(),
+		"port":    port,
+		"uuid":    u.User.Username(),
+		"udp":     true,
+		"network": network,
+	}
+	if flow := query.Get("flow"); flow != "" {
+		proxy["flow"] = flow
+	}
+	switch network {
+	case "ws":
+		ws := map[string]any{}
+		if path := query.Get("path"); path != "" {
+			ws["path"] = path
+		}
+		if host := query.Get("host"); host != "" {
+			ws["headers"] = map[string]any{"Host": host}
+		}
+		if len(ws) > 0 {
+			proxy["ws-opts"] = ws
+		}
+	case "grpc":
+		grpc := map[string]any{}
+		if name := query.Get("serviceName"); name != "" {
+			grpc["grpc-service-name"] = name
+		}
+		if len(grpc) > 0 {
+			proxy["grpc-opts"] = grpc
+		}
+	case "tcp":
+		headerType := strings.ToLower(strings.TrimSpace(query.Get("headerType")))
+		if headerType == "http" {
+			httpOpts := map[string]any{"method": "GET"}
+			if paths := splitExternalClashValues(query.Get("path")); len(paths) > 0 {
+				httpOpts["path"] = paths
+			}
+			if hosts := splitExternalClashValues(query.Get("host")); len(hosts) > 0 {
+				httpOpts["headers"] = map[string]any{"Host": hosts}
+			}
+			proxy["http-opts"] = httpOpts
+		} else if headerType != "" && headerType != "none" {
+			return nil
+		}
+	}
+	security := strings.ToLower(strings.TrimSpace(query.Get("security")))
+	if security == "" || security == "none" {
+		proxy["tls"] = false
+	} else if security == "tls" {
+		proxy["tls"] = true
+		serverName := query.Get("sni")
+		if serverName == "" {
+			serverName = u.Hostname()
+		}
+		if serverName != "" {
+			proxy["servername"] = serverName
+		}
+		if fp := query.Get("fp"); fp != "" {
+			proxy["client-fingerprint"] = fp
+		}
+		if alpn := splitExternalClashValues(query.Get("alpn")); len(alpn) > 0 {
+			proxy["alpn"] = alpn
+		}
+		if insecure := query.Get("insecure"); insecure == "1" || strings.EqualFold(insecure, "true") {
+			proxy["skip-cert-verify"] = true
+		}
+	} else if security == "reality" {
+		proxy["tls"] = true
+		proxy["servername"] = query.Get("sni")
+		reality := map[string]any{"public-key": query.Get("pbk")}
+		if shortID := query.Get("sid"); shortID != "" {
+			reality["short-id"] = shortID
+		}
+		proxy["reality-opts"] = reality
+		if fp := query.Get("fp"); fp != "" {
+			proxy["client-fingerprint"] = fp
+		}
+	} else {
+		return nil
+	}
+	return proxy
+}
+
 func (s *SubClashService) getProxies(inbound *model.Inbound, client model.Client, host string) []map[string]any {
+	if inbound.Protocol == model.ExternalSubscription {
+		return s.externalVLESSProxies(inbound, client)
+	}
 	// wg-c/awg carry key material and emit one proxy per device x endpoint, not the
 	// stream/externalProxy shape the rest of the protocols use.
 	switch inbound.Protocol {

@@ -1,0 +1,546 @@
+{{ template "page/head_start" .}}
+<style>
+  .external-subscriptions-page .ext-note { opacity: .72; line-height: 1.55; }
+  .external-subscriptions-page .ext-url { word-break: break-all; font-size: 12px; opacity: .72; }
+  .external-subscriptions-page .ext-flag-lines { display: flex; flex-direction: column; gap: 2px; }
+  .external-subscriptions-page .ext-flag-row { display: grid; grid-template-columns: repeat(3, max-content); column-gap: 8px; }
+  .external-subscriptions-page .ext-key-summary { text-align: center; }
+  .external-subscriptions-page .ext-key-summary .ext-flag-row { justify-content: center; }
+  .external-subscriptions-page .ext-form-help { font-size: 12px; opacity: .65; margin-top: 4px; }
+  .external-subscriptions-page .ext-help-icon { margin-left: 6px; opacity: .6; cursor: help; }
+  .external-subscriptions-page .ext-top-card > .ant-card-head { min-height: 56px; padding: 0 12px; }
+  .external-subscriptions-page .ext-top-card .ant-card-head-wrapper { min-height: 56px; align-items: center; }
+  .external-subscriptions-page .ext-top-card .ant-card-head-title,
+  .external-subscriptions-page .ext-top-card .ant-card-extra { padding: 0; }
+  .external-subscriptions-page .ext-top-card > .ant-card-body { padding: 6px 12px 12px; }
+  .external-subscriptions-page .ext-main-header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .external-subscriptions-page .ext-main-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .external-subscriptions-page .ext-main-actions { display: grid; grid-template-columns: repeat(2, 136px); gap: 6px; }
+  .external-subscriptions-page .ext-main-actions .ant-btn,
+  .external-subscriptions-page .ext-probe-save .ant-btn { width: 136px; height: 32px; padding: 0 8px; }
+  .external-subscriptions-page .ext-slot-actions { display: grid; grid-template-columns: max-content max-content; gap: 6px; justify-content: end; }
+  .external-subscriptions-page .ext-slot-name { display: flex; align-items: center; gap: 8px; }
+  .ext-slot-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; align-items: center; }
+  .ext-form-label { display: block; margin: 3px 0 0; font-weight: 500; }
+  .ext-enabled-label { display: flex; align-items: center; justify-content: flex-end; }
+  .ext-slot-form-grid .ant-input-number { width: 100%; }
+  .ext-slot-form-grid .ext-url-input-wide { grid-column: 1 / -1; }
+  .external-subscriptions-page .ext-intervals { white-space: nowrap; }
+  .external-subscriptions-page .ext-submodules-card .ant-table-thead > tr > th:last-child,
+  .external-subscriptions-page .ext-submodules-card .ant-table-tbody > tr > td:last-child { padding-right: 12px; }
+  .external-subscriptions-page .ext-status-pulse { display: inline-block; margin-right: 4px; animation: ext-status-blink 1.5s ease-in-out infinite; }
+  @keyframes ext-status-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .external-subscriptions-page .ext-probe-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .external-subscriptions-page .ext-probe-row .ant-select { flex: 1; min-width: 0; }
+  .external-subscriptions-page .ext-probe-card .ext-probe-row:first-child { margin-top: 10px; }
+  .external-subscriptions-page .ext-probe-save { margin-top: 23px; text-align: right; }
+  .external-subscriptions-page .ext-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; margin: 0; }
+</style>
+{{ template "page/head_end" .}}
+
+{{ template "page/body_start" .}}
+{{template "page/shell_start" . }}
+<div class="external-subscriptions-page">
+  <a-spin :spinning="loading">
+    <a-row :gutter="[16, 16]">
+      <a-col :xs="24" :md="12">
+        <a-card class="ext-top-card">
+          <template slot="title">
+            <div class="ext-main-header">
+              <span class="ext-main-name">[[ settings.displayName || 'External Selector' ]]</span>
+              <a-tag :color="!moduleInstalled ? 'default' : settings.enabled ? 'green' : 'orange'">
+                <span v-if="moduleInstalled && settings.enabled" class="ext-status-pulse">🟢</span>
+                <span v-else-if="moduleInstalled" class="ext-status-pulse">🟠</span>
+                [[ !moduleInstalled ? 'Не установлен' : settings.enabled ? 'Работает' : 'Остановлен' ]]
+              </a-tag>
+            </div>
+          </template>
+          <template slot="extra">
+            <a-button v-if="PERMS.superAdmin" class="ext-main-settings" type="link" shape="circle"
+              title="Настройки основного модуля" aria-label="Настройки основного модуля" @click="openMainSettings">
+              <span>⚙️</span>
+            </a-button>
+          </template>
+          <div class="ext-note" style="margin-bottom: 6px">Каждый подмодуль отдельно загружает список VPN-ключей.</div>
+          <div class="ext-main-actions">
+            <a-button v-if="PERMS.superAdmin" :disabled="!moduleInstalled || moduleAction" :loading="moduleAction" @click="restartModule">
+              <a-icon :type="settings.enabled ? 'reload' : 'play-circle'"></a-icon>
+              [[ settings.enabled ? 'Перезапустить' : 'Запустить' ]]
+            </a-button>
+            <a-button :loading="loading" @click="loadModule()">
+              <a-icon type="sync"></a-icon>Обновить
+            </a-button>
+            <a-button v-if="PERMS.superAdmin" type="danger" :disabled="!moduleInstalled || !settings.enabled || moduleAction"
+              :loading="moduleAction" @click="stopModule">
+              <a-icon type="pause-circle"></a-icon>Остановить
+            </a-button>
+            <a-button :disabled="!moduleInstalled" @click="showLogs">
+              <a-icon type="file-text"></a-icon>Логи
+            </a-button>
+          </div>
+        </a-card>
+      </a-col>
+
+      <a-col :xs="24" :md="12">
+        <a-card class="ext-top-card ext-probe-card">
+          <template slot="title">
+            HTTPS-адреса
+            <a-tooltip title="Вставьте публичные HTTPS-адреса для проверки доступности ключей. При одном адресе нужен 1 успешный ответ, при двух — 2, при трёх и более — любые 2.">
+              <a-icon type="question-circle" style="margin-left: 6px; opacity: .6; cursor: help"></a-icon>
+            </a-tooltip>
+          </template>
+          <div v-for="(probeUrl, index) in probeURLs" :key="'probe-' + index" class="ext-probe-row">
+            <a-select v-model="probeURLs[index]" mode="combobox" show-search :disabled="!PERMS.superAdmin"
+              :default-active-first-option="false" option-filter-prop="children"
+              @change="probeURLsDirty = true" style="flex: 1; min-width: 0">
+              <a-select-option v-for="url in probeURLPresets" :key="url" :value="url">[[ url ]]</a-select-option>
+            </a-select>
+            <a-button v-if="PERMS.superAdmin && probeURLs.length > 1" size="small" shape="circle" type="danger" title="Удалить строку"
+              @click="removeProbeURL(index)">
+              <a-icon type="delete"></a-icon>
+            </a-button>
+            <a-button v-if="PERMS.superAdmin" size="small" shape="circle" type="primary" title="Добавить строку"
+              style="background-color: #52c41a; border-color: #52c41a"
+              :disabled="probeURLs.length >= maxProbeURLs" @click="addProbeURL(index)">
+              <a-icon type="plus"></a-icon>
+            </a-button>
+          </div>
+          <div class="ext-probe-save">
+            <a-button v-if="PERMS.superAdmin" type="primary" :loading="savingSettings" @click="saveProbeURLs">Сохранить</a-button>
+          </div>
+        </a-card>
+      </a-col>
+
+      <a-col :span="24">
+        <a-card class="ext-top-card ext-submodules-card">
+          <template slot="title">
+            Подмодули
+            <a-tooltip :overlay-style="{ maxWidth: '420px' }"
+              title="Общие внешние ключи. Внешние UUID выдаются клиентам напрямую. Трафик этих узлов не учитывается локальной квотой и не может быть отозван после копирования; отключение влияет только на следующие ответы подписки.">
+              <a-icon type="question-circle" class="ext-help-icon"></a-icon>
+            </a-tooltip>
+          </template>
+          <template slot="extra">
+            <a-button v-if="PERMS.superAdmin" type="primary" @click="openNewSlot"><a-icon type="plus"></a-icon>Добавить подмодуль</a-button>
+          </template>
+          <a-table-sortable :data-source="slots" :row-key="slot => String(slot.id)" :pagination="false"
+            size="middle" v-on:onsort="moveSlotByDrag">
+            <a-table-column title="Имя" key="name">
+              <template slot-scope="text, slot, index">
+                <div class="ext-slot-name">
+                  <a-table-sort-trigger v-if="PERMS.superAdmin && slots.length > 1" :item-index="index"></a-table-sort-trigger>
+                  <span>[[ slot.name ]]</span>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="Источник" key="source">
+              <template slot-scope="text, slot"><div class="ext-url">[[ slot.sourceUrl ]]</div></template>
+            </a-table-column>
+            <a-table-column title="Фильтр" key="filter">
+              <template slot-scope="text, slot">
+                <div>[[ slot.filterMode === 'include' ? 'Включить:' : 'Исключить:' ]]</div>
+                <div v-if="slot.countryFlags && slot.countryFlags.length" class="ext-flag-lines">
+                  <div v-for="(row, rowIndex) in flagRows(slot.countryFlags)" :key="rowIndex" class="ext-flag-row">
+                    <span v-for="flag in row" :key="flag">· [[ flag ]]</span>
+                  </div>
+                </div>
+                <div v-else>· флаги не выбраны</div>
+              </template>
+            </a-table-column>
+            <a-table-column title="Ключи в подписке" key="active">
+              <template slot-scope="text, slot">
+                <div class="ext-key-summary">
+                  <div><strong>[[ slot.healthyKeyCount ]] / [[ slot.subscriptionKeyCount ]]</strong></div>
+                  <div v-if="slot.activeFlags && slot.activeFlags.length" class="ext-flag-lines">
+                    <div v-for="(row, rowIndex) in flagRows(slot.activeFlags)" :key="rowIndex" class="ext-flag-row">
+                      <span v-for="(flag, flagIndex) in row" :key="flagIndex">· [[ flag ]]</span>
+                    </div>
+                  </div>
+                  <div v-else>—</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="Состояние" key="state">
+              <template slot="title">
+                Состояние
+                <a-tooltip title="«HTTPS-проверка пройдена» означает успешный ответ минимум от двух настроенных URL через Xray (или от всех, если адресов меньше двух). Это не проверка YouTube, скорости или доступности узла из каждой клиентской сети.">
+                  <a-icon type="question-circle" class="ext-help-icon"></a-icon>
+                </a-tooltip>
+              </template>
+              <template slot-scope="text, slot">
+                <a-tag :color="statusColor(slot.status)">[[ statusText(slot.status) ]]</a-tag>
+                <div class="ext-form-help">Прошли фильтр: [[ slot.matchingCount ]] / [[ slot.candidateCount ]]</div>
+                <div v-if="slot.status === 'checking'" class="ext-form-help">
+                  Проверено: [[ slot.checkedCount ]] / [[ slot.matchingCount ]]; проверка идёт группами
+                </div>
+                <div v-else-if="slot.status === 'no_healthy_nodes'" class="ext-form-help">
+                  Проверены все [[ slot.matchingCount ]] подходящих узлов
+                </div>
+                <div v-if="slot.rotationPending" class="ext-form-help">
+                  Новый набор: [[ slot.checkedCount ]] / [[ slot.rotationTotal ]]; текущий пока сохранён
+                </div>
+                <div v-if="slot.lastError" class="ext-form-help">[[ slot.lastError ]]</div>
+              </template>
+            </a-table-column>
+            <a-table-column title="Интервалы" key="intervals" :width="150">
+              <template slot-scope="text, slot">
+                <div class="ext-intervals">Проверка: [[ slot.checkIntervalMinutes ]] мин</div>
+                <div class="ext-intervals">Список: [[ slot.refreshIntervalMinutes ]] мин</div>
+                <div class="ext-intervals">Смена: [[ slot.forceRotationIntervalMinutes ? slot.forceRotationIntervalMinutes + ' мин' : 'выкл.' ]]</div>
+                <div class="ext-intervals">Пинг: [[ selectionModeLabel(slot.selectionMode) ]]</div>
+              </template>
+            </a-table-column>
+            <a-table-column title="Действия" key="actions" :width="202">
+              <template slot-scope="text, slot">
+                <div v-if="PERMS.superAdmin" class="ext-slot-actions">
+                  <a-button size="small" @click="editSlot(slot)">Изменить</a-button>
+                  <a-popconfirm title="Удалить подмодуль?" @confirm="deleteSlot(slot)">
+                    <a-button size="small" type="danger">Удалить</a-button>
+                  </a-popconfirm>
+                  <a-button size="small" title="Обновить источник и перепроверить выбранные ключи"
+                    :disabled="!moduleInstalled || !settings.enabled"
+                    :loading="refreshingId === slot.id" @click="refreshSlot(slot)">Обновить</a-button>
+                  <a-button size="small" title="Заменить весь набор ключей на новый проверенный набор"
+                    :disabled="!moduleInstalled || !settings.enabled || !slot.enabled || slot.rotationPending || rotatingId === slot.id"
+                    :loading="rotatingId === slot.id" @click="rotateSlot(slot)">
+                    <a-icon type="swap"></a-icon>Сменить
+                  </a-button>
+                </div>
+                <span v-else class="ext-note">Изменять подмодули может только супер-администратор.</span>
+              </template>
+            </a-table-column>
+            <template slot="emptyText">Подмодули ещё не добавлены</template>
+          </a-table-sortable>
+        </a-card>
+      </a-col>
+    </a-row>
+  </a-spin>
+
+  <a-modal v-if="PERMS.superAdmin" v-model="mainSettings.visible" title="Настройки основного модуля"
+    :confirm-loading="mainSettings.saving" :width="520" @ok="saveModuleName"
+    ok-text="Сохранить" cancel-text="Отмена">
+    <a-form layout="vertical">
+      <a-form-item label="Название основного модуля">
+        <a-input v-model="mainSettings.displayName" maxlength="64"></a-input>
+      </a-form-item>
+    </a-form>
+  </a-modal>
+
+  <a-modal v-if="PERMS.superAdmin" v-model="edit.visible" :title="edit.id ? 'Изменить подмодуль' : 'Новый подмодуль'"
+    :confirm-loading="edit.saving" :width="isMobile ? '95%' : 820" @ok="saveSlot"
+    ok-text="Сохранить" cancel-text="Отмена">
+    <div class="ext-slot-form-grid">
+      <label class="ext-form-label">Название подмодуля:</label>
+      <div class="ext-form-label ext-enabled-label">
+        <a-checkbox v-model="edit.form.enabled">Включено</a-checkbox>
+      </div>
+      <a-input v-model="edit.form.name" maxlength="64" placeholder="Название"></a-input>
+      <div></div>
+
+      <label class="ext-form-label">
+        HTTPS URL списка
+        <a-tooltip title="Разрешён только публичный HTTPS-адрес на стандартном порту 443.">
+          <a-icon type="question-circle" class="ext-help-icon"></a-icon>
+        </a-tooltip>
+      </label>
+      <div></div>
+      <a-input class="ext-url-input-wide" v-model="edit.form.sourceUrl"
+        placeholder="https://example.org/vless-list.txt"></a-input>
+
+      <label class="ext-form-label">Обновлять список, минут:</label>
+      <label class="ext-form-label">Повторная проверка ключей, минут:</label>
+      <a-input-number v-model="edit.form.refreshIntervalMinutes" :min="1" :max="1440" style="width: 100%"></a-input-number>
+      <a-input-number v-model="edit.form.checkIntervalMinutes" :min="1" :max="1440" style="width: 100%"></a-input-number>
+
+      <label class="ext-form-label">
+        Количество ключей в подписке
+        <a-tooltip title="От 1 до 10 ключей."><a-icon type="question-circle" class="ext-help-icon"></a-icon></a-tooltip>
+      </label>
+      <label class="ext-form-label">
+        Принудительная смена, минут
+        <a-tooltip title="Независимо от других параметров, меняет весь набор ключей этого подмодуля.">
+          <a-icon type="question-circle" class="ext-help-icon"></a-icon>
+        </a-tooltip>
+      </label>
+      <a-input-number v-model="edit.form.subscriptionKeyCount" :min="1" :max="maxSlotKeys" style="width: 100%"></a-input-number>
+      <a-input-number v-model="edit.form.forceRotationIntervalMinutes" :min="1" :max="maxForceRotationMinutes" style="width: 100%"></a-input-number>
+
+      <label class="ext-form-label">Фильтр стран:</label>
+      <label class="ext-form-label">
+        Символы флагов стран
+        <a-tooltip>
+          <template slot="title">
+            Введите флаг-эмодзи, например 🇷🇺, а не код страны ru.
+            Каталог символов: <a href="https://unicode.bootstrap-4.ru/emoji/flags/" target="_blank" rel="noopener noreferrer">флаги Unicode</a>.
+          </template>
+          <a-icon type="question-circle" class="ext-help-icon"></a-icon>
+        </a-tooltip>
+      </label>
+      <a-select v-model="edit.form.filterMode" style="width: 100%">
+        <a-select-option value="include">Включать только выбранные флаги</a-select-option>
+        <a-select-option value="exclude">Исключать выбранные флаги</a-select-option>
+      </a-select>
+      <a-select v-model="edit.form.countryFlags" mode="tags" :token-separators="[',']" style="width: 100%"
+        placeholder="Например: 🇷🇺">
+        <a-select-option v-for="flag in availableFlags" :key="flag" :value="flag">[[ flag ]]</a-select-option>
+      </a-select>
+
+      <label class="ext-form-label">Состояние, пинг:</label>
+      <div></div>
+      <a-radio-group v-model="edit.form.selectionMode" button-style="solid">
+        <a-radio-button value="auto" title="AUTO перемешивает активные проверенные ключи при каждом формировании подписки.">AUTO</a-radio-button>
+        <a-radio-button value="a-z" title="Исходный порядок списка: сверху вниз.">A-Z</a-radio-button>
+        <a-radio-button value="z-a" title="Обратный порядок исходного списка: снизу вверх.">Z-A</a-radio-button>
+      </a-radio-group>
+    </div>
+  </a-modal>
+
+  <a-modal v-model="logs.visible" title="External Selector — журнал" :footer="null" :width="760">
+    <div style="text-align: right; margin-bottom: 8px">
+      <a-button size="small" :loading="logs.loading" @click="loadLogs">
+        <a-icon type="reload"></a-icon>Обновить
+      </a-button>
+    </div>
+    <pre class="ext-log">[[ logs.content || 'Состояние пока не записано.' ]]</pre>
+  </a-modal>
+</div>
+{{template "page/shell_end" .}}
+
+{{template "page/body_scripts" .}}
+{{template "component/aSidebar" .}}
+{{template "component/aThemeSwitch" .}}
+{{template "component/aTableSortable" .}}
+<script>
+  const app = new Vue({
+    delimiters: ['[[', ']]'],
+    mixins: [MediaQueryMixin],
+    el: '#app',
+    data: {
+      themeSwitcher,
+      pageTitle: 'External Selector',
+      pageClass: 'external-subscriptions-page',
+      loading: false,
+      moduleInstalled: false,
+      moduleAction: false,
+      savingSettings: false,
+      refreshingId: 0,
+      rotatingId: 0,
+      refreshTimer: null,
+      settings: { displayName: 'External Selector', enabled: true },
+      probeURLs: [''],
+      savedProbeURLs: [],
+      probeURLsDirty: false,
+      probeURLPresets: [
+        'https://cachefly.cachefly.net/50mb.test',
+        'https://www.google.com/generate_204',
+        'https://cp.cloudflare.com/generate_204',
+        'https://www.msftconnecttest.com/connecttest.txt',
+      ],
+      maxProbeURLs: 10,
+      maxSlotKeys: 10,
+      maxForceRotationMinutes: 10080,
+      mainSettings: { visible: false, saving: false, displayName: 'External Selector' },
+      slots: [],
+      edit: { visible: false, saving: false, id: 0, form: {} },
+      logs: { visible: false, loading: false, content: '' },
+    },
+    computed: {
+      availableFlags() {
+        const all = new Set();
+        (this.slots || []).forEach(slot => (slot.availableFlags || []).forEach(flag => all.add(flag)));
+        return Array.from(all).sort();
+      },
+    },
+    mounted() {
+      this.loadModule();
+      this.refreshTimer = setInterval(() => this.loadModule(true), 10000);
+    },
+    beforeDestroy() {
+      if (this.refreshTimer) clearInterval(this.refreshTimer);
+    },
+    methods: {
+      flagRows(flags) {
+        const values = Array.isArray(flags) ? flags : [];
+        const rows = [];
+        for (let index = 0; index < values.length; index += 3) {
+          rows.push(values.slice(index, index + 3));
+        }
+        return rows;
+      },
+      async moveSlotByDrag(oldIndex, newIndex) {
+        if (newIndex === null || newIndex === undefined || oldIndex === newIndex) return;
+        const reordered = this.slots.slice();
+        reordered.splice(newIndex, 0, reordered.splice(oldIndex, 1)[0]);
+        this.slots = reordered;
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/reorder-slots', {
+          data: JSON.stringify(reordered.map(slot => slot.id)),
+        });
+        if (!msg || !msg.success) await this.loadModule(true);
+      },
+      async loadModule(quiet) {
+        if (!quiet) this.loading = true;
+        const msg = await HttpUtil.get('/panel/core/external-subscriptions/list');
+        if (msg && msg.success && msg.obj) {
+          this.moduleInstalled = !!msg.obj.installed;
+          const serverSettings = msg.obj.settings || {};
+          this.settings = Object.assign({}, this.settings, serverSettings);
+          if (!this.probeURLsDirty && Array.isArray(serverSettings.probeUrls)) {
+            this.savedProbeURLs = serverSettings.probeUrls.slice();
+            this.probeURLs = this.savedProbeURLs.length ? this.savedProbeURLs.slice() : [''];
+          }
+          this.pageTitle = this.settings.displayName || 'External Selector';
+          this.slots = msg.obj.slots || [];
+        }
+        if (!quiet) this.loading = false;
+      },
+      async stopModule() {
+        this.moduleAction = true;
+        const msg = await HttpUtil.post('/panel/core/stop/external-selector');
+        this.moduleAction = false;
+        if (msg && msg.success) {
+          this.$message.success('External Selector остановлен');
+          await this.loadModule(true);
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      async restartModule() {
+        this.moduleAction = true;
+        const msg = await HttpUtil.post('/panel/core/restart/external-selector');
+        this.moduleAction = false;
+        if (msg && msg.success) {
+          this.$message.success('External Selector запущен; проверка подмодулей поставлена в очередь');
+          await this.loadModule(true);
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      async showLogs() {
+        this.logs.visible = true;
+        await this.loadLogs();
+      },
+      async loadLogs() {
+        this.logs.loading = true;
+        const msg = await HttpUtil.get('/panel/core/logs/external-selector');
+        this.logs.loading = false;
+        if (msg && msg.success) this.logs.content = msg.obj || '';
+        else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      openMainSettings() {
+        this.mainSettings.displayName = this.settings.displayName || 'External Selector';
+        this.mainSettings.visible = true;
+      },
+      async saveModuleName() {
+        this.mainSettings.saving = true;
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/settings', {
+          displayName: this.mainSettings.displayName,
+          probeUrl: this.savedProbeURLs[0] || '',
+          probeUrls: this.savedProbeURLs.slice(),
+          enabled: this.settings.enabled,
+        });
+        this.mainSettings.saving = false;
+        if (msg && msg.success) {
+          this.settings.displayName = msg.obj.displayName;
+          this.pageTitle = this.settings.displayName || 'External Selector';
+          this.mainSettings.visible = false;
+          this.$message.success('Название модуля сохранено');
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      async saveProbeURLs() {
+        this.savingSettings = true;
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/settings', {
+          displayName: this.settings.displayName,
+          probeUrl: this.savedProbeURLs[0] || '',
+          probeUrls: this.probeURLs.slice(),
+          enabled: this.settings.enabled,
+        });
+        this.savingSettings = false;
+        if (msg && msg.success) {
+          const saved = (msg.obj.probeUrls || []).slice();
+          this.settings.displayName = msg.obj.displayName;
+          this.savedProbeURLs = saved.slice();
+          this.probeURLs = saved.length ? saved.slice() : [''];
+          this.probeURLsDirty = false;
+          this.$message.success('Адреса проверки сохранены');
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      addProbeURL(index) {
+        if (this.probeURLs.length >= this.maxProbeURLs) return;
+        this.probeURLs.splice(index + 1, 0, '');
+        this.probeURLsDirty = true;
+      },
+      removeProbeURL(index) {
+        if (this.probeURLs.length <= 1) return;
+        this.probeURLs.splice(index, 1);
+        this.probeURLsDirty = true;
+      },
+      openNewSlot() {
+        this.edit = {
+          visible: true, saving: false, id: 0,
+          form: { name: '', sourceUrl: '', refreshIntervalMinutes: 30, checkIntervalMinutes: 5,
+            subscriptionKeyCount: 1, forceRotationIntervalMinutes: null, filterMode: 'include',
+            selectionMode: 'auto', countryFlags: [], enabled: true },
+        };
+      },
+      editSlot(slot) {
+        this.edit = {
+          visible: true, saving: false, id: slot.id,
+          form: { name: slot.name, sourceUrl: slot.sourceUrl,
+            refreshIntervalMinutes: slot.refreshIntervalMinutes, checkIntervalMinutes: slot.checkIntervalMinutes,
+            subscriptionKeyCount: slot.subscriptionKeyCount || 1,
+            forceRotationIntervalMinutes: slot.forceRotationIntervalMinutes || null, filterMode: slot.filterMode,
+            selectionMode: slot.selectionMode || 'auto', countryFlags: (slot.countryFlags || []).slice(),
+             enabled: slot.enabled },
+        };
+      },
+      async saveSlot() {
+        this.edit.saving = true;
+        const url = this.edit.id
+          ? '/panel/core/external-subscriptions/slots/' + this.edit.id
+          : '/panel/core/external-subscriptions/slots';
+        const msg = await HttpUtil.post(url, this.edit.form, { suppressSuccessMessage: true });
+        this.edit.saving = false;
+        if (msg && msg.success) {
+          this.edit.visible = false;
+          this.$message.success('Подмодуль сохранён');
+          await this.loadModule(true);
+        }
+      },
+      async refreshSlot(slot) {
+        this.refreshingId = slot.id;
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/slots/' + slot.id + '/refresh');
+        this.refreshingId = 0;
+        if (msg && msg.success) {
+          this.$message.success('Обновление источника и проверка поставлены в очередь');
+          await this.loadModule(true);
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      async rotateSlot(slot) {
+        this.rotatingId = slot.id;
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/slots/' + slot.id + '/next');
+        this.rotatingId = 0;
+        if (msg && msg.success) {
+          this.$message.success('Ищется новый набор; текущий останется до полной проверки');
+          await this.loadModule(true);
+        }
+      },
+      async deleteSlot(slot) {
+        const msg = await HttpUtil.post('/panel/core/external-subscriptions/slots/' + slot.id + '/delete');
+        if (msg && msg.success) {
+          this.$message.success('Подмодуль удалён');
+          await this.loadModule(true);
+        } else if (msg && msg.msg) this.$message.error(msg.msg);
+      },
+      selectionModeLabel(mode) {
+        return ({ auto: 'AUTO', 'a-z': 'A-Z', 'z-a': 'Z-A' })[(mode || 'auto').toLowerCase()] || 'AUTO';
+      },
+      statusText(status) {
+        return ({ pending: 'Ожидание', checking: 'Проверка', healthy: 'HTTPS-проверка пройдена', partial: 'Частично заполнен', disabled: 'Отключён',
+          no_candidates: 'Нет подходящих узлов', no_healthy_nodes: 'Нет доступных узлов',
+          source_error: 'Ошибка источника', probe_error: 'Ошибка проверки' })[status] || status || '—';
+      },
+      statusColor(status) {
+        return status === 'healthy' ? 'green' : status === 'partial' ? 'orange'
+          : status === 'checking' || status === 'pending' ? 'blue'
+          : status === 'disabled' ? 'default' : 'red';
+      },
+    },
+  });
+</script>
+{{template "page/body_end" .}}

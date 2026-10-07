@@ -2880,7 +2880,19 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
 }
 .bo-lg-mobile-copy .anticon { font-size:17px; }
 
+@media (max-width:768px) {
+  /* Ant Design adds horizontal margins to cards on mobile; align the Clients and
+     Inbounds cards to .bo-tile within their shared grid columns. */
+  .clients-page .bo-clients-toolbar-card,
+  .clients-page .bo-lg,
+  .inbounds-page .ant-card {
+    margin-left:0;
+    margin-right:0;
+  }
+}
+
 @media (max-width:560px) {
+  .clients-page .bo-stat-grid--4 .bo-stat-cell-sublabel { display:none; }
   .clients-page .bo-clients-toolbar-card .ant-card-body { padding:10px; }
   .clients-page .bo-clients-toolbar {
     display:grid !important;

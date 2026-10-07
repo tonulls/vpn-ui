@@ -264,16 +264,38 @@ func (s *CoreService) UninstallCores(names []string, inbounds string) (*CoreUnin
 // are running from, and only then rewrite the host-level state (module persist,
 // provisioned list) that describes what is left.
 func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionStep)) []string {
+	selectedAll := validCoreNames(selected)
+	selectedHost := hostCoreNames(selectedAll)
 	removing := map[string]bool{}
-	for _, n := range selected {
+	for _, n := range selectedAll {
 		removing[n] = true
 	}
 	// What survives. Every "may I remove this shared thing?" question is asked
 	// of THIS set, which is the whole safety property.
-	var remaining []string
+	var remainingAll []string
 	for _, n := range s.installedCoreNames() {
 		if !removing[n] {
-			remaining = append(remaining, n)
+			remainingAll = append(remainingAll, n)
+		}
+	}
+	remainingHost := hostCoreNames(remainingAll)
+	if len(selectedHost) == 0 {
+		// Deactivating a panel-only feature updates only the recorded selection.
+		// It must never remove host-wide files left by an unrelated VPN core.
+		for _, name := range selectedAll {
+			emit(ProvisionStep{Name: "deactivate " + coreDisplayName(name), OK: true, Msg: "panel-managed; no host state changed"})
+		}
+		var ss SettingService
+		if err := ss.SetProvisionedProtocols(orderedCoreNames(remainingAll)); err != nil {
+			emit(ProvisionStep{Name: "record installed cores", OK: false, Msg: err.Error()})
+		} else {
+			emit(ProvisionStep{Name: "record installed cores", OK: true, Msg: installedMsg(remainingAll)})
+		}
+		return nil
+	}
+	for _, name := range selectedAll {
+		if spec := coreSpecFor(name); spec != nil && spec.panelOnly {
+			emit(ProvisionStep{Name: "deactivate " + coreDisplayName(name), OK: true, Msg: "panel-managed; no host state changed"})
 		}
 	}
 	// Everything deliberately left in place, from any step, with the reason. The
@@ -290,8 +312,8 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//    drop live L2TP tunnels as a side effect of removing IKEv2. In that case
 	//    the daemon is left running and step 7 reloads it without the removed
 	//    core's connections instead.
-	for _, n := range selected {
-		if keeper := sharedDaemonKeeper(n, remaining); keeper != "" {
+	for _, n := range selectedHost {
+		if keeper := sharedDaemonKeeper(n, remainingHost); keeper != "" {
 			emit(ProvisionStep{Name: "stop " + coreDisplayName(n), OK: true,
 				Msg: "left running: the same daemon still serves " + coreDisplayName(keeper)})
 			continue
@@ -317,7 +339,7 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//    says we created them, and a shared file we overwrote is restored from its
 	//    backup rather than deleted. See ownReleasePath.
 	handled := map[string]bool{}
-	for _, n := range selected {
+	for _, n := range selectedHost {
 		spec := coreSpecFor(n)
 		if spec == nil {
 			continue
@@ -328,7 +350,7 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 				return // a path two cores both list is released once, by the first
 			}
 			handled[p] = true
-			gone, left := ownReleasePath(p, selected)
+			gone, left := ownReleasePath(p, selectedHost)
 			if gone != "" {
 				removed = append(removed, gone)
 			}
@@ -372,7 +394,7 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 			continue
 		}
 		handled[p] = true
-		gone, left := ownReleasePath(p, selected)
+		gone, left := ownReleasePath(p, selectedHost)
 		if gone != "" {
 			restored = append(restored, gone)
 		}
@@ -388,19 +410,19 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//     take a daemon over, and the NIC offload GRE's FOU mode turned off. Both
 	//     were one-way changes with nothing recorded, so a host that had its own
 	//     xl2tpd or ocserv running before vpn-ui never got it back.
-	if line := restoreDisabledUnits(selected, emit); line != "" {
+	if line := restoreDisabledUnits(selectedHost, emit); line != "" {
 		kept = append(kept, line)
 	}
-	restoreEthtoolState(selected, emit)
+	restoreEthtoolState(selectedHost, emit)
 
 	// 3. Bundled daemon binaries, minus anything a surviving core still runs
 	//    (pptpctrl belongs to PPTP alone, but the principle is the same).
 	keepBins := map[string]bool{}
-	for _, d := range daemonsFor(remaining) {
+	for _, d := range daemonsFor(remainingHost) {
 		keepBins[d] = true
 	}
 	var dropBins []string
-	for _, d := range daemonsFor(selected) {
+	for _, d := range daemonsFor(selectedHost) {
 		if !keepBins[d] {
 			dropBins = append(dropBins, d)
 		}
@@ -414,14 +436,14 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	// 4. Shared features. Each is undone only when NO surviving core claims it.
 	//    This is the ipsec case the whole design exists for.
 	for _, feat := range []string{featPppd, featPptpCtrl, featAccel, featStrongswan, featKernelMods, featAmneziawg} {
-		if !needsFeature(selected, feat) {
+		if !needsFeature(selectedHost, feat) {
 			continue
 		}
-		if needsFeature(remaining, feat) {
+		if needsFeature(remainingHost, feat) {
 			kept = append(kept, fmt.Sprintf("%s (still needed by %s)",
-				featureLabel(feat), strings.Join(coreDisplayNames(coresNeeding(remaining, feat)), ", ")))
+				featureLabel(feat), strings.Join(coreDisplayNames(coresNeeding(remainingHost, feat)), ", ")))
 			emit(ProvisionStep{Name: "keep " + featureLabel(feat), OK: true,
-				Msg: "still required by " + strings.Join(coreDisplayNames(coresNeeding(remaining, feat)), ", ")})
+				Msg: "still required by " + strings.Join(coreDisplayNames(coresNeeding(remainingHost, feat)), ", ")})
 			continue
 		}
 		emit(removeFeature(feat))
@@ -431,7 +453,7 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//    modules stop being auto-loaded on boot. Loaded modules are deliberately
 	//    NOT rmmod'd: unloading a live module can drop unrelated traffic, and it
 	//    buys nothing that the next boot does not.
-	if len(remaining) == 0 {
+	if len(remainingHost) == 0 {
 		emit(ProvisionStep{Name: "persist /etc/modules-load.d/vpn-ui.conf", OK: true,
 			Msg: removedMsg(removeIfPresent("/etc/modules-load.d/vpn-ui.conf"))})
 
@@ -448,8 +470,8 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 			emit(ProvisionStep{Name: "restore host sysctls", OK: true, Msg: strings.Join(restored, ", ")})
 		}
 	} else {
-		mods := requiredModulesFor(remaining)
-		for _, m := range optionalModulesFor(remaining) {
+		mods := requiredModulesFor(remainingHost)
+		for _, m := range optionalModulesFor(remainingHost) {
 			if moduleAvailable(m) {
 				mods = append(mods, m)
 			}
@@ -464,11 +486,11 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//    installed, which is the safe direction to fail in (re-running the
 	//    uninstall finishes the job; the alternative silently strands files).
 	var ss SettingService
-	if err := ss.SetProvisionedProtocols(orderedCoreNames(remaining)); err != nil {
+	if err := ss.SetProvisionedProtocols(orderedCoreNames(remainingAll)); err != nil {
 		logger.Warning("core uninstall: failed to persist provisionedProtocols:", err)
 		emit(ProvisionStep{Name: "record installed cores", OK: false, Msg: err.Error()})
 	} else {
-		emit(ProvisionStep{Name: "record installed cores", OK: true, Msg: installedMsg(remaining)})
+		emit(ProvisionStep{Name: "record installed cores", OK: true, Msg: installedMsg(remainingAll)})
 	}
 
 	// 7. Reconcile the survivors that shared something with what was removed:
@@ -479,7 +501,7 @@ func (s *CoreService) runCoreUninstall(selected []string, emit func(ProvisionSte
 	//
 	//    Scoped to the affected cores on purpose: restarting every daemon on the
 	//    host to remove one unrelated core would be an outage nobody asked for.
-	if affected := coresSharingWith(selected, remaining); len(affected) > 0 {
+	if affected := coresSharingWith(selectedHost, remainingHost); len(affected) > 0 {
 		s.reinitCores(affected)
 		emit(ProvisionStep{Name: "reconcile shared cores", OK: true,
 			Msg: strings.Join(coreDisplayNames(affected), ", ")})

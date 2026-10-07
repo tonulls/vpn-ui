@@ -19,7 +19,7 @@
                   <h2 :style="{ margin: 0 }">{{ i18n "pages.core.title" }}</h2>
                   <span :style="{ opacity: 0.65 }">{{ i18n "pages.core.subtitle" }}</span>
                 </a-col>
-                <a-col v-if="provisioned">
+                <a-col v-if="hostCoreInstalled">
                   <a-space>
                     <a-button type="primary" @click="restartAll">
                       <a-icon type="reload"></a-icon>Restart All Cores
@@ -107,9 +107,16 @@
           <!-- Per-core cards -->
           <a-col :span="24" v-if="provisioned">
             <a-row type="flex" :gutter="[16, 16]">
-              <a-col :xs="24" :sm="12" :xl="8" v-for="core in cores" :key="core.name">
+              <a-col :xs="24" :sm="12" :xl="8" v-for="(core, index) in visibleCores" :key="core.name">
+                <div class="core-card-drag-shell" :draggable="canReorderCores"
+                  :class="{ 'core-drag-target': coreDropIndex === index || coreDropIndex === index + 1 }"
+                  @dragstart="beginCoreDrag(index, $event)" @dragover.prevent="updateCoreDrop(index, $event)"
+                  @drop.prevent.stop="dropCoreCard(index, $event)" @dragend="endCoreDrag">
                 <a-card class="core-card" hoverable>
                   <template #title>
+                    <a-icon v-if="canReorderCores" type="drag" class="sortable-icon"
+                      :style="{ cursor: 'move', marginRight: '8px', opacity: 0.65 }"
+                      @mousedown.native="armCoreDrag(index)" @mouseup.native="disarmCoreDrag"></a-icon>
                     <a-icon :type="coreIcon(core.name)"></a-icon>
                     <span :style="{ marginLeft: '8px' }">[[ coreTitle(core.name) ]]</span>
                   </template>
@@ -145,39 +152,59 @@
 
                   <div class="core-actions">
                     <a-space>
-                      <a-button size="small" type="primary" :disabled="!canRestart(core)"
-                        @click="restart(core.name)">
-                        <a-icon type="reload"></a-icon>{{ i18n "pages.core.restart" }}
-                      </a-button>
-                      <a-button size="small" type="danger" :disabled="!canStop(core)"
-                        @click="stop(core.name)">
-                        <a-icon type="pause-circle"></a-icon>{{ i18n "pages.core.stop" }}
-                      </a-button>
-                      <a-button size="small" @click="showLogs(core.name)">
-                        <a-icon type="file-text"></a-icon>{{ i18n "pages.core.logs" }}
-                      </a-button>
-                      <a-button size="small" v-if="core.name === 'xray'"
-                        :href="basePath + 'panel/xray'">
-                        <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
-                      </a-button>
-                      <!-- A DISABLED antd button swallows its own mouse events, so a
-                           tooltip put directly on it never opens. The wrapping span is
-                           what the tooltip actually listens on, which is the only way
-                           the "this core has no config file" reason is ever readable. -->
-                      <a-tooltip v-else-if="!coreHasConfig(core.name)"
-                        title='{{ i18n "pages.core.configNoFile" }}'>
-                        <span :style="{ display: 'inline-block', cursor: 'not-allowed' }">
-                          <a-button size="small" disabled :style="{ pointerEvents: 'none' }">
-                            <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
-                          </a-button>
-                        </span>
-                      </a-tooltip>
-                      <a-button size="small" v-else @click="openConfig(core.name)">
-                        <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
-                      </a-button>
+                      <template v-if="core.name === 'external-selector'">
+                        <a-button size="small" type="primary" :disabled="!canRestart(core)"
+                          @click="restart(core.name)">
+                          <a-icon :type="core.state === 'stopped' ? 'play-circle' : 'reload'"></a-icon>
+                          [[ core.state === 'stopped' ? 'Запустить' : '{{ i18n "pages.core.restart" }}' ]]
+                        </a-button>
+                        <a-button size="small" type="danger" :disabled="!canStop(core)"
+                          @click="stop(core.name)">
+                          <a-icon type="pause-circle"></a-icon>{{ i18n "pages.core.stop" }}
+                        </a-button>
+                        <a-button size="small" @click="showLogs(core.name)" :disabled="core.state === 'not_installed'">
+                          <a-icon type="file-text"></a-icon>{{ i18n "pages.core.logs" }}
+                        </a-button>
+                        <a-button size="small" :href="basePath + 'panel/core/external-subscriptions'">
+                          <a-icon type="setting"></a-icon>Настроить модуль
+                        </a-button>
+                      </template>
+                      <template v-else>
+                        <a-button size="small" type="primary" :disabled="!canRestart(core)"
+                          @click="restart(core.name)">
+                          <a-icon type="reload"></a-icon>{{ i18n "pages.core.restart" }}
+                        </a-button>
+                        <a-button size="small" type="danger" :disabled="!canStop(core)"
+                          @click="stop(core.name)">
+                          <a-icon type="pause-circle"></a-icon>{{ i18n "pages.core.stop" }}
+                        </a-button>
+                        <a-button size="small" @click="showLogs(core.name)">
+                          <a-icon type="file-text"></a-icon>{{ i18n "pages.core.logs" }}
+                        </a-button>
+                        <a-button size="small" v-if="core.name === 'xray'"
+                          :href="basePath + 'panel/xray'">
+                          <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
+                        </a-button>
+                        <!-- A DISABLED antd button swallows its own mouse events, so a
+                             tooltip put directly on it never opens. The wrapping span is
+                             what the tooltip actually listens on, which is the only way
+                             the "this core has no config file" reason is ever readable. -->
+                        <a-tooltip v-else-if="!coreHasConfig(core.name)"
+                          title='{{ i18n "pages.core.configNoFile" }}'>
+                          <span :style="{ display: 'inline-block', cursor: 'not-allowed' }">
+                            <a-button size="small" disabled :style="{ pointerEvents: 'none' }">
+                              <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
+                            </a-button>
+                          </span>
+                        </a-tooltip>
+                        <a-button size="small" v-else @click="openConfig(core.name)">
+                          <a-icon type="edit"></a-icon>{{ i18n "pages.core.editConfig" }}
+                        </a-button>
+                      </template>
                     </a-space>
                   </div>
                 </a-card>
+                </div>
               </a-col>
             </a-row>
           </a-col>
@@ -187,7 +214,10 @@
             <a-card hoverable>
               <template #title>
                 <a-icon type="hdd"></a-icon>
-                <span :style="{ marginLeft: '8px' }">{{ i18n "pages.core.system" }}</span>
+                <span :style="{ marginLeft: '8px' }">
+                  <span v-if="hostCoreInstalled">{{ i18n "pages.core.system" }}</span>
+                  <span v-else>Управление модулями</span>
+                </span>
               </template>
               <template #extra>
                 <!-- Re-run repeats setup for exactly what is installed; Add and
@@ -206,9 +236,9 @@
                 </a-space>
               </template>
 
-              <p class="system-desc">{{ i18n "pages.core.provisionDesc" }}</p>
+              <p v-if="hostCoreInstalled" class="system-desc">{{ i18n "pages.core.provisionDesc" }}</p>
 
-              <a-row :gutter="[12, 12]">
+              <a-row v-if="hostCoreInstalled" :gutter="[12, 12]">
                 <a-col :xs="24" :md="8">
                   <div class="sys-tile" :class="system.ipForward ? 'sys-tile-ok' : 'sys-tile-bad'">
                     <a-icon class="sys-tile-icon" theme="filled"
@@ -247,8 +277,8 @@
                 </a-col>
               </a-row>
 
-              <div class="sys-section-title">{{ i18n "pages.core.kernelModules" }}</div>
-              <div class="module-grid">
+              <div v-if="hostCoreInstalled" class="sys-section-title">{{ i18n "pages.core.kernelModules" }}</div>
+              <div v-if="hostCoreInstalled" class="module-grid">
                 <span v-for="m in system.modules" :key="m.name" class="module-chip"
                   :class="m.loaded ? 'module-ok' : 'module-bad'">
                   <a-icon :type="m.loaded ? 'check' : 'close'"></a-icon>
@@ -609,6 +639,9 @@
       provisioned: false,
       missingProtocols: [],
       cores: [],
+      coreDragArmedIndex: null,
+      coreDraggingIndex: null,
+      coreDropIndex: null,
       system: { modules: [] },
       provisionRunning: false,
       provisionDone: false,
@@ -673,6 +706,52 @@
         }
         this.loaded = true;
         this.spinning = false;
+      },
+      armCoreDrag(index) {
+        if (this.canReorderCores) this.coreDragArmedIndex = index;
+      },
+      disarmCoreDrag() {
+        this.coreDragArmedIndex = null;
+      },
+      beginCoreDrag(index, event) {
+        if (!this.canReorderCores || this.coreDragArmedIndex !== index) {
+          event.preventDefault();
+          return;
+        }
+        this.coreDraggingIndex = index;
+        this.coreDropIndex = index;
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+      },
+      updateCoreDrop(index, event) {
+        if (this.coreDraggingIndex === null) return;
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        this.coreDropIndex = event.clientY > rect.top + rect.height / 2 ? index + 1 : index;
+      },
+      async dropCoreCard(index, event) {
+        if (this.coreDraggingIndex === null) return;
+        const oldIndex = this.coreDraggingIndex;
+        const insertionIndex = this.coreDropIndex === null ? index : this.coreDropIndex;
+        const reordered = this.visibleCores.slice();
+        const [moved] = reordered.splice(oldIndex, 1);
+        const newIndex = Math.max(0, Math.min(reordered.length, insertionIndex - (oldIndex < insertionIndex ? 1 : 0)));
+        reordered.splice(newIndex, 0, moved);
+        this.coreDraggingIndex = null;
+        this.coreDropIndex = null;
+        this.coreDragArmedIndex = null;
+        if (oldIndex === newIndex) return;
+        const hidden = this.cores.filter(core => core.state === 'not_installed');
+        this.cores = reordered.concat(hidden);
+        const names = reordered.map(core => core.name);
+        const msg = await HttpUtil.post('/panel/core/reorder', { data: JSON.stringify(names) });
+        if (!msg || !msg.success) {
+          await this.loadStatus(false);
+        }
+      },
+      endCoreDrag() {
+        this.coreDraggingIndex = null;
+        this.coreDropIndex = null;
+        this.coreDragArmedIndex = null;
       },
       async restart(core) {
         this.spinning = true;
@@ -882,7 +961,7 @@
       // are never listed: they ride inside the panel and have nothing to
       // install or remove.
       rowEnabled(c) {
-        if (c.builtin) return false;
+        if (c.builtin || c.derived) return false;
         // A core with inbounds is selectable now. It used to be greyed out, which
         // left the operator no way forward at all: the note said "still has N
         // inbounds" and the row simply could not be ticked. Picking it now opens
@@ -894,6 +973,7 @@
       // The one-line reason a row cannot be picked, so a disabled checkbox is
       // never unexplained.
       rowNote(c) {
+        if (c.derived) return 'Устанавливается вместе с L2TP или IKEv2; отдельно добавить или удалить IPsec нельзя.';
         if (this.pickerMode === 'uninstall') {
           if (c.inbounds) {
             return '{{ i18n "pages.core.hasInbounds" }}'.replace('%d', c.inbounds);
@@ -1215,14 +1295,15 @@
         this.reconnectTimer = setTimeout(probe, 20000);
       },
       coreTitle(name) {
-        return ({ xray: 'Xray', l2tp: 'L2TP', ipsec: 'IPsec', pptp: 'PPTP', openvpn: 'OpenVPN', openconnect: 'OpenConnect (cisco)', sstp: 'SSTP', ikev2: 'IKEv2', wgc: 'WireGuard (C)', awg: 'AmneziaWG', gre: 'GRE', mtproto: 'MTProto Proxy', ssh: 'SSH', radius: 'RADIUS' })[name] || name;
+        return ({ xray: 'Xray', l2tp: 'L2TP', ipsec: 'IPsec', pptp: 'PPTP', openvpn: 'OpenVPN', openconnect: 'OpenConnect (cisco)', sstp: 'SSTP', ikev2: 'IKEv2', wgc: 'WireGuard (C)', awg: 'AmneziaWG', gre: 'GRE', mtproto: 'MTProto Proxy', 'external-selector': 'External Selector', ssh: 'SSH', radius: 'RADIUS' })[name] || name;
       },
       coreBackend(name) {
         // The actual software powering each core (shown in the Backend row).
-        return ({ xray: 'Xray-core', l2tp: 'xl2tpd', ipsec: 'strongSwan (charon)', pptp: 'pptpd', openvpn: 'OpenVPN', openconnect: 'ocserv', sstp: 'accel-ppp', ikev2: 'strongSwan (charon)', wgc: 'WireGuard (kernel)', awg: 'AmneziaWG (kernel)', gre: 'GRE (kernel)', mtproto: 'telemt', ssh: 'Built-in (vpn-ui)', radius: 'Built-in (vpn-ui)' })[name] || '-';
+        return ({ xray: 'Xray-core', l2tp: 'xl2tpd', ipsec: 'strongSwan (charon)', pptp: 'pptpd', openvpn: 'OpenVPN', openconnect: 'ocserv', sstp: 'accel-ppp', ikev2: 'strongSwan (charon)', wgc: 'WireGuard (kernel)', awg: 'AmneziaWG (kernel)', gre: 'GRE (kernel)', mtproto: 'telemt', 'external-selector': 'Built-in (vpn-ui)', ssh: 'Built-in (vpn-ui)', radius: 'Built-in (vpn-ui)' })[name] || '-';
       },
       coreIcon(name) {
-        // A single lock icon represents every core (Xray + all VPN daemons).
+        if (name === 'external-selector') return 'share-alt';
+        // A single lock icon represents every host-backed VPN core.
         return 'lock';
       },
       stateText(state) {
@@ -1238,10 +1319,16 @@
       // These returned true unconditionally back when every card reported a live
       // daemon state; ipsec and radius can now report not_installed too, and
       // offering to restart a daemon that is not on disk only produces an error.
-      canStop(core) { return core.state !== 'not_installed'; },
+      canStop(core) {
+        if (core.name === 'external-selector') return core.state === 'running';
+        return core.state !== 'not_installed';
+      },
       canRestart(core) { return core.state !== 'not_installed'; },
     },
     computed: {
+      hostCoreInstalled() {
+        return (this.catalog || []).some((core) => core.installed && !core.builtin && !core.panelOnly);
+      },
       // The core's log, coloured by severity through the shared LogFormatter.
       // Carries the core's own name as the per-line badge for the same reason
       // the aggregated view does: a downloaded or copied line stays attributable.
@@ -1254,9 +1341,20 @@
       // Rows the picker shows. Built-in cores are always excluded (nothing to
       // install), and the uninstall mode lists only what is actually installed
       // so it can never offer to remove something that is not there.
+      visibleCores() {
+        return this.cores.filter(core => core.state !== 'not_installed');
+      },
+      canReorderCores() {
+        return this.visibleCores.length > 1 && !this.provisionRunning;
+      },
       pickerCores() {
         const rows = this.catalog.filter((c) => !c.builtin);
-        return this.pickerMode === 'uninstall' ? rows.filter((c) => c.installed) : rows;
+        if (this.pickerMode === 'uninstall') return rows.filter((c) => c.installed);
+        // IPsec is a derived shared layer, not an independently provisionable core.
+        // Show why it is absent from Add rather than implying it can be selected alone.
+        rows.push({ name: 'ipsec', title: 'IPsec', backend: 'strongSwan (charon)',
+          desc: 'Общий IPsec-слой для L2TP и IKEv2.', derived: true, installed: false });
+        return rows;
       },
       pickerSelectableCount() {
         return this.pickerCores.filter((c) => this.rowEnabled(c)).length;
@@ -1297,6 +1395,15 @@
   });
 </script>
 <style>
+  .core-card-drag-shell {
+    height: 100%;
+  }
+
+  .core-drag-target > .core-card {
+    outline: 2px dashed var(--primary-color, #008771);
+    outline-offset: -2px;
+  }
+
   /* Equal-height core cards with actions pinned to the bottom */
   .core-card {
     height: 100%;

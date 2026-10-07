@@ -1,13 +1,17 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -283,6 +287,149 @@ func (s *OutboundService) TestOutbound(outboundJSON string, testURL string, allO
 		StatusCode: statusCode,
 		Exit:       exitOrNil(s.probeExit(testPort)),
 	}, nil
+}
+
+// TestExternalOutbound is the bounded background probe used for imported VLESS
+// candidates. Unlike the interactive outbound test it performs one HTTP request,
+// does not run the separate exit-IP lookup, honours cancellation, and never returns
+// details that could contain imported credentials.
+func (s *OutboundService) TestExternalOutbound(ctx context.Context, outboundJSON, testURL string) (*TestOutboundResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !testSemaphore.TryLock() {
+		return &TestOutboundResult{Success: false, Error: "Another outbound test is already running, please wait"}, nil
+	}
+	defer testSemaphore.Unlock()
+
+	var outbound map[string]any
+	if err := json.Unmarshal([]byte(outboundJSON), &outbound); err != nil {
+		return &TestOutboundResult{Success: false, Error: "Invalid external outbound configuration"}, nil
+	}
+	tag, _ := outbound["tag"].(string)
+	protocol, _ := outbound["protocol"].(string)
+	if tag == "" || protocol != "vless" {
+		return &TestOutboundResult{Success: false, Error: "Invalid external outbound configuration"}, nil
+	}
+	probeTarget, err := url.Parse(testURL)
+	if err != nil || probeTarget == nil || !strings.EqualFold(probeTarget.Scheme, "https") || probeTarget.User != nil || probeTarget.Fragment != "" || probeTarget.Hostname() == "" {
+		return &TestOutboundResult{Success: false, Error: "Invalid external probe URL"}, nil
+	}
+	if port := probeTarget.Port(); port != "" && port != "443" {
+		return &TestOutboundResult{Success: false, Error: "Invalid external probe URL"}, nil
+	}
+	if _, err := resolvePublicExternalHost(ctx, probeTarget.Hostname()); err != nil {
+		return &TestOutboundResult{Success: false, Error: "External probe host is not public"}, nil
+	}
+
+	testPort, err := findAvailableLocalPort()
+	if err != nil {
+		return &TestOutboundResult{Success: false, Error: "Could not reserve a local probe port"}, nil
+	}
+	// This isolated probe has no reason to copy the panel's configured tunnel
+	// credentials into its temporary Xray config; only the candidate under test is
+	// present, and the route below can reach no other outbound.
+	testConfig := s.createTestConfig(tag, []any{outbound}, testPort, nil, nil)
+	testConfigPath, err := createTestConfigPath()
+	if err != nil {
+		return &TestOutboundResult{Success: false, Error: "Could not create temporary probe configuration"}, nil
+	}
+	defer os.Remove(testConfigPath)
+	testProcess := xray.NewTestProcess(testConfig, testConfigPath)
+	defer func() {
+		if testProcess.IsRunning() {
+			testProcess.Stop()
+		}
+	}()
+	if err := testProcess.Start(); err != nil {
+		return &TestOutboundResult{Success: false, Error: "Temporary Xray probe could not start"}, nil
+	}
+	if err := waitForPortContext(ctx, testPort, 3*time.Second); err != nil || !testProcess.IsRunning() {
+		return &TestOutboundResult{Success: false, Error: "Temporary Xray probe did not become ready"}, nil
+	}
+	delay, status, err := s.testExternalConnection(ctx, testPort, testURL)
+	if err != nil {
+		return &TestOutboundResult{Success: false, Error: "External HTTP probe failed"}, nil
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return &TestOutboundResult{Success: false, StatusCode: status, Error: "External HTTP probe returned an unsuccessful status"}, nil
+	}
+	return &TestOutboundResult{Success: true, Delay: delay, StatusCode: status}, nil
+}
+
+func (s *OutboundService) testExternalConnection(ctx context.Context, proxyPort int, target string) (int64, int, error) {
+	proxyURL := &url.URL{Scheme: "socks5", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(proxyPort))}
+	transport := &http.Transport{
+		Proxy:                  http.ProxyURL(proxyURL),
+		DialContext:            (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
+		MaxIdleConns:           1,
+		IdleConnTimeout:        5 * time.Second,
+		DisableCompression:     true,
+		TLSHandshakeTimeout:    5 * time.Second,
+		ResponseHeaderTimeout:  8 * time.Second,
+		MaxResponseHeaderBytes: 64 << 10,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   ExternalSubscriptionProbeTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 2 || !strings.EqualFold(req.URL.Scheme, "https") || req.URL.User != nil || req.URL.Fragment != "" {
+				return http.ErrUseLastResponse
+			}
+			if _, err := resolvePublicExternalHost(req.Context(), req.URL.Hostname()); err != nil {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return 0, 0, errors.New("invalid external probe request")
+	}
+	started := time.Now()
+	resp, err := client.Do(req)
+	delay := time.Since(started).Milliseconds()
+	if err != nil {
+		return 0, 0, errors.New("external probe request failed")
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)); err != nil {
+		return 0, 0, errors.New("external probe response failed")
+	}
+	return delay, resp.StatusCode, nil
+}
+
+func waitForPortContext(ctx context.Context, port int, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	for {
+		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("local probe listener did not start")
+		case <-ticker.C:
+		}
+	}
+}
+
+func findAvailableLocalPort() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
 // exitOrNil drops an exit probe that learned nothing, so the field is absent

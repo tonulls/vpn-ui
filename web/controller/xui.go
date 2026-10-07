@@ -42,6 +42,7 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 	g.GET("/settings", requirePerm(model.PermPanelSettings), a.settings)
 	g.GET("/xray", requirePerm(model.PermXraySettings), a.xraySettings)
 	g.GET("/core", requirePerm(model.PermCoreSettings), a.coreSettings)
+	g.GET("/core/external-subscriptions", requirePerm(model.PermCoreSettings), a.externalSubscriptions)
 	g.GET("/admins", requireSuperAdmin(), a.admins)
 	// Resellers is a permission and not requireSuperAdmin(), so a delegated admin can
 	// run their own resellers. The escalation that opens (assigning someone else's
@@ -119,6 +120,10 @@ func (a *XUIController) xraySettings(c *gin.Context) {
 // coreSettings renders the Core Settings page (per-core status + provisioning).
 func (a *XUIController) coreSettings(c *gin.Context) {
 	html(c, "core.html", "pages.core.title", nil)
+}
+
+func (a *XUIController) externalSubscriptions(c *gin.Context) {
+	html(c, "external-subscriptions.html", "pages.core.title", nil)
 }
 
 // admins renders the Admins management page (super admin only).

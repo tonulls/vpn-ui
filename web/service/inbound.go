@@ -290,6 +290,7 @@ func (s *InboundService) getInboundsWhere(ids []int) ([]*model.Inbound, error) {
 			}
 		}
 	}
+	(&DynamicSubscriptionService{}).DecorateInbounds(inbounds)
 	return inbounds, nil
 }
 
@@ -1317,6 +1318,9 @@ func (s *InboundService) validateInboundConfig(inbound *model.Inbound) error {
 }
 
 func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
+	if inbound != nil && inbound.Protocol == model.ExternalSubscription {
+		return inbound, false, common.NewError("external subscriptions must be created through the virtual-connection service")
+	}
 	// Fill in every settings key of the protocol's shape the caller left out, then
 	// validate what is left, so a MINIMAL API body (or none at all) creates the same
 	// inbound the panel's own Add form would. Only for the protocols whose settings JSON
@@ -1521,37 +1525,43 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		logger.Warning("revoking inbound access on delete: ", err)
 	}
 	db := database.GetDB()
-
-	var tag string
-	needRestart := false
-	result := db.Model(model.Inbound{}).Select("tag").Where("id = ? and enable = ?", id, true).First(&tag)
-	if result.Error == nil {
-		s.xrayApi.Init(p.GetAPIPort())
-		err1 := s.xrayApi.DelInbound(tag)
-		if err1 == nil {
-			logger.Debug("Inbound deleted by api:", tag)
-		} else {
-			logger.Debug("Unable to delete inbound by api:", err1)
-			needRestart = true
-		}
-		s.xrayApi.Close()
-	} else {
-		logger.Debug("No enabled inbound founded to removing by api", tag)
-	}
-
 	inbound, err := s.GetInbound(id)
 	if err != nil {
 		return false, err
+	}
+	virtualSubscription := IsExternalSubscriptionInbound(inbound)
+	needRestart := false
+	if !virtualSubscription {
+		var tag string
+		result := db.Model(model.Inbound{}).Select("tag").Where("id = ? and enable = ?", id, true).First(&tag)
+		if result.Error == nil {
+			s.xrayApi.Init(p.GetAPIPort())
+			err1 := s.xrayApi.DelInbound(tag)
+			if err1 == nil {
+				logger.Debug("Inbound deleted by api:", tag)
+			} else {
+				logger.Debug("Unable to delete inbound by api:", err1)
+				needRestart = true
+			}
+			s.xrayApi.Close()
+		} else {
+			logger.Debug("No enabled inbound founded to removing by api", tag)
+		}
 	}
 	clients, err := s.GetClients(inbound)
 	if err != nil {
 		return false, err
 	}
+	clientEmails := make([]string, 0, len(clients))
 	for _, client := range clients {
-		otherInboundIds, err := s.membershipInboundIdsOutside(db, id, client.Email)
-		if err != nil {
-			return false, err
-		}
+		clientEmails = append(clientEmails, client.Email)
+	}
+	otherInboundsByEmail, err := s.membershipInboundIdsOutsideMany(db, id, clientEmails)
+	if err != nil {
+		return false, err
+	}
+	for _, client := range clients {
+		otherInboundIds := otherInboundsByEmail[accountKey(client.Email)]
 		if len(otherInboundIds) > 0 {
 			// The traffic row is account-wide. Move its legacy home pointer instead of
 			// deleting usage still needed by memberships on the surviving inbounds.
@@ -1625,6 +1635,7 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 	if err != nil {
 		return nil, err
 	}
+	(&DynamicSubscriptionService{}).SetInboundProtocolName(inbound)
 	return inbound, nil
 }
 
@@ -1632,6 +1643,24 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 // It validates changes, updates the database, and syncs with the running Xray instance.
 // Returns the updated inbound, whether Xray needs restart, and any error.
 func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
+	if inbound == nil {
+		return nil, false, common.NewError("missing inbound")
+	}
+	if inbound.Id > 0 {
+		stored, err := s.GetInbound(inbound.Id)
+		if err == nil && IsExternalSubscriptionInbound(stored) {
+			remark := inbound.Remark
+			if strings.TrimSpace(remark) == "" {
+				remark = stored.Remark
+			}
+			updated, updateErr := (&DynamicSubscriptionService{}).UpdateInbound(
+				inbound.Id, ExternalSubscriptionSlotID(stored), remark, &inbound.Enable)
+			return updated, false, updateErr
+		}
+	}
+	if inbound.Protocol == model.ExternalSubscription {
+		return inbound, false, common.NewError("external subscriptions must be created through the virtual-connection service")
+	}
 	// Before anything parses the settings, so the emails checked below and the ones
 	// persisted are the same strings.
 	inbound.Settings = normalizeClientEmails(inbound.Settings)
@@ -2083,6 +2112,14 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	virtualSubscription := IsExternalSubscriptionInbound(oldInbound)
+	if virtualSubscription {
+		for _, client := range clients {
+			if strings.TrimSpace(client.Email) == "" {
+				return false, common.NewError("external subscription memberships require an account email")
+			}
+		}
+	}
 
 	// Capacity guard (per-account-IP protocols): refuse an add the IP pool can never
 	// place. Index-based allocation hands accounts past capacity a nil tunnel IP, so the
@@ -2200,13 +2237,15 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	}()
 
 	needRestart := false
-	s.xrayApi.Init(p.GetAPIPort())
+	if !virtualSubscription {
+		s.xrayApi.Init(p.GetAPIPort())
+	}
 	for _, client := range clients {
 		if len(client.Email) > 0 {
 			if err = s.AddClientStat(tx, data.Id, &client); err != nil {
 				return false, err
 			}
-			if client.Enable {
+			if client.Enable && !virtualSubscription {
 				cipher := ""
 				if oldInbound.Protocol == "shadowsocks" {
 					cipher = oldSettings["method"].(string)
@@ -2228,11 +2267,13 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 					needRestart = true
 				}
 			}
-		} else {
+		} else if !virtualSubscription {
 			needRestart = true
 		}
 	}
-	s.xrayApi.Close()
+	if !virtualSubscription {
+		s.xrayApi.Close()
+	}
 
 	return needRestart, tx.Save(oldInbound).Error
 }
@@ -2674,7 +2715,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 				}
 			}
 		}
-		if needApiDel && notDepleted {
+		if needApiDel && notDepleted && !IsExternalSubscriptionInbound(oldInbound) {
 			s.xrayApi.Init(p.GetAPIPort())
 			err1 := s.xrayApi.RemoveUser(oldInbound.Tag, email)
 			if err1 == nil {
@@ -2928,7 +2969,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 		}
 	}
 	needRestart := false
-	if len(oldEmail) > 0 {
+	if len(oldEmail) > 0 && !IsExternalSubscriptionInbound(oldInbound) {
 		s.xrayApi.Init(p.GetAPIPort())
 		if oldClients[clientIndex].Enable {
 			err1 := s.xrayApi.RemoveUser(oldInbound.Tag, oldEmail)
@@ -2966,7 +3007,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 			}
 		}
 		s.xrayApi.Close()
-	} else {
+	} else if !IsExternalSubscriptionInbound(oldInbound) {
 		logger.Debug("Client old email not found")
 		needRestart = true
 	}
@@ -3140,25 +3181,15 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 			// Delete removes targeted memberships (honouring the skip toggles). Account-
 			// wide stats/IPs are settled only after every inbound's settings have changed,
 			// so a multi-inbound account is not mistaken for a fully deleted one midway.
-			// Never empty an inbound — an inbound must keep >=1 client — so if every
-			// client is targeted, one is retained (skipped).
 			del := map[string]bool{}
-			total := 0
 			for i := range clientsAny {
 				cm, ok := clientsAny[i].(map[string]any)
 				if !ok {
 					continue
 				}
-				total++
 				email, _ := cm["email"].(string)
 				if email != "" && emails[email] && !bulkClientSkipped(cm, req) {
 					del[email] = true
-				}
-			}
-			if total > 0 && len(del) >= total {
-				for e := range del { // keep one client back so the inbound isn't emptied
-					delete(del, e)
-					break
 				}
 			}
 			var kept []any
@@ -3172,7 +3203,7 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 				} else {
 					kept = append(kept, clientsAny[i])
 					if email != "" && emails[email] {
-						result.Skipped++ // targeted but retained (skip toggle or last-client guard)
+						result.Skipped++ // targeted but retained by a configured skip toggle
 					}
 				}
 			}
@@ -3229,7 +3260,9 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 		if err = tx.Save(inbound).Error; err != nil {
 			return result, touched, err
 		}
-		touched[string(inbound.Protocol)] = true
+		if inbound.Protocol != model.ExternalSubscription {
+			touched[string(inbound.Protocol)] = true
+		}
 	}
 	if req.Op == "delete" {
 		// All affected settings are now visible through tx. Resolve the final account
@@ -3903,7 +3936,7 @@ func (s *InboundService) autoRenewClients(tx *gorm.DB) (bool, int64, error) {
 				continue
 			}
 			c["expiryTime"] = newExpiryTime
-			if wasDisabled[accountKey(email)] {
+			if wasDisabled[accountKey(email)] && inbounds[inbound_index].Protocol != model.ExternalSubscription {
 				// One entry per MEMBERSHIP: the account has to be re-added to
 				// every inbound tag it serves on, not just to one of them.
 				clientsToAdd = append(clientsToAdd,
@@ -4026,8 +4059,20 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, []stri
 		if err != nil {
 			return false, 0, nil, nil, nil, err
 		}
-		s.xrayApi.Init(p.GetAPIPort())
+		xrayResultsExist := false
 		for _, result := range results {
+			if result.Protocol != string(model.ExternalSubscription) {
+				xrayResultsExist = true
+				break
+			}
+		}
+		if xrayResultsExist {
+			s.xrayApi.Init(p.GetAPIPort())
+		}
+		for _, result := range results {
+			if result.Protocol == string(model.ExternalSubscription) {
+				continue
+			}
 			if result.Protocol == "l2tp" {
 				l2tpDisabledEmails = append(l2tpDisabledEmails, result.Email)
 				continue
@@ -4056,7 +4101,9 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, []stri
 				}
 			}
 		}
-		s.xrayApi.Close()
+		if xrayResultsExist {
+			s.xrayApi.Close()
+		}
 	}
 	result := tx.Model(xray.ClientTraffic{}).
 		Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
@@ -4413,6 +4460,89 @@ func (s *InboundService) membershipInboundIdsOutside(tx *gorm.DB, exceptInboundI
 	}
 	sort.Ints(ids)
 	return ids, nil
+}
+
+// membershipInboundIdsOutsideMany is the batched counterpart used while deleting an
+// inbound. The one-email helper scans every inbound's settings, so calling it once per
+// client turns a delete into clients × inbounds scans. Here both settings and mirror
+// memberships are read once, then grouped by normalized account email.
+func (s *InboundService) membershipInboundIdsOutsideMany(tx *gorm.DB, exceptInboundId int, emails []string) (map[string][]int, error) {
+	wanted := make(map[string]struct{}, len(emails))
+	for _, email := range emails {
+		if key := accountKey(email); key != "" {
+			wanted[key] = struct{}{}
+		}
+	}
+	result := make(map[string][]int, len(wanted))
+	if len(wanted) == 0 {
+		return result, nil
+	}
+
+	keys := make([]string, 0, len(wanted))
+	for key := range wanted {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var inbounds []*model.Inbound
+	if err := tx.Model(&model.Inbound{}).Select("id", "settings").Find(&inbounds).Error; err != nil {
+		return nil, err
+	}
+	liveIDs := make(map[int]struct{}, len(inbounds))
+	found := make(map[string]map[int]struct{}, len(wanted))
+	for _, inbound := range inbounds {
+		liveIDs[inbound.Id] = struct{}{}
+		if inbound.Id == exceptInboundId {
+			continue
+		}
+		clients, ok := parseSettingsClients(inbound.Settings)
+		if !ok {
+			continue
+		}
+		for _, entry := range clients {
+			email, _ := entry["email"].(string)
+			key := accountKey(email)
+			if _, match := wanted[key]; !match {
+				continue
+			}
+			if found[key] == nil {
+				found[key] = make(map[int]struct{})
+			}
+			found[key][inbound.Id] = struct{}{}
+		}
+	}
+
+	var memberships []struct {
+		EmailKey  string `gorm:"column:email_key"`
+		InboundID int    `gorm:"column:inbound_id"`
+	}
+	if err := tx.Table("account_inbounds").
+		Select("LOWER(TRIM(accounts.email)) AS email_key, account_inbounds.inbound_id AS inbound_id").
+		Joins("JOIN accounts ON accounts.id = account_inbounds.account_id").
+		Where("LOWER(TRIM(accounts.email)) IN ?", keys).
+		Where("account_inbounds.inbound_id <> ?", exceptInboundId).
+		Scan(&memberships).Error; err != nil {
+		return nil, err
+	}
+	for _, membership := range memberships {
+		if _, live := liveIDs[membership.InboundID]; !live {
+			continue
+		}
+		if found[membership.EmailKey] == nil {
+			found[membership.EmailKey] = make(map[int]struct{})
+		}
+		found[membership.EmailKey][membership.InboundID] = struct{}{}
+	}
+
+	for key, ids := range found {
+		ordered := make([]int, 0, len(ids))
+		for id := range ids {
+			ordered = append(ordered, id)
+		}
+		sort.Ints(ordered)
+		result[key] = ordered
+	}
+	return result, nil
 }
 
 // emailServedOutside answers whether an email is already served by something OTHER
@@ -6076,7 +6206,7 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 			}
 		}
 
-		if needApiDel {
+		if needApiDel && !IsExternalSubscriptionInbound(oldInbound) {
 			s.xrayApi.Init(p.GetAPIPort())
 			if err1 := s.xrayApi.RemoveUser(oldInbound.Tag, storedEmail); err1 == nil {
 				logger.Debug("Client deleted by api:", storedEmail)

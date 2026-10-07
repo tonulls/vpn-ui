@@ -2,6 +2,7 @@ package sub
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -89,6 +90,45 @@ func (s *SubService) forResponse() *SubService {
 // BuildPageData on the shared one, so a value stashed on the copy is not there to
 // be read back. Answering "gregorian" for a panel configured on the Jalali calendar
 // is a silent wrong answer, not a missing one.
+// uniqueExternalSubscriptionURIs removes repeated credentials only between slots
+// that share the exact source and country filter. The identity ignores the URI
+// fragment (display name), so the same VLESS key with two labels is still one key.
+func (s *SubService) uniqueExternalSubscriptionURIs(slotID int, uris []string) []string {
+	if s.scope == nil || len(uris) == 0 {
+		return uris
+	}
+	group := (&service.DynamicSubscriptionService{}).ExternalSubscriptionDedupGroup(slotID)
+	if group == "" {
+		return uris
+	}
+	seen := s.scope.externalURIs[group]
+	if seen == nil {
+		seen = make(map[string]struct{})
+		s.scope.externalURIs[group] = seen
+	}
+	unique := make([]string, 0, len(uris))
+	for _, uri := range uris {
+		parsed, err := url.Parse(uri)
+		identity := uri
+		if err == nil && parsed != nil {
+			parsed.Scheme = strings.ToLower(parsed.Scheme)
+			parsed.Host = strings.ToLower(parsed.Host)
+			parsed.Fragment = ""
+			parsed.RawFragment = ""
+			parsed.RawQuery = parsed.Query().Encode()
+			identity = parsed.String()
+		}
+		sum := sha256.Sum256([]byte(identity))
+		fingerprint := hex.EncodeToString(sum[:])
+		if _, duplicate := seen[fingerprint]; duplicate {
+			continue
+		}
+		seen[fingerprint] = struct{}{}
+		unique = append(unique, uri)
+	}
+	return unique
+}
+
 func (s *SubService) resolveDatepicker() string {
 	if s.datepicker != "" {
 		return s.datepicker
@@ -117,6 +157,21 @@ func (s *SubService) resolveTraffic(inbound *model.Inbound, email string) (traff
 	}
 	row, ok := s.getClientTraffics(inbound.ClientStats, email)
 	return row, false, ok
+}
+
+// subscriptionMemberVisible keeps the raw, JSON, and Clash renderers aligned for
+// virtual external memberships. The raw renderer has historically applied this
+// quota gate; JSON/Clash apply it to external slots so they cannot bypass account
+// authorization just because the URI is translated to another format.
+func (s *SubService) subscriptionMemberVisible(inbound *model.Inbound, email string, clientEnabled bool) bool {
+	quotaState := s.scope.membershipQuota(inbound, email)
+	visible := clientEnabled
+	if quotaState.quota.Enabled && quotaState.quota.Exhausted {
+		accountTraffic, accountBacked, _ := s.resolveTraffic(inbound, email)
+		accountAllowed := !accountBacked || accountTraffic.Enable
+		visible = accountAllowed && service.MembershipEnabled(quotaState.membership)
+	}
+	return visible
 }
 
 // GetSubs retrieves subscription links for a given subscription ID and host.
@@ -156,13 +211,7 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 			if client.SubID != subId {
 				continue
 			}
-			quotaState := s.scope.membershipQuota(inbound, client.Email)
-			visible := client.Enable
-			if quotaState.quota.Enabled && quotaState.quota.Exhausted {
-				accountTraffic, accountBacked, _ := s.resolveTraffic(inbound, client.Email)
-				accountAllowed := !accountBacked || accountTraffic.Enable
-				visible = accountAllowed && service.MembershipEnabled(quotaState.membership)
-			}
+			visible := s.subscriptionMemberVisible(inbound, client.Email, client.Enable)
 			if visible {
 				// Count every matching client's usage so the subscriber page shows the
 				// account's remaining traffic/days for ALL protocols, including ones with
@@ -171,7 +220,16 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 				// getLink).
 				ct, accountBacked, _ := s.resolveTraffic(inbound, client.Email)
 				usage.add(client.Email, ct, accountBacked)
-				if link := s.getLink(inbound, client.Email); link != "" {
+				link := ""
+				if inbound.Protocol == model.ExternalSubscription {
+					slotID := service.ExternalSubscriptionSlotID(inbound)
+					if uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(slotID); ok {
+						link = strings.Join(s.uniqueExternalSubscriptionURIs(slotID, uris), "\n")
+					}
+				} else {
+					link = s.getLink(inbound, client.Email)
+				}
+				if link != "" {
 					result = append(result, link)
 				}
 			}
@@ -213,9 +271,9 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 			JSON_EACH(CASE WHEN JSON_VALID(inbounds.settings)
 				THEN JSON_EXTRACT(inbounds.settings, '$.clients') ELSE '[]' END) AS client
 		WHERE
-			protocol in ('vmess','vless','trojan','shadowsocks','hysteria','hysteria2','anytls','tuic','naive','mtproto','ssh','wg-c','awg','gre','openvpn','l2tp','pptp','openconnect','sstp','ikev2')
+			protocol in ('vmess','vless','trojan','shadowsocks','hysteria','hysteria2','anytls','tuic','naive','mtproto','ssh','wg-c','awg','gre','openvpn','l2tp','pptp','openconnect','sstp','ikev2','external_subscription')
 			AND JSON_EXTRACT(client.value, '$.subId') = ? AND enable = ?
-	)`, subId, true).Order("id ASC").Find(&inbounds).Error
+	)`, subId, true).Order("CASE WHEN sort_order > 0 THEN 0 ELSE 1 END, sort_order, id ASC").Find(&inbounds).Error
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +352,14 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		// a connection card: parseable enough for a client to accept the account and
 		// show its quota, with the credentials in the name.
 		return s.genConnectionCard(inbound, email)
+	case model.ExternalSubscription:
+		uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
+		if !ok || len(uris) == 0 {
+			return ""
+		}
+		// Preserve each vetted source URI exactly. They are revealed only inside the
+		// authorized subscription response, after the normal membership/quota gate.
+		return strings.Join(uris, "\n")
 	case "gre":
 		// No entry at all, deliberately. GRE's peer is a ROUTER: there is no app to paste
 		// a URI into, and there is no port for one to name either, since GRE is IP protocol
