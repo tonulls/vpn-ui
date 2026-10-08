@@ -33,20 +33,24 @@ const (
 	ExternalSubscriptionProbeTimeout                    = 20 * time.Second
 	ExternalSubscriptionMaxCandidatesPerRun             = 3
 	ExternalSubscriptionCandidateBatchDelay             = 10 * time.Second
+	ExternalSubscriptionSchedulerProbeBudget            = 1
 )
 
 var (
-	ErrExternalSubscriptionProbeBusy = errors.New("external subscription probe is busy")
-	externalSubscriptionRunMu        sync.Mutex
+	ErrExternalSubscriptionProbeBusy     = errors.New("external subscription probe is busy")
+	errExternalSubscriptionProbeDeferred = errors.New("external subscription probe deferred by scheduler budget")
+	externalSubscriptionRunMu            sync.Mutex
+	externalSubscriptionSchedulerCursor  int
 )
 
 // DynamicSubscriptionService manages remote lists and verified URI selections per slot.
 // Credential-bearing URIs are returned only by subscription getters, called after the
 // normal account/membership checks.
 type DynamicSubscriptionService struct {
-	fetchSource func(context.Context, string, string, string) (externalSourceResult, error)
-	probe       func(context.Context, ExternalSubscriptionCandidate, string) error
-	now         func() time.Time
+	fetchSource          func(context.Context, string, string, string) (externalSourceResult, error)
+	probe                func(context.Context, ExternalSubscriptionCandidate, string) error
+	now                  func() time.Time
+	schedulerProbeBudget *int
 }
 
 type ExternalSubscriptionSettingsView struct {
@@ -74,7 +78,9 @@ type ExternalSubscriptionSlotView struct {
 	ID                           int      `json:"id"`
 	Name                         string   `json:"name"`
 	ShowName                     bool     `json:"showName"`
-	SourceURL                    string   `json:"sourceUrl"`
+	// SourceURL is returned by the controller only to superadmins; source paths
+	// and queries may contain bearer credentials.
+	SourceURL                    string   `json:"sourceUrl,omitempty"`
 	RefreshIntervalMinutes       int      `json:"refreshIntervalMinutes"`
 	CheckIntervalMinutes         int      `json:"checkIntervalMinutes"`
 	SubscriptionKeyCount         int      `json:"subscriptionKeyCount"`
@@ -293,6 +299,9 @@ func (s *DynamicSubscriptionService) UpdateSettings(view ExternalSubscriptionSet
 		_ = database.GetDB().Model(&model.ExternalSubscriptionSlot{}).Where("enabled = ?", true).Updates(map[string]any{
 			"status": "checking", "next_check_at": now, "candidate_cursor": 0,
 			"manual_rotate": false, "last_error": "",
+			"replacement_candidates_json": "[]", "rotation_candidates_json": "[]",
+			"rotation_fingerprints_json": "[]", "active_check_fingerprints_json": "[]",
+			"active_check_failures_json": "[]", "active_check_cursor": 0,
 		}).Error
 	}
 	return externalSubscriptionSettingsView(settings), nil
@@ -347,10 +356,10 @@ func (s *DynamicSubscriptionService) StopModule() error {
 	if !externalSelectorInstalled() {
 		return errors.New("External Selector не установлен")
 	}
-	if !externalSubscriptionRunMu.TryLock() {
-		return ErrExternalSubscriptionProbeBusy
-	}
-	defer externalSubscriptionRunMu.Unlock()
+	// Stop is a safety gate, not a mutation of the in-flight probe state. It must
+	// remain available while a fetch/check holds externalSubscriptionRunMu: once
+	// Enabled is false, subscription requests stop receiving these URIs, and a
+	// later RestartModule resets the slots before they can be served again.
 	settings, err := s.settingsRow()
 	if err != nil {
 		return err
@@ -365,26 +374,35 @@ func (s *DynamicSubscriptionService) RestartModule() error {
 	if !externalSelectorInstalled() {
 		return errors.New("External Selector не установлен")
 	}
-	if !externalSubscriptionRunMu.TryLock() {
-		return ErrExternalSubscriptionProbeBusy
+	// Wait for the current bounded fetch/probe to finish instead of surfacing a
+	// transient "busy" error to an operator. StopModule remains non-blocking so
+	// it can immediately gate subscription output during that same operation.
+	if _, err := s.Settings(); err != nil {
+		return err
 	}
+	externalSubscriptionRunMu.Lock()
 	defer externalSubscriptionRunMu.Unlock()
-	settings, err := s.settingsRow()
-	if err != nil {
-		return err
-	}
-	settings.Enabled = true
-	if err := database.GetDB().Save(&settings).Error; err != nil {
-		return err
-	}
+
 	now := s.clock().UnixMilli()
-	return database.GetDB().Model(&model.ExternalSubscriptionSlot{}).
-		Where("enabled = ?", true).
-		Updates(map[string]any{
-			"next_fetch_at": now, "next_check_at": now, "status": "pending",
-			"active_uri": "", "active_fingerprint": "", "active_name": "",
-			"active_flag": "", "candidate_cursor": 0, "manual_rotate": false, "last_error": "",
-		}).Error
+	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+		settings := model.ExternalSubscriptionSettings{ID: ExternalSubscriptionSettingsID}
+		if err := tx.First(&settings, ExternalSubscriptionSettingsID).Error; err != nil {
+			return err
+		}
+		settings.Enabled = true
+		if err := tx.Save(&settings).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.ExternalSubscriptionSlot{}).
+			Where("enabled = ?", true).
+			Updates(map[string]any{
+				"next_fetch_at": now, "next_check_at": now, "status": "checking",
+				"candidate_cursor": 0, "manual_rotate": false, "last_error": "",
+				"replacement_candidates_json": "[]", "rotation_candidates_json": "[]",
+				"rotation_fingerprints_json": "[]", "active_check_fingerprints_json": "[]",
+				"active_check_failures_json": "[]", "active_check_cursor": 0,
+			}).Error
+	})
 }
 
 // ModuleLogSummary returns a credential-free operational snapshot. There is no
@@ -487,7 +505,8 @@ func (s *DynamicSubscriptionService) UpdateSlot(id int, input ExternalSubscripti
 		return ExternalSubscriptionSlotView{}, err
 	}
 	wasEnabled := row.Enabled
-	changedSelection := row.SourceURL != updated.SourceURL || row.FilterMode != updated.FilterMode || row.CountryFlagsJSON != updated.CountryFlagsJSON
+	changedFilter := row.FilterMode != updated.FilterMode || row.CountryFlagsJSON != updated.CountryFlagsJSON
+	changedSource := row.SourceURL != updated.SourceURL
 	changedKeyCount := row.SubscriptionKeyCount != updated.SubscriptionKeyCount
 	changedForceRotation := row.ForceRotationIntervalMinutes != updated.ForceRotationIntervalMinutes
 	row.Name = updated.Name
@@ -508,34 +527,55 @@ func (s *DynamicSubscriptionService) UpdateSlot(id int, input ExternalSubscripti
 			row.NextForcedRotationAt = s.clock().Add(time.Duration(row.ForceRotationIntervalMinutes) * time.Minute).UnixMilli()
 		}
 	}
-	if changedSelection {
+	if changedFilter {
 		s.clearActive(&row)
-		row.RotationFingerprintsJSON = "[]"
+		setSlotRotationCandidates(&row, nil)
 		row.Status = "pending"
 		row.CandidateCursor = 0
 		row.ManualRotate = false
 		row.NextFetchAt = now
 		row.NextCheckAt = now
 		row.LastError = ""
-	} else if changedKeyCount {
-		row.RotationFingerprintsJSON = "[]"
-		selected := slotSelectedCandidates(&row, filterExternalCandidates(
-			&slotCandidateConfig{Mode: row.FilterMode, FlagsJSON: row.CountryFlagsJSON},
-			parseStoredCandidates(row.CandidateDataJSON),
-		))
-		if len(selected) > row.SubscriptionKeyCount {
-			selected = selected[:row.SubscriptionKeyCount]
+	} else {
+		if changedSource {
+			// Changing the source affects future candidates, not the already
+			// verified active keys. Drop pending candidates from the old source.
+			setSlotReplacementCandidates(&row, nil)
+			setSlotRotationCandidates(&row, nil)
+			clearSlotActiveCheck(&row)
+			row.CandidateCursor = 0
+			row.ManualRotate = false
+			row.NextFetchAt = now
 		}
-		setSlotSelectedCandidates(&row, selected)
-		row.CandidateCursor = 0
-		row.ManualRotate = false
-		row.Status = "checking"
-		row.NextCheckAt = now
-		row.LastError = ""
+		if changedKeyCount {
+			setSlotRotationCandidates(&row, nil)
+			setSlotReplacementCandidates(&row, nil)
+			clearSlotActiveCheck(&row)
+			selected := slotSelectedCandidates(&row, filterExternalCandidates(
+				&slotCandidateConfig{Mode: row.FilterMode, FlagsJSON: row.CountryFlagsJSON},
+				parseStoredCandidates(row.CandidateDataJSON),
+			))
+			if len(selected) > row.SubscriptionKeyCount {
+				selected = selected[:row.SubscriptionKeyCount]
+			}
+			setSlotSelectedCandidates(&row, selected)
+			row.CandidateCursor = 0
+			row.ManualRotate = false
+			row.Status = "checking"
+			row.NextCheckAt = now
+			row.LastError = ""
+		} else if changedSource {
+			row.Status = "checking"
+			if len(slotSelectedCandidates(&row, nil)) == 0 {
+				row.Status = "pending"
+			}
+			row.NextCheckAt = now
+			row.LastError = ""
+		}
 	}
 	if !row.Enabled {
 		row.ManualRotate = false
-		row.RotationFingerprintsJSON = "[]"
+		setSlotRotationCandidates(&row, nil)
 		row.NextForcedRotationAt = 0
 		s.clearActive(&row)
 		row.Status = "disabled"
@@ -574,14 +614,32 @@ func (s *DynamicSubscriptionService) RequestRefresh(id int) error {
 	if id < 1 {
 		return errors.New("неверный идентификатор подмодуля")
 	}
+	if !externalSelectorEnabled() {
+		return errors.New("External Selector остановлен")
+	}
+	// Serialize the request with the running fetch/probe so its durable state
+	// cannot be overwritten by a stale scheduler snapshot. The UI shows the
+	// queued refresh state optimistically while this bounded operation finishes.
+	externalSubscriptionRunMu.Lock()
+	defer externalSubscriptionRunMu.Unlock()
+	if !externalSelectorEnabled() {
+		return errors.New("External Selector остановлен")
+	}
 	db := database.GetDB()
 	var slot model.ExternalSubscriptionSlot
 	if err := db.First(&slot, id).Error; err != nil {
 		return err
 	}
+	if !slot.Enabled {
+		return errors.New("подмодуль отключён")
+	}
 	now := s.clock().UnixMilli()
-	return db.Model(&slot).
-		Updates(map[string]any{"next_fetch_at": now, "next_check_at": now, "last_error": ""}).Error
+	return db.Model(&slot).Updates(map[string]any{
+		"next_fetch_at": now, "next_check_at": now, "candidate_cursor": 0,
+		"status": "refreshing_source", "last_error": "",
+		"replacement_candidates_json": "[]", "active_check_fingerprints_json": "[]",
+		"active_check_failures_json": "[]", "active_check_cursor": 0,
+	}).Error
 }
 
 // RequestNextSlotCandidate starts a bounded background scan for a complete replacement pool.
@@ -627,7 +685,9 @@ func (s *DynamicSubscriptionService) RequestNextSlotCandidate(id int) error {
 	}
 	now := s.clock().UnixMilli()
 	slot.CandidateCursor = 0
-	slot.RotationFingerprintsJSON = "[]"
+	setSlotRotationCandidates(&slot, nil)
+	setSlotReplacementCandidates(&slot, nil)
+	clearSlotActiveCheck(&slot)
 	slot.ManualRotate = true
 	slot.Status = "checking"
 	slot.LastError = "Ищется новый проверенный набор ключей; текущий набор останется до полной проверки."
@@ -654,10 +714,6 @@ func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]st
 	if slotID < 1 || !externalSelectorEnabled() {
 		return nil, false
 	}
-	settings, err := s.settingsRow()
-	if err != nil || len(externalSubscriptionProbeURLs(settings)) == 0 {
-		return nil, false
-	}
 	var row model.ExternalSubscriptionSlot
 	if err := database.GetDB().First(&row, slotID).Error; err != nil {
 		return nil, false
@@ -673,7 +729,10 @@ func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]st
 	if len(selected) == 0 && row.ActiveURI != "" {
 		selected = []ExternalSubscriptionCandidate{{URI: row.ActiveURI}}
 	}
-	if len(selected) == 0 || (row.Status != "healthy" && row.Status != "partial" && row.Status != "checking" && !row.ManualRotate) {
+	// Keep the last verified pool in subscriptions while a source refresh or a
+	// replacement/health check is pending. Status describes the work, not whether
+	// the previously verified keys should disappear from the user's subscription.
+	if len(selected) == 0 {
 		return nil, false
 	}
 	if row.SubscriptionKeyCount > 0 && len(selected) > row.SubscriptionKeyCount {
@@ -721,40 +780,47 @@ func (s *DynamicSubscriptionService) RunDue(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !externalSelectorEnabled() {
-		return
-	}
-	if !externalSubscriptionRunMu.TryLock() {
+	if !externalSelectorEnabled() || !externalSubscriptionRunMu.TryLock() {
 		return
 	}
 	defer externalSubscriptionRunMu.Unlock()
 	if !externalSelectorEnabled() {
 		return
 	}
+	budget := ExternalSubscriptionSchedulerProbeBudget
+	s.schedulerProbeBudget = &budget
+	defer func() { s.schedulerProbeBudget = nil }()
+
 	var slots []model.ExternalSubscriptionSlot
-	if err := database.GetDB().WithContext(ctx).Order("id ASC").Find(&slots).Error; err != nil {
+	if err := database.GetDB().WithContext(ctx).Order("id ASC").Find(&slots).Error; err != nil || len(slots) == 0 {
 		return
 	}
-	for i := range slots {
-		if ctx.Err() != nil {
+	start := sort.Search(len(slots), func(i int) bool { return slots[i].ID > externalSubscriptionSchedulerCursor })
+	if start == len(slots) {
+		start = 0
+	}
+	for offset := 0; offset < len(slots); offset++ {
+		if ctx.Err() != nil || !externalSelectorEnabled() {
 			return
 		}
-		slot := &slots[i]
+		slot := &slots[(start+offset)%len(slots)]
 		if !slot.Enabled {
 			continue
 		}
 		now := s.clock().UnixMilli()
 		if slot.NextFetchAt == 0 || slot.NextFetchAt <= now {
+			// Source I/O is also limited to one slot per scheduler tick. A bad or
+			// slow upstream can no longer delay every other slot in this pass.
 			s.refreshSlot(ctx, slot)
-		}
-		if ctx.Err() != nil {
+			externalSubscriptionSchedulerCursor = slot.ID
 			return
 		}
-		now = s.clock().UnixMilli()
 		if slot.ForceRotationIntervalMinutes > 0 && (slot.NextForcedRotationAt == 0 || slot.NextForcedRotationAt <= now) {
 			if !slot.ManualRotate {
 				slot.ManualRotate = true
-				slot.RotationFingerprintsJSON = "[]"
+				setSlotRotationCandidates(slot, nil)
+				setSlotReplacementCandidates(slot, nil)
+				clearSlotActiveCheck(slot)
 				slot.CandidateCursor = 0
 				slot.Status = "checking"
 				slot.LastError = "По расписанию собирается новый набор; текущие ключи останутся до проверки замены."
@@ -765,22 +831,32 @@ func (s *DynamicSubscriptionService) RunDue(ctx context.Context) {
 		}
 		if slot.NextCheckAt == 0 || slot.NextCheckAt <= now {
 			s.checkSlot(ctx, slot)
+			if budget < ExternalSubscriptionSchedulerProbeBudget {
+				externalSubscriptionSchedulerCursor = slot.ID
+				return
+			}
 		}
 	}
 }
 
 func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *model.ExternalSubscriptionSlot) {
+	previousStatus := slot.Status
+	slot.Status = "refreshing_source"
+	slot.LastError = ""
+	_ = database.GetDB().Model(slot).Updates(map[string]any{
+		"status": slot.Status, "last_error": "",
+	}).Error
 	fetch := s.fetchSource
 	if fetch == nil {
 		fetch = fetchExternalSubscriptionSource
 	}
 	result, err := fetch(ctx, slot.SourceURL, slot.SourceETag, slot.SourceLastModified)
 	if err != nil {
+		now := s.clock()
+		slot.Status = "source_error"
 		slot.LastError = "Не удалось загрузить источник"
-		if slot.ActiveURI == "" {
-			slot.Status = "source_error"
-		}
-		slot.NextFetchAt = s.clock().Add(time.Duration(slot.RefreshIntervalMinutes) * time.Minute).UnixMilli()
+		slot.NextFetchAt = now.Add(time.Duration(slot.RefreshIntervalMinutes) * time.Minute).UnixMilli()
+		scheduleExternalSlotRetryCheck(slot, now)
 		_ = database.GetDB().Save(slot).Error
 		return
 	}
@@ -795,8 +871,21 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 		if result.LastModified != "" {
 			slot.SourceLastModified = result.LastModified
 		}
-		if slot.ActiveURI == "" && slot.MatchingCount > 0 {
+		if previousStatus == "refreshing_source" {
+			active := slotSelectedCandidates(slot, nil)
+			if slot.MatchingCount == 0 && len(active) == 0 {
+				slot.Status = "no_candidates"
+				scheduleExternalSlotRetryCheck(slot, now)
+			} else {
+				slot.Status = "checking"
+				slot.CandidateCursor = 0
+				slot.NextCheckAt = now.UnixMilli()
+			}
+		} else if slot.ActiveURI == "" && slot.MatchingCount > 0 {
+			slot.Status = "checking"
 			slot.NextCheckAt = now.UnixMilli()
+		} else {
+			slot.Status = previousStatus
 		}
 		_ = database.GetDB().Save(slot).Error
 		return
@@ -805,10 +894,9 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 	if err != nil {
 		slot.SourceETag = ""
 		slot.SourceLastModified = ""
+		slot.Status = "source_error"
 		slot.LastError = "Источник содержит слишком много данных или некорректный формат"
-		if slot.ActiveURI == "" {
-			slot.Status = "source_error"
-		}
+		scheduleExternalSlotRetryCheck(slot, now)
 		_ = database.GetDB().Save(slot).Error
 		return
 	}
@@ -816,10 +904,9 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 	if err != nil {
 		slot.SourceETag = ""
 		slot.SourceLastModified = ""
+		slot.Status = "source_error"
 		slot.LastError = "Не удалось сохранить разобранный источник"
-		if slot.ActiveURI == "" {
-			slot.Status = "source_error"
-		}
+		scheduleExternalSlotRetryCheck(slot, now)
 		_ = database.GetDB().Save(slot).Error
 		return
 	}
@@ -828,29 +915,34 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 	slot.SourceETag = result.ETag
 	slot.SourceLastModified = result.LastModified
 	manualRotationPending := slot.ManualRotate
+	oldCandidates := filterExternalCandidates(
+		&slotCandidateConfig{Mode: slot.FilterMode, FlagsJSON: slot.CountryFlagsJSON},
+		parseStoredCandidates(slot.CandidateDataJSON),
+	)
+	selected := slotSelectedCandidates(slot, oldCandidates)
+	rotation := slotRotationCandidates(slot, oldCandidates)
 	filtered := filterExternalCandidates(&slotCandidateConfig{Mode: slot.FilterMode, FlagsJSON: slot.CountryFlagsJSON}, candidates)
 	slot.CandidateDataJSON = string(encoded)
 	slot.CandidateCount = stats.Accepted
 	slot.MatchingCount = len(filtered)
 	slot.CandidateCursor = 0
-	selected := slotSelectedCandidates(slot, filtered)
 	if len(selected) > slot.SubscriptionKeyCount && slot.SubscriptionKeyCount > 0 {
 		selected = selected[:slot.SubscriptionKeyCount]
 	}
 	setSlotSelectedCandidates(slot, selected)
-	if len(filtered) == 0 {
-		slot.ManualRotate = false
-		slot.RotationFingerprintsJSON = "[]"
-		s.clearActive(slot)
+	if manualRotationPending {
+		setSlotRotationCandidates(slot, rotation)
+	} else {
+		setSlotRotationCandidates(slot, nil)
+	}
+	slot.ManualRotate = manualRotationPending
+	if len(filtered) == 0 && len(selected) == 0 && len(slotReplacementCandidates(slot)) == 0 && !slot.ManualRotate {
 		slot.Status = "no_candidates"
+		slot.LastError = ""
 		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
 	} else {
-		if manualRotationPending {
-			setSlotRotationCandidates(slot, slotRotationCandidates(slot, filtered))
-		} else {
-			slot.RotationFingerprintsJSON = "[]"
-		}
-		slot.ManualRotate = manualRotationPending
+		// Refreshing a source changes future candidates, not the already verified
+		// active/replacement pools. Keep serving those pools while checks resume.
 		slot.Status = "checking"
 		slot.NextCheckAt = now.UnixMilli()
 	}
@@ -863,12 +955,423 @@ type slotCandidateConfig struct {
 	FlagsJSON string
 }
 
+func scheduleExternalSlotRetryCheck(slot *model.ExternalSubscriptionSlot, now time.Time) {
+	delay := time.Duration(slot.CheckIntervalMinutes) * time.Minute
+	if delay <= 0 {
+		delay = ExternalSubscriptionCandidateBatchDelay
+	}
+	slot.NextCheckAt = now.Add(delay).UnixMilli()
+}
+
 func (s *DynamicSubscriptionService) checkSlot(ctx context.Context, slot *model.ExternalSubscriptionSlot) {
-	if !slot.ManualRotate && slot.SubscriptionKeyCount <= 1 {
-		s.checkSlotSingle(ctx, slot)
+	s.checkSlotMultiple(ctx, slot)
+}
+
+func (s *DynamicSubscriptionService) schedulerBudgetExhausted() bool {
+	return s.schedulerProbeBudget != nil && *s.schedulerProbeBudget <= 0
+}
+
+func (s *DynamicSubscriptionService) probeCandidateSet(
+	ctx context.Context,
+	candidate ExternalSubscriptionCandidate,
+	probeURLs []string,
+	probe func(context.Context, ExternalSubscriptionCandidate, string) error,
+) error {
+	if s.schedulerProbeBudget != nil {
+		if *s.schedulerProbeBudget <= 0 {
+			return errExternalSubscriptionProbeDeferred
+		}
+		(*s.schedulerProbeBudget)--
+	}
+	return probeExternalVLESSCandidateSet(ctx, candidate, probeURLs, probe)
+}
+
+func (s *DynamicSubscriptionService) checkSlotPersistentPool(
+	ctx context.Context,
+	slot *model.ExternalSubscriptionSlot,
+	filtered []ExternalSubscriptionCandidate,
+	now time.Time,
+) {
+	keyCount := slot.SubscriptionKeyCount
+	if keyCount < 1 {
+		keyCount = 1
+	}
+	if keyCount > ExternalSubscriptionMaxKeysPerSlot {
+		keyCount = ExternalSubscriptionMaxKeysPerSlot
+	}
+	slot.SubscriptionKeyCount = keyCount
+	active := slotSelectedCandidates(slot, filtered)
+	if len(active) > keyCount {
+		active = active[:keyCount]
+	}
+	setSlotSelectedCandidates(slot, active)
+	activeSet := make(map[string]struct{}, len(active))
+	for _, candidate := range active {
+		activeSet[candidate.Fingerprint] = struct{}{}
+	}
+	replacements := make([]ExternalSubscriptionCandidate, 0)
+	for _, candidate := range slotReplacementCandidates(slot) {
+		if _, duplicate := activeSet[candidate.Fingerprint]; duplicate {
+			continue
+		}
+		replacements = append(replacements, candidate)
+	}
+	setSlotReplacementCandidates(slot, replacements)
+
+	settings, err := s.settingsRow()
+	if err != nil {
+		s.deferSlotCheck(slot, now, "probe_error", "Не удалось прочитать настройки проверки", time.Duration(slot.CheckIntervalMinutes)*time.Minute)
 		return
 	}
-	s.checkSlotMultiple(ctx, slot)
+	probe := s.probe
+	if probe == nil {
+		probe = probeExternalVLESSCandidate
+	}
+	probeURLs := externalSubscriptionProbeURLs(settings)
+	if len(probeURLs) == 0 {
+		s.deferSlotCheck(slot, now, "probe_error", "Добавьте хотя бы один публичный HTTPS-адрес проверки.", time.Duration(slot.CheckIntervalMinutes)*time.Minute)
+		return
+	}
+	probeCandidate := func(candidate ExternalSubscriptionCandidate) error {
+		probeCtx, cancel := context.WithTimeout(ctx, ExternalSubscriptionProbeTimeout)
+		defer cancel()
+		return s.probeCandidateSet(probeCtx, candidate, probeURLs, probe)
+	}
+
+	checkFingerprints, _ := slotActiveCheckState(slot)
+	if len(checkFingerprints) > 0 {
+		s.runActivePoolCheck(ctx, slot, active, replacements, probeCandidate, now)
+		return
+	}
+
+	if len(active) < keyCount {
+		s.fillInitialPool(ctx, slot, filtered, active, replacements, keyCount, probeCandidate, now)
+		return
+	}
+
+	s.scanReplacementAndCheckPool(ctx, slot, filtered, active, replacements, probeCandidate, now)
+}
+
+func (s *DynamicSubscriptionService) deferSlotCheck(slot *model.ExternalSubscriptionSlot, now time.Time, status, message string, delay time.Duration) {
+	if delay <= 0 {
+		delay = time.Duration(slot.CheckIntervalMinutes) * time.Minute
+	}
+	slot.Status = status
+	slot.LastError = message
+	slot.NextCheckAt = now.Add(delay).UnixMilli()
+	_ = database.GetDB().Save(slot).Error
+}
+
+func (s *DynamicSubscriptionService) fillInitialPool(
+	ctx context.Context,
+	slot *model.ExternalSubscriptionSlot,
+	filtered, active, replacements []ExternalSubscriptionCandidate,
+	keyCount int,
+	probeCandidate func(ExternalSubscriptionCandidate) error,
+	now time.Time,
+) {
+	active = append(active, replacements...)
+	if len(active) > keyCount {
+		active = active[:keyCount]
+	}
+	setSlotSelectedCandidates(slot, active)
+	setSlotReplacementCandidates(slot, nil)
+	if len(active) >= keyCount {
+		slot.Status = "healthy"
+		slot.LastError = ""
+		slot.LastCheckedAt = now.UnixMilli()
+		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
+		_ = database.GetDB().Save(slot).Error
+		return
+	}
+
+	activeSet := make(map[string]struct{}, len(active))
+	for _, candidate := range active {
+		activeSet[candidate.Fingerprint] = struct{}{}
+	}
+	index := slot.CandidateCursor
+	if index < 0 || index >= len(filtered) {
+		index = 0
+	}
+	attempted := 0
+	var lastProbeError error
+	for index < len(filtered) && len(active) < keyCount && attempted < ExternalSubscriptionMaxCandidatesPerRun {
+		if ctx.Err() != nil {
+			slot.CandidateCursor = index
+			slot.Status = "checking"
+			slot.LastError = fmt.Sprintf("Выбрано %d из %d ключей; поиск продолжится.", len(active), keyCount)
+			slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+			setSlotSelectedCandidates(slot, active)
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+		candidateIndex := index
+		candidate := filtered[index]
+		index++
+		if _, exists := activeSet[candidate.Fingerprint]; exists {
+			continue
+		}
+		attempted++
+		probeErr := probeCandidate(candidate)
+		if !externalSelectorEnabled() {
+			return
+		}
+		if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) || errors.Is(probeErr, errExternalSubscriptionProbeDeferred) {
+			slot.CandidateCursor = candidateIndex
+			slot.Status = "checking"
+			slot.LastError = fmt.Sprintf("Выбрано %d из %d ключей; поиск продолжится.", len(active), keyCount)
+			delay := ExternalSubscriptionCandidateBatchDelay
+			if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
+				delay = 30 * time.Second
+			}
+			slot.NextCheckAt = now.Add(delay).UnixMilli()
+			setSlotSelectedCandidates(slot, active)
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+		if ctx.Err() != nil {
+			slot.CandidateCursor = candidateIndex
+			slot.Status = "checking"
+			slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+			setSlotSelectedCandidates(slot, active)
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+		if probeErr != nil {
+			lastProbeError = probeErr
+		} else {
+			active = append(active, candidate)
+			activeSet[candidate.Fingerprint] = struct{}{}
+			setSlotSelectedCandidates(slot, active)
+			// Each successful initial key is durable and immediately available.
+			if err := database.GetDB().Save(slot).Error; err != nil {
+				return
+			}
+		}
+		if s.schedulerBudgetExhausted() {
+			break
+		}
+	}
+
+	if len(active) >= keyCount {
+		slot.CandidateCursor = index
+		if slot.CandidateCursor >= len(filtered) {
+			slot.CandidateCursor = 0
+		}
+		slot.Status = "healthy"
+		slot.LastError = ""
+		slot.LastCheckedAt = now.UnixMilli()
+		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
+	} else if index < len(filtered) {
+		slot.Status = "checking"
+		slot.CandidateCursor = index
+		slot.LastError = fmt.Sprintf("Выбрано %d из %d ключей; поиск продолжается. %s", len(active), keyCount, externalProbeFailureSummary(lastProbeError))
+		slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+	} else {
+		slot.CandidateCursor = 0
+		slot.LastCheckedAt = now.UnixMilli()
+		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
+		if len(active) > 0 {
+			slot.Status = "partial"
+			slot.LastError = fmt.Sprintf("Проверены все кандидаты; здоровых ключей %d из %d. %s", len(active), keyCount, externalProbeFailureSummary(lastProbeError))
+		} else if len(filtered) == 0 {
+			slot.Status = "no_candidates"
+			slot.LastError = ""
+		} else {
+			slot.Status = "no_healthy_nodes"
+			slot.LastError = fmt.Sprintf("Ни один из %d подходящих узлов не прошёл проверку. %s", len(filtered), externalProbeFailureSummary(lastProbeError))
+		}
+	}
+	setSlotSelectedCandidates(slot, active)
+	_ = database.GetDB().Save(slot).Error
+}
+
+func (s *DynamicSubscriptionService) scanReplacementAndCheckPool(
+	ctx context.Context,
+	slot *model.ExternalSubscriptionSlot,
+	filtered, active, replacements []ExternalSubscriptionCandidate,
+	probeCandidate func(ExternalSubscriptionCandidate) error,
+	now time.Time,
+) {
+	if len(replacements) == 0 {
+		activeSet := make(map[string]struct{}, len(active))
+		for _, candidate := range active {
+			activeSet[candidate.Fingerprint] = struct{}{}
+		}
+		index := slot.CandidateCursor
+		if index < 0 || index >= len(filtered) {
+			index = 0
+		}
+		attempted := 0
+		for index < len(filtered) && attempted < ExternalSubscriptionMaxCandidatesPerRun {
+			if ctx.Err() != nil {
+				slot.CandidateCursor = index
+				slot.Status = "checking"
+				slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+				_ = database.GetDB().Save(slot).Error
+				return
+			}
+			candidateIndex := index
+			candidate := filtered[index]
+			index++
+			if _, exists := activeSet[candidate.Fingerprint]; exists {
+				continue
+			}
+			attempted++
+			probeErr := probeCandidate(candidate)
+			if !externalSelectorEnabled() {
+				return
+			}
+			if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) || errors.Is(probeErr, errExternalSubscriptionProbeDeferred) {
+				slot.CandidateCursor = candidateIndex
+				slot.Status = "checking"
+				delay := ExternalSubscriptionCandidateBatchDelay
+				if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
+					delay = 30 * time.Second
+				}
+				slot.NextCheckAt = now.Add(delay).UnixMilli()
+				_ = database.GetDB().Save(slot).Error
+				return
+			}
+			if ctx.Err() != nil {
+				slot.CandidateCursor = candidateIndex
+				slot.Status = "checking"
+				slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+				_ = database.GetDB().Save(slot).Error
+				return
+			}
+			if probeErr == nil {
+				replacements = []ExternalSubscriptionCandidate{candidate}
+				setSlotReplacementCandidates(slot, replacements)
+			}
+			slot.CandidateCursor = index
+			if index >= len(filtered) {
+				slot.CandidateCursor = 0
+			}
+			if s.schedulerBudgetExhausted() {
+				break
+			}
+		}
+		if len(replacements) > 0 {
+			setSlotReplacementCandidates(slot, replacements)
+		} else if index >= len(filtered) {
+			slot.CandidateCursor = 0
+		}
+	}
+
+	fingerprints := candidateFingerprints(active)
+	setSlotActiveCheckState(slot, fingerprints, nil, 0)
+	slot.Status = "checking"
+	setSlotSelectedCandidates(slot, active)
+	_ = database.GetDB().Save(slot).Error
+	s.runActivePoolCheck(ctx, slot, active, replacements, probeCandidate, now)
+}
+
+func (s *DynamicSubscriptionService) runActivePoolCheck(
+	ctx context.Context,
+	slot *model.ExternalSubscriptionSlot,
+	active, replacements []ExternalSubscriptionCandidate,
+	probeCandidate func(ExternalSubscriptionCandidate) error,
+	now time.Time,
+) {
+	fingerprints, failures := slotActiveCheckState(slot)
+	if len(fingerprints) == 0 {
+		fingerprints = candidateFingerprints(active)
+		failures = nil
+		setSlotActiveCheckState(slot, fingerprints, failures, 0)
+	}
+	activeByFingerprint := make(map[string]ExternalSubscriptionCandidate, len(active))
+	for _, candidate := range active {
+		activeByFingerprint[candidate.Fingerprint] = candidate
+	}
+	cursor := slot.ActiveCheckCursor
+	for cursor < len(fingerprints) {
+		if ctx.Err() != nil {
+			slot.Status = "checking"
+			slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+			setSlotActiveCheckState(slot, fingerprints, failures, cursor)
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+		fingerprint := fingerprints[cursor]
+		candidate, exists := activeByFingerprint[fingerprint]
+		if exists {
+			probeErr := probeCandidate(candidate)
+			if !externalSelectorEnabled() {
+				return
+			}
+			if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) || errors.Is(probeErr, errExternalSubscriptionProbeDeferred) {
+				setSlotActiveCheckState(slot, fingerprints, failures, cursor)
+				slot.Status = "checking"
+				delay := ExternalSubscriptionCandidateBatchDelay
+				if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
+					delay = 30 * time.Second
+				}
+				slot.NextCheckAt = now.Add(delay).UnixMilli()
+				_ = database.GetDB().Save(slot).Error
+				return
+			}
+			if ctx.Err() != nil {
+				setSlotActiveCheckState(slot, fingerprints, failures, cursor)
+				slot.Status = "checking"
+				slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+				_ = database.GetDB().Save(slot).Error
+				return
+			}
+			if probeErr != nil {
+				failures = append(failures, fingerprint)
+			}
+		}
+		cursor++
+		setSlotActiveCheckState(slot, fingerprints, failures, cursor)
+		if err := database.GetDB().Save(slot).Error; err != nil {
+			return
+		}
+		if s.schedulerBudgetExhausted() && cursor < len(fingerprints) {
+			slot.Status = "checking"
+			slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+	}
+
+	failedSet := make(map[string]struct{}, len(failures))
+	for _, fingerprint := range failures {
+		failedSet[fingerprint] = struct{}{}
+	}
+	healthy := make([]ExternalSubscriptionCandidate, 0, len(active))
+	for _, candidate := range active {
+		if _, failed := failedSet[candidate.Fingerprint]; !failed {
+			healthy = append(healthy, candidate)
+		}
+	}
+	for _, replacement := range replacements {
+		if len(healthy) >= slot.SubscriptionKeyCount {
+			break
+		}
+		if _, duplicate := failedSet[replacement.Fingerprint]; duplicate {
+			continue
+		}
+		healthy = append(healthy, replacement)
+	}
+	setSlotSelectedCandidates(slot, healthy)
+	setSlotReplacementCandidates(slot, nil)
+	clearSlotActiveCheck(slot)
+	slot.LastCheckedAt = now.UnixMilli()
+	if len(healthy) >= slot.SubscriptionKeyCount {
+		slot.Status = "healthy"
+		slot.LastError = ""
+		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
+	} else if len(healthy) > 0 {
+		slot.Status = "partial"
+		slot.LastError = fmt.Sprintf("Недоступные ключи удалены; в пуле %d из %d. Поиск замены продолжается.", len(healthy), slot.SubscriptionKeyCount)
+		slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+	} else {
+		slot.Status = "no_healthy_nodes"
+		slot.LastError = "Все активные ключи недоступны; поиск замены продолжается."
+		slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
+	}
+	_ = database.GetDB().Save(slot).Error
 }
 
 func (s *DynamicSubscriptionService) checkSlotMultiple(ctx context.Context, slot *model.ExternalSubscriptionSlot) {
@@ -876,16 +1379,8 @@ func (s *DynamicSubscriptionService) checkSlotMultiple(ctx context.Context, slot
 	filtered := filterExternalCandidates(&slotCandidateConfig{Mode: slot.FilterMode, FlagsJSON: slot.CountryFlagsJSON}, candidates)
 	slot.MatchingCount = len(filtered)
 	now := s.clock()
-	if len(filtered) == 0 {
-		slot.ManualRotate = false
-		slot.RotationFingerprintsJSON = "[]"
-		s.clearActive(slot)
-		slot.Status = "no_candidates"
-		slot.LastError = ""
-		slot.LastCheckedAt = now.UnixMilli()
-		slot.CandidateCursor = 0
-		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		_ = database.GetDB().Save(slot).Error
+	if !slot.ManualRotate {
+		s.checkSlotPersistentPool(ctx, slot, filtered, now)
 		return
 	}
 	keyCount := slot.SubscriptionKeyCount
@@ -916,13 +1411,8 @@ func (s *DynamicSubscriptionService) checkSlotMultiple(ctx context.Context, slot
 	}
 	probeURLs := externalSubscriptionProbeURLs(settings)
 	if len(probeURLs) == 0 {
-		slot.ManualRotate = false
-		slot.RotationFingerprintsJSON = "[]"
-		s.clearActive(slot)
 		slot.Status = "probe_error"
 		slot.LastError = "Добавьте хотя бы один публичный HTTPS-адрес проверки."
-		slot.CandidateCursor = 0
-		slot.LastCheckedAt = now.UnixMilli()
 		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
 		_ = database.GetDB().Save(slot).Error
 		return
@@ -930,131 +1420,12 @@ func (s *DynamicSubscriptionService) checkSlotMultiple(ctx context.Context, slot
 	probeCandidate := func(candidate ExternalSubscriptionCandidate) error {
 		probeCtx, cancel := context.WithTimeout(ctx, ExternalSubscriptionProbeTimeout)
 		defer cancel()
-		return probeExternalVLESSCandidateSet(probeCtx, candidate, probeURLs, probe)
+		return s.probeCandidateSet(probeCtx, candidate, probeURLs, probe)
 	}
 
-	if slot.ManualRotate {
-		s.checkSlotFullRotation(ctx, slot, filtered, selected, keyCount, probeCandidate)
-		return
-	}
+	s.checkSlotFullRotation(ctx, slot, filtered, selected, keyCount, probeCandidate)
+	return
 
-	// Recheck a stable selected pool on each normal interval. While an incomplete
-	// pool is being scanned in batches, retain its already verified members and
-	// resume from CandidateCursor without probing them again.
-	if slot.Status != "checking" || slot.CandidateCursor == 0 {
-		verified := make([]ExternalSubscriptionCandidate, 0, len(selected))
-		for index, candidate := range selected {
-			if ctx.Err() != nil {
-				verified = append(verified, selected[index:]...)
-				setSlotSelectedCandidates(slot, verified)
-				slot.Status = "checking"
-				slot.CandidateCursor = 0
-				slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-				_ = database.GetDB().Save(slot).Error
-				return
-			}
-			probeErr := probeCandidate(candidate)
-			if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
-				verified = append(verified, selected[index:]...)
-				setSlotSelectedCandidates(slot, verified)
-				slot.Status = "checking"
-				slot.CandidateCursor = 0
-				slot.NextCheckAt = s.clock().Add(30 * time.Second).UnixMilli()
-				_ = database.GetDB().Save(slot).Error
-				return
-			}
-			if probeErr != nil {
-				continue
-			}
-			verified = append(verified, candidate)
-		}
-		selected = verified
-		setSlotSelectedCandidates(slot, selected)
-	}
-
-	if len(selected) >= keyCount {
-		slot.Status = "healthy"
-		slot.LastError = ""
-		slot.CandidateCursor = 0
-		slot.LastCheckedAt = s.clock().UnixMilli()
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		_ = database.GetDB().Save(slot).Error
-		return
-	}
-	selectedSet := make(map[string]struct{}, len(selected))
-	for _, candidate := range selected {
-		selectedSet[candidate.Fingerprint] = struct{}{}
-	}
-	start := slot.CandidateCursor
-	if start < 0 || start >= len(filtered) {
-		start = 0
-	}
-	attempted := 0
-	index := start
-	var lastProbeError error
-	for index < len(filtered) && attempted < ExternalSubscriptionMaxCandidatesPerRun {
-		candidate := filtered[index]
-		candidateIndex := index
-		index++
-		if _, exists := selectedSet[candidate.Fingerprint]; exists {
-			continue
-		}
-		if ctx.Err() != nil {
-			slot.Status = "checking"
-			slot.CandidateCursor = candidateIndex
-			slot.LastError = fmt.Sprintf("Выбрано %d из %d ключей; поиск продолжится.", len(selected), keyCount)
-			slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-			setSlotSelectedCandidates(slot, selected)
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-		attempted++
-		probeErr := probeCandidate(candidate)
-		if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
-			slot.Status = "checking"
-			slot.CandidateCursor = candidateIndex
-			slot.NextCheckAt = s.clock().Add(30 * time.Second).UnixMilli()
-			setSlotSelectedCandidates(slot, selected)
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-		if probeErr != nil {
-			lastProbeError = probeErr
-			continue
-		}
-		selected = append(selected, candidate)
-		selectedSet[candidate.Fingerprint] = struct{}{}
-		setSlotSelectedCandidates(slot, selected)
-		if len(selected) >= keyCount {
-			slot.Status = "healthy"
-			slot.LastError = ""
-			slot.CandidateCursor = 0
-			slot.ManualRotate = false
-			slot.LastCheckedAt = s.clock().UnixMilli()
-			slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-	}
-	slot.LastCheckedAt = s.clock().UnixMilli()
-	if index < len(filtered) {
-		slot.Status = "checking"
-		slot.CandidateCursor = index
-		slot.LastError = fmt.Sprintf("Выбрано %d из %d ключей; поиск продолжается. %s", len(selected), keyCount, externalProbeFailureSummary(lastProbeError))
-		slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-	} else {
-		slot.CandidateCursor = 0
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		if len(selected) > 0 {
-			slot.Status = "partial"
-			slot.LastError = fmt.Sprintf("Проверены все кандидаты; здоровых ключей %d из %d. %s", len(selected), keyCount, externalProbeFailureSummary(lastProbeError))
-		} else {
-			slot.Status = "no_healthy_nodes"
-			slot.LastError = fmt.Sprintf("Ни один из %d подходящих узлов не прошёл проверку. %s", len(filtered), externalProbeFailureSummary(lastProbeError))
-		}
-	}
-	setSlotSelectedCandidates(slot, selected)
-	_ = database.GetDB().Save(slot).Error
 }
 
 func (s *DynamicSubscriptionService) checkSlotFullRotation(
@@ -1110,30 +1481,51 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 		}
 		attempted++
 		probeErr := probeCandidate(candidate)
-		if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
+		if !externalSelectorEnabled() {
+			return
+		}
+		if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) || errors.Is(probeErr, errExternalSubscriptionProbeDeferred) {
 			slot.CandidateCursor = candidateIndex
 			slot.Status = "checking"
 			slot.LastError = fmt.Sprintf("Проверено %d из %d ключей нового набора; проверка продолжится.", len(rotation), keyCount)
-			slot.NextCheckAt = now.Add(30 * time.Second).UnixMilli()
+			delay := ExternalSubscriptionCandidateBatchDelay
+			if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
+				delay = 30 * time.Second
+			}
+			slot.NextCheckAt = now.Add(delay).UnixMilli()
 			setSlotRotationCandidates(slot, rotation)
 			_ = database.GetDB().Save(slot).Error
 			return
 		}
 		if probeErr != nil {
 			lastProbeError = probeErr
+			if s.schedulerBudgetExhausted() {
+				break
+			}
 			continue
 		}
 		rotation = append(rotation, candidate)
 		rotationSet[candidate.Fingerprint] = struct{}{}
 		if len(rotation) >= keyCount {
 			setSlotSelectedCandidates(slot, rotation[:keyCount])
-			slot.RotationFingerprintsJSON = "[]"
+			setSlotRotationCandidates(slot, nil)
+			setSlotReplacementCandidates(slot, nil)
+			clearSlotActiveCheck(slot)
 			slot.ManualRotate = false
 			slot.CandidateCursor = 0
 			slot.Status = "healthy"
 			slot.LastError = ""
 			slot.LastCheckedAt = s.clock().UnixMilli()
 			slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
+			_ = database.GetDB().Save(slot).Error
+			return
+		}
+		if s.schedulerBudgetExhausted() {
+			setSlotRotationCandidates(slot, rotation)
+			slot.CandidateCursor = index
+			slot.Status = "checking"
+			slot.LastError = fmt.Sprintf("Проверено %d из %d ключей нового набора; поиск продолжается.", len(rotation), keyCount)
+			slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
 			_ = database.GetDB().Save(slot).Error
 			return
 		}
@@ -1148,7 +1540,7 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 	} else {
 		slot.ManualRotate = false
 		slot.CandidateCursor = 0
-		slot.RotationFingerprintsJSON = "[]"
+		setSlotRotationCandidates(slot, nil)
 		slot.Status = "no_healthy_nodes"
 		if len(current) > 0 {
 			slot.Status = "partial"
@@ -1157,171 +1549,6 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 			}
 		}
 		slot.LastError = fmt.Sprintf("Не удалось собрать новый набор из %d проверенных ключей; прежний набор сохранён. %s", keyCount, externalProbeFailureSummary(lastProbeError))
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-	}
-	_ = database.GetDB().Save(slot).Error
-}
-
-func (s *DynamicSubscriptionService) checkSlotSingle(ctx context.Context, slot *model.ExternalSubscriptionSlot) {
-	candidates := parseStoredCandidates(slot.CandidateDataJSON)
-	filtered := filterExternalCandidates(&slotCandidateConfig{Mode: slot.FilterMode, FlagsJSON: slot.CountryFlagsJSON}, candidates)
-	slot.MatchingCount = len(filtered)
-	if len(filtered) == 0 {
-		slot.ManualRotate = false
-		slot.RotationFingerprintsJSON = "[]"
-		s.clearActive(slot)
-		slot.Status = "no_candidates"
-		slot.LastError = ""
-		slot.LastCheckedAt = s.clock().UnixMilli()
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		_ = database.GetDB().Save(slot).Error
-		return
-	}
-	scanCandidates := filtered
-	if slot.ManualRotate {
-		activeIndex := indexCandidate(filtered, slot.ActiveFingerprint)
-		if activeIndex >= 0 {
-			scanCandidates = make([]ExternalSubscriptionCandidate, 0, len(filtered)-1)
-			scanCandidates = append(scanCandidates, filtered[activeIndex+1:]...)
-			scanCandidates = append(scanCandidates, filtered[:activeIndex]...)
-		}
-		if len(scanCandidates) == 0 {
-			slot.ManualRotate = false
-			slot.CandidateCursor = 0
-			slot.Status = "healthy"
-			slot.LastError = "Нет другого подходящего узла для переключения; текущий оставлен."
-			slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-	}
-	settings, err := s.settingsRow()
-	if err != nil {
-		slot.Status = "probe_error"
-		slot.LastError = "Не удалось прочитать настройки проверки"
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		_ = database.GetDB().Save(slot).Error
-		return
-	}
-	probe := s.probe
-	if probe == nil {
-		probe = probeExternalVLESSCandidate
-	}
-	probeURLs := externalSubscriptionProbeURLs(settings)
-	if len(probeURLs) == 0 {
-		slot.ManualRotate = false
-		slot.RotationFingerprintsJSON = "[]"
-		s.clearActive(slot)
-		slot.Status = "probe_error"
-		slot.LastError = "Добавьте хотя бы один публичный HTTPS-адрес проверки."
-		slot.CandidateCursor = 0
-		slot.LastCheckedAt = s.clock().UnixMilli()
-		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-		_ = database.GetDB().Save(slot).Error
-		return
-	}
-	probeCandidate := func(ctx context.Context, candidate ExternalSubscriptionCandidate) error {
-		return probeExternalVLESSCandidateSet(ctx, candidate, probeURLs, probe)
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, ExternalSubscriptionProbeTimeout)
-	defer cancel()
-	var lastProbeError error
-
-	if !slot.ManualRotate && slot.ActiveFingerprint != "" {
-		if active := candidateByFingerprint(filtered, slot.ActiveFingerprint); active != nil {
-			err := probeCandidate(checkCtx, *active)
-			if errors.Is(err, ErrExternalSubscriptionProbeBusy) {
-				slot.NextCheckAt = s.clock().Add(30 * time.Second).UnixMilli()
-				_ = database.GetDB().Save(slot).Error
-				return
-			}
-			if err == nil {
-				setSlotSelectedCandidates(slot, []ExternalSubscriptionCandidate{*active})
-				slot.Status = "healthy"
-				slot.LastError = ""
-				slot.LastCheckedAt = s.clock().UnixMilli()
-				slot.CandidateCursor = 0
-				slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-				_ = database.GetDB().Save(slot).Error
-				return
-			}
-			lastProbeError = err
-			activeIndex := indexCandidate(filtered, active.Fingerprint)
-			s.clearActive(slot)
-			slot.CandidateCursor = activeIndex + 1
-		}
-	}
-
-	start := slot.CandidateCursor
-	if start < 0 || start >= len(scanCandidates) {
-		start = 0
-	}
-	end := start + ExternalSubscriptionMaxCandidatesPerRun
-	if end > len(scanCandidates) {
-		end = len(scanCandidates)
-	}
-	for index := start; index < end; index++ {
-		if ctx.Err() != nil {
-			slot.Status = "checking"
-			slot.CandidateCursor = index
-			slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-		probeCtx, probeCancel := context.WithTimeout(ctx, ExternalSubscriptionProbeTimeout)
-		probeErr := probeCandidate(probeCtx, scanCandidates[index])
-		probeCancel()
-		if errors.Is(probeErr, ErrExternalSubscriptionProbeBusy) {
-			slot.Status = "checking"
-			slot.CandidateCursor = index
-			slot.NextCheckAt = s.clock().Add(30 * time.Second).UnixMilli()
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-		if probeErr != nil {
-			lastProbeError = probeErr
-		}
-		if probeErr == nil {
-			setSlotSelectedCandidates(slot, []ExternalSubscriptionCandidate{scanCandidates[index]})
-			slot.Status = "healthy"
-			slot.LastError = ""
-			slot.LastCheckedAt = s.clock().UnixMilli()
-			slot.CandidateCursor = 0
-			slot.ManualRotate = false
-			slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-			_ = database.GetDB().Save(slot).Error
-			return
-		}
-	}
-	slot.LastCheckedAt = s.clock().UnixMilli()
-	probeReason := externalProbeFailureSummary(lastProbeError)
-	if slot.ManualRotate {
-		if end < len(scanCandidates) {
-			slot.LastError = "Следующая группа не прошла проверку; текущий узел сохранён, поиск продолжается. " + probeReason
-			slot.Status = "checking"
-			slot.CandidateCursor = end
-			slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-		} else {
-			slot.ManualRotate = false
-			slot.CandidateCursor = 0
-			slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
-			if slot.ActiveFingerprint != "" && candidateByFingerprint(filtered, slot.ActiveFingerprint) != nil {
-				slot.LastError = "Другой проверенный узел не найден; текущий оставлен. " + probeReason
-				slot.Status = "healthy"
-			} else {
-				slot.LastError = fmt.Sprintf("Ни один из %d подходящих узлов не прошёл проверку. %s", len(filtered), probeReason)
-				slot.Status = "no_healthy_nodes"
-			}
-		}
-	} else if end < len(scanCandidates) {
-		slot.LastError = "Текущая группа узлов не прошла проверку; поиск продолжается. " + probeReason
-		slot.Status = "checking"
-		slot.CandidateCursor = end
-		slot.NextCheckAt = s.clock().Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
-	} else {
-		slot.LastError = fmt.Sprintf("Ни один из %d подходящих узлов не прошёл проверку. %s", len(filtered), probeReason)
-		slot.Status = "no_healthy_nodes"
-		slot.CandidateCursor = 0
 		slot.NextCheckAt = s.clock().Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
 	}
 	_ = database.GetDB().Save(slot).Error
@@ -1341,6 +1568,9 @@ func (s *DynamicSubscriptionService) RefreshNow(ctx context.Context, id int) err
 		return ErrExternalSubscriptionProbeBusy
 	}
 	defer externalSubscriptionRunMu.Unlock()
+	budget := ExternalSubscriptionSchedulerProbeBudget
+	s.schedulerProbeBudget = &budget
+	defer func() { s.schedulerProbeBudget = nil }()
 	var slot model.ExternalSubscriptionSlot
 	if err := database.GetDB().WithContext(ctx).First(&slot, id).Error; err != nil {
 		return err
@@ -1576,30 +1806,47 @@ func slotSelectedFingerprints(slot *model.ExternalSubscriptionSlot) []string {
 }
 
 func slotSelectedCandidates(slot *model.ExternalSubscriptionSlot, candidates []ExternalSubscriptionCandidate) []ExternalSubscriptionCandidate {
+	if slot == nil {
+		return nil
+	}
+	stored := parseStoredCandidates(slot.ActiveCandidatesJSON)
+	if len(stored) > 0 {
+		return uniqueExternalCandidates(stored)
+	}
 	selected := make([]ExternalSubscriptionCandidate, 0)
 	for _, fingerprint := range slotSelectedFingerprints(slot) {
 		if candidate := candidateByFingerprint(candidates, fingerprint); candidate != nil {
 			selected = append(selected, *candidate)
 		}
 	}
-	return selected
+	if len(selected) == 0 && slot.ActiveURI != "" {
+		candidate := ExternalSubscriptionCandidate{
+			URI: slot.ActiveURI, Fingerprint: slot.ActiveFingerprint,
+			Name: slot.ActiveName, Flag: slot.ActiveFlag,
+		}
+		if candidate.Fingerprint == "" {
+			if parsed, err := ParseExternalVLESSURI(candidate.URI); err == nil {
+				candidate.Fingerprint = parsed.Fingerprint
+				if candidate.Name == "" {
+					candidate.Name = parsed.Name
+				}
+				if candidate.Flag == "" {
+					candidate.Flag = parsed.Flag
+				}
+			}
+		}
+		selected = append(selected, candidate)
+	}
+	return uniqueExternalCandidates(selected)
 }
 
 func setSlotSelectedCandidates(slot *model.ExternalSubscriptionSlot, selected []ExternalSubscriptionCandidate) {
-	fingerprints := make([]string, 0, len(selected))
-	seen := make(map[string]struct{}, len(selected))
-	for _, candidate := range selected {
-		if candidate.Fingerprint == "" {
-			continue
-		}
-		if _, exists := seen[candidate.Fingerprint]; exists {
-			continue
-		}
-		seen[candidate.Fingerprint] = struct{}{}
-		fingerprints = append(fingerprints, candidate.Fingerprint)
-	}
-	encoded, _ := json.Marshal(fingerprints)
-	slot.SelectedFingerprintsJSON = string(encoded)
+	selected = uniqueExternalCandidates(selected)
+	fingerprints := candidateFingerprints(selected)
+	encodedFingerprints, _ := json.Marshal(fingerprints)
+	encodedCandidates, _ := json.Marshal(selected)
+	slot.SelectedFingerprintsJSON = string(encodedFingerprints)
+	slot.ActiveCandidatesJSON = string(encodedCandidates)
 	slot.ActiveURI = ""
 	slot.ActiveFingerprint = ""
 	slot.ActiveName = ""
@@ -1612,22 +1859,102 @@ func setSlotSelectedCandidates(slot *model.ExternalSubscriptionSlot, selected []
 	}
 }
 
+func uniqueExternalCandidates(candidates []ExternalSubscriptionCandidate) []ExternalSubscriptionCandidate {
+	seen := make(map[string]struct{}, len(candidates))
+	unique := make([]ExternalSubscriptionCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Fingerprint == "" || candidate.URI == "" {
+			continue
+		}
+		if _, exists := seen[candidate.Fingerprint]; exists {
+			continue
+		}
+		seen[candidate.Fingerprint] = struct{}{}
+		unique = append(unique, candidate)
+	}
+	return unique
+}
+
+func candidateFingerprints(candidates []ExternalSubscriptionCandidate) []string {
+	fingerprints := make([]string, 0, len(candidates))
+	for _, candidate := range uniqueExternalCandidates(candidates) {
+		fingerprints = append(fingerprints, candidate.Fingerprint)
+	}
+	return fingerprints
+}
+
+func slotReplacementCandidates(slot *model.ExternalSubscriptionSlot) []ExternalSubscriptionCandidate {
+	if slot == nil {
+		return nil
+	}
+	return uniqueExternalCandidates(parseStoredCandidates(slot.ReplacementCandidatesJSON))
+}
+
+func setSlotReplacementCandidates(slot *model.ExternalSubscriptionSlot, candidates []ExternalSubscriptionCandidate) {
+	candidates = uniqueExternalCandidates(candidates)
+	encoded, _ := json.Marshal(candidates)
+	slot.ReplacementCandidatesJSON = string(encoded)
+}
+
+func slotActiveCheckState(slot *model.ExternalSubscriptionSlot) (fingerprints, failures []string) {
+	if slot == nil {
+		return nil, nil
+	}
+	_ = json.Unmarshal([]byte(slot.ActiveCheckFingerprintsJSON), &fingerprints)
+	_ = json.Unmarshal([]byte(slot.ActiveCheckFailuresJSON), &failures)
+	return uniqueStrings(fingerprints), uniqueStrings(failures)
+}
+
+func setSlotActiveCheckState(slot *model.ExternalSubscriptionSlot, fingerprints, failures []string, cursor int) {
+	fingerprints = uniqueStrings(fingerprints)
+	failures = uniqueStrings(failures)
+	encodedFingerprints, _ := json.Marshal(fingerprints)
+	encodedFailures, _ := json.Marshal(failures)
+	slot.ActiveCheckFingerprintsJSON = string(encodedFingerprints)
+	slot.ActiveCheckFailuresJSON = string(encodedFailures)
+	if cursor < 0 || cursor > len(fingerprints) {
+		cursor = len(fingerprints)
+	}
+	slot.ActiveCheckCursor = cursor
+}
+
+func clearSlotActiveCheck(slot *model.ExternalSubscriptionSlot) {
+	if slot == nil {
+		return
+	}
+	slot.ActiveCheckFingerprintsJSON = "[]"
+	slot.ActiveCheckFailuresJSON = "[]"
+	slot.ActiveCheckCursor = 0
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
+}
+
 func slotRotationCandidates(slot *model.ExternalSubscriptionSlot, candidates []ExternalSubscriptionCandidate) []ExternalSubscriptionCandidate {
 	if slot == nil {
 		return nil
 	}
+	stored := parseStoredCandidates(slot.RotationCandidatesJSON)
+	if len(stored) > 0 {
+		return uniqueExternalCandidates(stored)
+	}
 	var fingerprints []string
 	_ = json.Unmarshal([]byte(slot.RotationFingerprintsJSON), &fingerprints)
 	rotation := make([]ExternalSubscriptionCandidate, 0, len(fingerprints))
-	seen := make(map[string]struct{}, len(fingerprints))
-	for _, fingerprint := range fingerprints {
-		if fingerprint == "" {
-			continue
-		}
-		if _, exists := seen[fingerprint]; exists {
-			continue
-		}
-		seen[fingerprint] = struct{}{}
+	for _, fingerprint := range uniqueStrings(fingerprints) {
 		if candidate := candidateByFingerprint(candidates, fingerprint); candidate != nil {
 			rotation = append(rotation, *candidate)
 		}
@@ -1636,20 +1963,12 @@ func slotRotationCandidates(slot *model.ExternalSubscriptionSlot, candidates []E
 }
 
 func setSlotRotationCandidates(slot *model.ExternalSubscriptionSlot, rotation []ExternalSubscriptionCandidate) {
-	fingerprints := make([]string, 0, len(rotation))
-	seen := make(map[string]struct{}, len(rotation))
-	for _, candidate := range rotation {
-		if candidate.Fingerprint == "" {
-			continue
-		}
-		if _, exists := seen[candidate.Fingerprint]; exists {
-			continue
-		}
-		seen[candidate.Fingerprint] = struct{}{}
-		fingerprints = append(fingerprints, candidate.Fingerprint)
-	}
-	encoded, _ := json.Marshal(fingerprints)
-	slot.RotationFingerprintsJSON = string(encoded)
+	rotation = uniqueExternalCandidates(rotation)
+	fingerprints := candidateFingerprints(rotation)
+	encodedFingerprints, _ := json.Marshal(fingerprints)
+	encodedCandidates, _ := json.Marshal(rotation)
+	slot.RotationFingerprintsJSON = string(encodedFingerprints)
+	slot.RotationCandidatesJSON = string(encodedCandidates)
 }
 
 func filterExternalCandidates(slot *slotCandidateConfig, candidates []ExternalSubscriptionCandidate) []ExternalSubscriptionCandidate {
@@ -1665,10 +1984,11 @@ func filterExternalCandidates(slot *slotCandidateConfig, candidates []ExternalSu
 	if slot != nil && slot.Mode != "" {
 		mode = slot.Mode
 	}
+	noCountryFilter := len(flags) == 0
 	filtered := make([]ExternalSubscriptionCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		_, selected := flags[candidate.Flag]
-		if mode == "include" && selected || mode == "exclude" && !selected {
+		if noCountryFilter || mode == "include" && selected || mode == "exclude" && !selected {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -1695,10 +2015,13 @@ func indexCandidate(candidates []ExternalSubscriptionCandidate, fingerprint stri
 
 func (s *DynamicSubscriptionService) clearActive(slot *model.ExternalSubscriptionSlot) {
 	slot.SelectedFingerprintsJSON = "[]"
+	slot.ActiveCandidatesJSON = "[]"
 	slot.ActiveURI = ""
 	slot.ActiveFingerprint = ""
 	slot.ActiveName = ""
 	slot.ActiveFlag = ""
+	setSlotReplacementCandidates(slot, nil)
+	clearSlotActiveCheck(slot)
 }
 
 func fetchExternalSubscriptionSource(ctx context.Context, sourceURL, etag, modified string) (externalSourceResult, error) {

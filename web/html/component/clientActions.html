@@ -42,25 +42,28 @@
   // inbound it was handed.
 
   // Every bulk operation the modal can offer, in the order it lists them.
-  const BULK_OPS = ['addDays', 'subDays', 'addTraffic', 'subTraffic',
-    'enable', 'disable', 'freeze', 'unfreeze', 'addInbounds', 'removeInbounds', 'delete'];
+  const BULK_OPS = ['addDays', 'subDays', 'addTraffic', 'subTraffic', 'setUnlimited',
+    'enable', 'disable', 'freeze', 'unfreeze', 'addInbounds', 'removeInbounds', 'delete', 'transferUsers'];
 
   // The two that change WHICH INBOUNDS serve an account rather than what the
   // account is allowed. They do not go through the bulk client applier at all:
   // see runBulkMembership.
   const BULK_MEMBERSHIP_OPS = ['addInbounds', 'removeInbounds'];
 
-  // Four of them are withheld from a reseller. subDays is refused outright by the
-  // server for a reseller, so offering it only buys them a failed run. addDays is
+  // A subset is withheld from a reseller. Unlimited traffic is an admin-only
+  // override; a reseller must never get an unmetered account through this free op.
+  // subDays is refused outright by the server for a reseller, so offering it only
+  // buys them a failed run. addDays is
   // dropped when their profile derives an account's duration from its traffic
   // (daysPerGb): the day count is recomputed from the GB on the next edit, so a
   // manual change there looks applied and then quietly is not. The two membership
   // ops are an admin's call: a reseller's grant says which inbounds they may sell
   // FROM, not that they may move a customer between them, and the server refuses
   // them the same way.
-  // Presentation only, as always: the server re-checks all four.
+  // Presentation only, as always: the server re-checks every restriction.
   function isBulkOpAllowed(op) {
-    if (op === 'subDays' && RESELLER.isReseller) return false;
+    if (op === 'transferUsers' && !PERMS.superAdmin) return false;
+    if ((op === 'subDays' || op === 'setUnlimited') && RESELLER.isReseller) return false;
     if (op === 'addDays' && (Number(RESELLER.daysPerGb) || 0) > 0) return false;
     if (BULK_MEMBERSHIP_OPS.includes(op) && RESELLER.isReseller) return false;
     return true;
@@ -104,6 +107,12 @@
           // once, so a key bolted on later is bound to nothing and the checkbox
           // group would tick boxes that never re-render.
           inboundIds: [],
+          transferRole: '',
+          transferOwnerId: null,
+          transferAdmins: [],
+          transferResellers: [],
+          transferOwnersLoaded: false,
+          transferOwnersLoading: false,
           progress: { running: false, done: 0, total: 0, applied: 0, skipped: 0, etaText: '' },
         },
       };
@@ -150,7 +159,12 @@
         this.selClients.forEach(k => { const i = k.indexOf(':'); add(Number(k.slice(0, i)), k.slice(i + 1)); });
         return Object.values(map);
       },
-      selectedCount() { return this.resolveSelectedTargets().length; },
+      // The dialog counts client accounts, not their inbound memberships. One email
+      // on several inbounds is still one selected client, though each membership is
+      // kept as a separate target for the operation itself.
+      selectedCount() {
+        return new Set(this.resolveSelectedTargets().map(target => accountKeyOf(target.email)).filter(Boolean)).size;
+      },
       inboundTargets(dbInbound) {
         return (this.getInboundClients(dbInbound) || [])
           .map(c => c.email).filter(Boolean)
@@ -174,6 +188,37 @@
       },
       // Template hook for the option filter; the rule itself lives in isBulkOpAllowed.
       bulkOpAllowed(op) { return isBulkOpAllowed(op); },
+      async onBulkOpChange(op) {
+        if (op !== 'transferUsers') return;
+        this.bulkOps.transferRole = '';
+        this.bulkOps.transferOwnerId = null;
+        if (this.bulkOps.transferOwnersLoaded || this.bulkOps.transferOwnersLoading) return;
+        this.bulkOps.transferOwnersLoading = true;
+        const [admins, resellers] = await Promise.all([
+          HttpUtil.get('/panel/admins/list'),
+          HttpUtil.get('/panel/resellers/list'),
+        ]);
+        if (admins && admins.success && resellers && resellers.success) {
+          this.bulkOps.transferAdmins = admins.obj || [];
+          this.bulkOps.transferResellers = resellers.obj || [];
+          this.bulkOps.transferOwnersLoaded = true;
+        }
+        this.bulkOps.transferOwnersLoading = false;
+      },
+      transferOwnersForRole() {
+        if (this.bulkOps.transferRole === 'superadmin') {
+          return this.bulkOps.transferAdmins.filter(owner => owner.enable && owner.isSuperAdmin);
+        }
+        if (this.bulkOps.transferRole === 'admin') {
+          return this.bulkOps.transferAdmins.filter(owner => owner.enable && !owner.isSuperAdmin &&
+            Array.isArray(owner.permissions) && owner.permissions.includes('accessInbounds'));
+        }
+        if (this.bulkOps.transferRole === 'reseller') {
+          return this.bulkOps.transferResellers.filter(owner => owner.enable);
+        }
+        return [];
+      },
+      transferOwnerLabel(owner) { return owner.username; },
       bulkIsTrafficOp() { return ['addTraffic', 'subTraffic'].includes(this.bulkOps.op); },
       bulkIsNumericOp() { return ['addDays', 'subDays', 'addTraffic', 'subTraffic'].includes(this.bulkOps.op); },
       // --- the inbound checklist the two membership ops render ------------
@@ -271,8 +316,73 @@
         });
         return ok ? narrowed : null;
       },
+      async runBulkTransfer() {
+        const b = this.bulkOps;
+        const uniqueEmails = new Map();
+        this.resolveSelectedTargets().forEach(target => {
+          const email = typeof target.email === 'string' ? target.email.trim() : '';
+          const key = accountKeyOf(email);
+          if (key && !uniqueEmails.has(key)) uniqueEmails.set(key, email);
+        });
+        const emails = [...uniqueEmails.values()];
+        if (!emails.length || !b.transferRole || !b.transferOwnerId) return;
+
+        const result = { total: emails.length, transferred: 0, failed: 0, skipped: 0, items: [] };
+        const BATCH = 20;
+        b.confirmLoading = true;
+        b.progress = { running: true, done: 0, total: emails.length, applied: 0, skipped: 0, etaText: '' };
+        for (let i = 0; i < emails.length; i += BATCH) {
+          const batch = emails.slice(i, i + BATCH);
+          const msg = await HttpUtil.post('/panel/api/clients/transfer', {
+            emails: batch,
+            targetRole: b.transferRole,
+            targetUserId: b.transferOwnerId,
+          }, { suppressErrorMessage: true });
+          if (!msg || !msg.success) {
+            const reason = (msg && msg.msg) || '{{ i18n "pages.inbounds.transferRequestFailed" }}';
+            result.failed += batch.length + (emails.length - i - batch.length);
+            result.items.push(...emails.slice(i).map(email => ({ email, success: false, error: reason })));
+            b.progress.done = emails.length;
+            break;
+          }
+          const part = msg.obj || {};
+          result.transferred += Number(part.transferred) || 0;
+          result.failed += Number(part.failed) || 0;
+          result.skipped += Number(part.skipped) || 0;
+          result.items.push(...(part.items || []));
+          b.progress.done += batch.length;
+          b.progress.applied = result.transferred;
+          b.progress.skipped = result.failed + result.skipped;
+        }
+        b.confirmLoading = false;
+        b.progress.running = false;
+
+        const details = result.items.filter(item => !item.success)
+          .slice(0, 4)
+          .map(item => item.email + ': ' + (item.error || '{{ i18n "pages.inbounds.transferRequestFailed" }}'))
+          .join(' · ');
+        const complete = result.transferred === result.total && result.failed === 0 && result.skipped === 0;
+        const summary = complete
+          ? '{{ i18n "pages.inbounds.transferSuccess" }}'
+          : result.transferred > 0 || result.skipped > 0
+            ? '{{ i18n "pages.inbounds.transferPartial" }}'
+            : '{{ i18n "pages.inbounds.transferFailed" }}';
+        const message = summary.replace('%COUNT%', String(result.transferred))
+          .replace('%TOTAL%', String(result.total)) + (details ? ' ' + details : '');
+        if (complete) this.$message.success(message);
+        else if (result.transferred > 0 || result.skipped > 0) this.$message.warning(message);
+        else this.$message.error(message);
+        b.progress = { running: false, done: 0, total: 0, applied: 0, skipped: 0, etaText: '' };
+
+        const retryEmails = result.items.filter(item => !item.success && !item.skipped)
+          .map(item => item.email);
+        this.onSelectChange(retryEmails);
+        await this.getDBInbounds();
+        await this.loadOnlineState();
+      },
       async runBulkOps() {
         const b = this.bulkOps;
+        if (b.op === 'transferUsers') return this.runBulkTransfer();
         // Delete removes whatever is checked: a selected INBOUND is deleted wholesale
         // (its accounts go with it, no per-client filtering), a selected ACCOUNT is
         // removed on its own. Separate flow from the in-place client update ops.

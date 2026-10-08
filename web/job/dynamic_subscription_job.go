@@ -6,8 +6,9 @@ import (
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 )
 
-// DynamicSubscriptionJob polls configured external VLESS lists, then checks only the
-// selected node until it fails over. All scheduling state is persisted per slot.
+// DynamicSubscriptionJob performs bounded source/health work for external VLESS slots.
+// Each RunDue pass fetches at most one source or probes one candidate set globally;
+// pool state and cursors are persisted so later ticks can resume fairly.
 type DynamicSubscriptionJob struct {
 	ctx     context.Context
 	service service.DynamicSubscriptionService

@@ -2208,7 +2208,16 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		return false, err
 	}
 
-	oldClients := oldSettings["clients"].([]any)
+	oldClients, ok := oldSettings["clients"].([]any)
+	if !ok {
+		if oldSettings["clients"] != nil {
+			return false, fmt.Errorf("inbound %d has an invalid clients list", oldInbound.Id)
+		}
+		// Older bulk deletes marshalled an empty nil slice as JSON null. Treat that
+		// legacy encoding as an empty list so the client can be added and the saved
+		// settings are repaired back to a proper JSON array.
+		oldClients = make([]any, 0)
+	}
 	// Give each added account its pool slot before it joins the list, from what the
 	// inbound already holds: the address must not depend on where in the list it lands.
 	if existing, gerr := s.GetClients(oldInbound); gerr == nil {
@@ -3078,7 +3087,7 @@ type BulkClientTarget struct {
 }
 
 // BulkClientUpdateRequest describes a bulk operation applied to many clients across
-// many inbounds. Op is one of addDays/subDays/addTraffic/subTraffic/enable/disable.
+// many inbounds. Op is one of addDays/subDays/addTraffic/subTraffic/setUnlimited/enable/disable.
 // Days is used by the day ops; AmountBytes by the traffic ops.
 type BulkClientUpdateRequest struct {
 	Op            string `json:"op"`
@@ -3132,7 +3141,7 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 	touched := map[string]bool{}
 
 	switch req.Op {
-	case "addDays", "subDays", "addTraffic", "subTraffic", "enable", "disable", "delete", "freeze", "unfreeze":
+	case "addDays", "subDays", "addTraffic", "subTraffic", "setUnlimited", "enable", "disable", "delete", "freeze", "unfreeze":
 	default:
 		return result, touched, common.NewError("unknown bulk operation:", req.Op)
 	}
@@ -3192,7 +3201,10 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 					del[email] = true
 				}
 			}
-			var kept []any
+			// Keep an empty JSON array when deleting the last client. A nil slice
+			// marshals as null, which makes the inbound look like a protocol that
+			// cannot hold clients and removes it from the account membership picker.
+			kept := make([]any, 0, len(clientsAny))
 			for i := range clientsAny {
 				cm, _ := clientsAny[i].(map[string]any)
 				email, _ := cm["email"].(string)
@@ -3299,8 +3311,8 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 }
 
 // bulkClientSkipped reports whether a client is excluded by the request's skip
-// toggles. It is the SINGLE filtering point for every bulk op (the update ops,
-// freeze/unfreeze, and delete) so that every operation honours every toggle
+// toggles. It is the SINGLE filtering point for every bulk op (quota updates,
+// enable/disable, freeze/unfreeze, and delete) so that every operation honours every toggle
 // uniformly: a never-used (delayed start), disabled, or "unlimited" account is
 // skipped. skipUnlimited is dimension-aware — day ops treat "unlimited" as
 // no-expiry (expiryTime==0) so a lifetime account is never stamped with a
@@ -3338,6 +3350,7 @@ func bulkClientSkipped(cm map[string]any, req BulkClientUpdateRequest) bool {
 //     first use" (grow the delay when adding), ==0 no expiry (addDays anchors from now).
 //   - subTraffic floors totalGB at 1 byte so a subtract never flips a limited account
 //     to unlimited (totalGB==0 means unlimited).
+//   - setUnlimited changes any limited quota to 0; repeat runs are a no-op.
 func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64) bool {
 	expiry := bulkNumToInt64(cm["expiryTime"])
 	total := bulkNumToInt64(cm["totalGB"])
@@ -3422,6 +3435,11 @@ func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64
 			total = 1
 		}
 		cm["totalGB"] = total
+	case "setUnlimited":
+		if total <= 0 {
+			return false // already unlimited: nothing to change
+		}
+		cm["totalGB"] = int64(0)
 	case "enable":
 		if enable {
 			return false

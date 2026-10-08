@@ -41,8 +41,8 @@ func (a *CoreController) initRouter(g *gin.RouterGroup) {
 	g.POST("/reboot", requireSuperAdmin(), a.reboot)
 	// The external selector is global and changes the keys issued to every
 	// subscriber, so delegated Core Settings access cannot stop or restart it.
-	g.POST("/restart/external-selector", requireSuperAdmin(), a.restart)
-	g.POST("/stop/external-selector", requireSuperAdmin(), a.stop)
+	g.POST("/restart/external-selector", requireSuperAdmin(), a.restartExternalSelector)
+	g.POST("/stop/external-selector", requireSuperAdmin(), a.stopExternalSelector)
 	g.POST("/restart/:core", a.restart)
 	g.POST("/restart-all", a.restartAll)
 	g.POST("/stop/:core", a.stop)
@@ -55,9 +55,10 @@ func (a *CoreController) initRouter(g *gin.RouterGroup) {
 	// Core Settings bit, since the same operator can already read the same text
 	// through the logs endpoint.
 	g.POST("/config/:core", requireSuperAdmin(), a.saveCoreConfig)
-	// Reading the selector state stays available to Core Settings delegates. Any
-	// mutation is global (it can change subscription output), so writes are
-	// super-admin-only even when the caller has the Core Settings permission.
+	// Reading selector status stays available to Core Settings delegates, but its
+	// credential-bearing source URLs are redacted in the response. Mutations are
+	// global (they can change subscription output), so writes are super-admin-only
+	// even when the caller has the Core Settings permission.
 	externalSubscriptions := g.Group("/external-subscriptions")
 	externalSubscriptions.GET("/list", a.externalSubscriptionList)
 	externalSubscriptionWrites := externalSubscriptions.Group("")
@@ -209,7 +210,16 @@ func (a *CoreController) reboot(c *gin.Context) {
 
 // restart restarts the daemon(s) for the given core.
 func (a *CoreController) restart(c *gin.Context) {
-	err := a.coreService.RestartCore(c.Param("core"))
+	a.restartNamedCore(c, c.Param("core"))
+}
+
+// restartExternalSelector handles its fixed route, which has no :core parameter.
+func (a *CoreController) restartExternalSelector(c *gin.Context) {
+	a.restartNamedCore(c, "external-selector")
+}
+
+func (a *CoreController) restartNamedCore(c *gin.Context, name string) {
+	err := a.coreService.RestartCore(name)
 	jsonMsg(c, I18nWeb(c, "pages.core.toasts.restarted"), err)
 }
 
@@ -221,7 +231,16 @@ func (a *CoreController) restartAll(c *gin.Context) {
 
 // stop stops the given core, where supported (xray, l2tp, pptp, openvpn, radius).
 func (a *CoreController) stop(c *gin.Context) {
-	err := a.coreService.StopCore(c.Param("core"))
+	a.stopNamedCore(c, c.Param("core"))
+}
+
+// stopExternalSelector handles its fixed route, which has no :core parameter.
+func (a *CoreController) stopExternalSelector(c *gin.Context) {
+	a.stopNamedCore(c, "external-selector")
+}
+
+func (a *CoreController) stopNamedCore(c *gin.Context, name string) {
+	err := a.coreService.StopCore(name)
 	jsonMsg(c, I18nWeb(c, "pages.core.toasts.stopped"), err)
 }
 

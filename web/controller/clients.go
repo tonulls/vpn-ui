@@ -3,6 +3,7 @@ package controller
 import (
 	"strconv"
 
+	"github.com/mhsanaei/3x-ui/v2/web/service"
 	"github.com/mhsanaei/3x-ui/v2/web/session"
 
 	"github.com/gin-gonic/gin"
@@ -11,12 +12,10 @@ import (
 // The Clients page: the account-centric view of who exists, as opposed to the
 // Inbounds page's view of what serves them.
 //
-// READ ONLY. Every mutation the page performs goes back through the existing
-// client routes on /panel/api/inbounds (addClient, updateClient,
-// delClientByEmail, bulkUpdateClients) carrying an inboundIds set. That is
-// deliberate: those paths already carry the reseller pricing, the ownership
-// assertions over every id, the same-protocol refusal and the projection, and a
-// second write path would be a second place for all of that to drift out of step.
+// This controller serves the account-centric Clients page. Ordinary account
+// mutations still use the established inbound routes; only super-admin transfers
+// have a dedicated endpoint because they atomically replace ownership, memberships,
+// credentials and reseller accounting as one operation per account.
 //
 // The one account state those routes cannot express - an account NO inbound serves,
 // which has no settings blob to be spliced into and no protocol to be addressed by -
@@ -39,6 +38,7 @@ func (a *ClientsController) initRouter(g *gin.RouterGroup) {
 	// The rows are then narrowed per caller inside ListAccounts.
 	g.GET("/list", a.list)
 	g.GET("/assignable", a.assignable)
+	g.POST("/transfer", requireSuperAdmin(), a.transfer)
 }
 
 // list returns one page of accounts the caller may see.
@@ -78,4 +78,23 @@ func (a *ClientsController) assignable(c *gin.Context) {
 		return
 	}
 	jsonObj(c, rows, nil)
+}
+
+// transfer performs one independent database transaction per selected account,
+// then reconciles every inbound touched by accounts that committed successfully.
+func (a *ClientsController) transfer(c *gin.Context) {
+	var req service.AccountTransferRequest
+	if err := c.ShouldBind(&req); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	result, err := (&service.AccountTransferService{}).TransferAccounts(session.GetLoginUser(c), req)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if len(result.TouchedInboundIds) > 0 {
+		(&InboundController{}).reconcileForInbounds(result.TouchedInboundIds, true)
+	}
+	jsonObj(c, result, nil)
 }

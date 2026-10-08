@@ -1101,12 +1101,17 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 	// those too or a daemon keeps serving the settings JSON it no longer matches.
 	var projected []int
 	if emails := postedClientEmails(data); len(emails) > 1 {
-		a.syncInboundAccounts(data.Id, creator)
+		if err := a.syncInboundAccounts(data.Id, creator); err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
 		if membershipsExplicit {
 			for _, email := range emails {
 				touched, merr := a.applyClientMemberships(c, email, data.Id, membershipIds, membershipsExplicit, creator)
 				if merr != nil {
 					logger.Warning("applying client memberships for ", email, ": ", merr)
+					jsonMsg(c, I18nWeb(c, "somethingWentWrong"), merr)
+					return
 				}
 				projected = unionInboundIds(projected, touched)
 			}
@@ -1115,6 +1120,8 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 		touched, merr := a.applyClientMemberships(c, postedClientEmail(data), data.Id, membershipIds, membershipsExplicit, creator)
 		if merr != nil {
 			logger.Warning("applying client memberships: ", merr)
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), merr)
+			return
 		}
 		projected = unionInboundIds(projected, touched)
 	}

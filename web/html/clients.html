@@ -262,8 +262,8 @@
                       </a-tooltip>
                       <div class="bo-lg-names">
                         <div class="bo-lg-name">[[ row.email ]]</div>
-                        <div class="bo-lg-note" v-if="row.creatorRole && row.creatorName">
-                          [[ row.creatorRole === 'reseller' ? 'Р:' : 'А:' ]] [[ row.creatorName ]]
+                        <div class="bo-lg-note" v-if="row.ownerRole && row.ownerName">
+                          [[ ownerRoleLabel(row.ownerRole) ]] [[ row.ownerName ]]
                         </div>
                         <div class="bo-lg-note" v-if="row.comment" :title="row.comment">[[ row.comment ]]</div>
                       </div>
@@ -751,6 +751,9 @@
       //
       // The colourless lamp then has exactly one meaning left, which is what makes
       // it worth a slot at all: nothing has happened on this account yet.
+      ownerRoleLabel(role) {
+        return ({ admin: 'А:', reseller: 'Р:', superadmin: 'СА:' })[role] || '';
+      },
       lampClass(row) {
         if (!row.enable || this.expired(row) || this.depleted(row)) return 'bo-lamp--error';
         // Nothing serves it, so it cannot be online, healthy or about to run out:

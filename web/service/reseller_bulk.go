@@ -49,13 +49,14 @@ import (
 //	subDays      refused outright.
 
 const (
-	bulkOpEnable     = "enable"
-	bulkOpUnfreeze   = "unfreeze"
-	bulkOpAddTraffic = "addTraffic"
-	bulkOpSubTraffic = "subTraffic"
-	bulkOpAddDays    = "addDays"
-	bulkOpSubDays    = "subDays"
-	bulkOpDelete     = "delete"
+	bulkOpEnable       = "enable"
+	bulkOpUnfreeze     = "unfreeze"
+	bulkOpAddTraffic   = "addTraffic"
+	bulkOpSubTraffic   = "subTraffic"
+	bulkOpSetUnlimited = "setUnlimited"
+	bulkOpAddDays      = "addDays"
+	bulkOpSubDays      = "subDays"
+	bulkOpDelete       = "delete"
 	// The two membership operations. They do not run through BulkUpdateClients at
 	// all (the controller routes them to the accounts layer instead), and are named
 	// here so the reseller policy for every bulk op is stated in one table: an op
@@ -70,6 +71,9 @@ var (
 	// moves no bytes and leaves no trace any check in this file could read. A
 	// reseller who wants one account shorter can still edit that account.
 	ErrBulkNoSubDays = errors.New("resellers cannot take days off an account in bulk")
+	// An unlimited account has no measurable ceiling and cannot be funded by the
+	// reseller traffic balance; only an admin may grant it explicitly.
+	ErrBulkSetUnlimited = errors.New("resellers cannot make accounts unlimited in bulk")
 	// Under days-per-GB an account's duration IS its traffic times a factor, and
 	// the reseller has no expiry field at all. A bulk day change would be
 	// overwritten by the next edit that recomputes it, so it is not a shorter
@@ -250,6 +254,8 @@ func bulkOpAllowed(p model.ResellerProfile, req *BulkClientUpdateRequest) error 
 	switch req.Op {
 	case bulkOpSubDays:
 		return ErrBulkNoSubDays
+	case bulkOpSetUnlimited:
+		return ErrBulkSetUnlimited
 	case bulkOpAddInbounds, bulkOpRemoveInbounds:
 		// Belt and braces. The membership handler refuses a reseller before it
 		// reads anything, and BulkUpdateClients does not know these ops, so this

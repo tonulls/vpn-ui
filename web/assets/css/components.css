@@ -905,7 +905,7 @@ body.dark .bo-theme-toggle .bo-i-moon { display:block; }
 .clients-page .bo-stat-grid--4 .bo-stat-cell-sublabel {
   font-size:10px; font-weight:500; color:var(--text-3);
 }
-.clients-page .bo-stat-grid--4 .bo-stat-cell-value { font-size:16px; }
+.clients-page .bo-stat-grid--4 .bo-stat-cell-value { font-size:16px; margin-top:auto; }
 
 /* Same centred-pair shape as the throughput totals, so the two cards rhyme.
    Figures are smaller than the throughput headline: these are secondary. */
@@ -2892,7 +2892,6 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
 }
 
 @media (max-width:560px) {
-  .clients-page .bo-stat-grid--4 .bo-stat-cell-sublabel { display:none; }
   .clients-page .bo-clients-toolbar-card .ant-card-body { padding:10px; }
   .clients-page .bo-clients-toolbar {
     display:grid !important;

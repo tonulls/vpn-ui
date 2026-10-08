@@ -114,17 +114,29 @@ func (s *DynamicSubscriptionService) ExternalSelectorInstalled() bool {
 	return externalSelectorInstalled()
 }
 
-// ExternalSubscriptionDedupGroup identifies slots that draw from the same source
-// under the same country filter. It is internal response-scoped metadata only.
+// ExternalSubscriptionDedupGroup identifies slots with the same country-filter
+// semantics. The source URL is deliberately excluded: equal filter mode and flag set
+// share one de-duplication scope for a single rendered user subscription.
 func (s *DynamicSubscriptionService) ExternalSubscriptionDedupGroup(slotID int) string {
 	if slotID < 1 {
 		return ""
 	}
 	var slot model.ExternalSubscriptionSlot
-	if err := database.GetDB().Select("source_url", "filter_mode", "country_flags_json").First(&slot, slotID).Error; err != nil {
+	if err := database.GetDB().Select("filter_mode", "country_flags_json").First(&slot, slotID).Error; err != nil {
 		return ""
 	}
-	return slot.SourceURL + "\x00" + slot.FilterMode + "\x00" + slot.CountryFlagsJSON
+	mode := strings.ToLower(strings.TrimSpace(slot.FilterMode))
+	if mode == "" {
+		mode = "include"
+	}
+	var flags []string
+	_ = json.Unmarshal([]byte(slot.CountryFlagsJSON), &flags)
+	flags, err := normalizeCountryFlags(flags)
+	if err != nil {
+		flags = nil
+	}
+	encodedFlags, _ := json.Marshal(flags)
+	return mode + "\x00" + string(encodedFlags)
 }
 
 func (s *DynamicSubscriptionService) SlotOptions() ([]ExternalSubscriptionSlotOption, error) {

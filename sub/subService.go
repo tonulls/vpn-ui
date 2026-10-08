@@ -90,9 +90,10 @@ func (s *SubService) forResponse() *SubService {
 // BuildPageData on the shared one, so a value stashed on the copy is not there to
 // be read back. Answering "gregorian" for a panel configured on the Jalali calendar
 // is a silent wrong answer, not a missing one.
-// uniqueExternalSubscriptionURIs removes repeated credentials only between slots
-// that share the exact source and country filter. The identity ignores the URI
-// fragment (display name), so the same VLESS key with two labels is still one key.
+// uniqueExternalSubscriptionURIs removes repeated credentials between slots that
+// share the same country-filter mode and normalized flag set, regardless of source.
+// The identity ignores the URI fragment (display name), so the same VLESS key with
+// two labels is still one key.
 func (s *SubService) uniqueExternalSubscriptionURIs(slotID int, uris []string) []string {
 	if s.scope == nil || len(uris) == 0 {
 		return uris

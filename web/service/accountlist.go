@@ -17,10 +17,9 @@ import (
 // exactly one, and stopped making sense the moment one account could be on
 // several, because there was then no page that showed the account itself.
 //
-// This is a read model and nothing more. Every mutation the page performs goes
-// back through the existing addClient / updateClient / delClientByEmail /
-// bulkUpdateClients routes with an inboundIds set, so there is ONE write path for
-// clients and not two to keep in step.
+// This is a read model. Ordinary client mutations still use the established inbound
+// routes; super-admin account transfers use a separate transactional service because
+// they replace ownership, memberships and reseller accounting together.
 
 // AccountMembershipView is one inbound an account is served on, named the way an
 // operator recognises it rather than by id alone.
@@ -76,23 +75,35 @@ type AccountCredentials struct {
 	Security    string `json:"security,omitempty"`
 }
 
-// AccountCreator is the authenticated actor recorded only when a new account is
-// created through an admin/reseller action. Super admins intentionally map to the
-// zero value so their accounts have no attribution line.
+// AccountCreator is the authenticated actor recorded when a new account is created
+// through an admin, reseller, or super-admin action.
 type AccountCreator struct {
 	UserID int
 	Role   string
+	Name   string
 }
 
 func AccountCreatorFromUser(user *model.User) AccountCreator {
-	if user == nil || user.IsSuperAdmin {
+	if user == nil {
 		return AccountCreator{}
+	}
+	if user.IsSuperAdmin {
+		return AccountCreator{UserID: user.Id, Role: "superadmin", Name: user.DisplayUsername()}
 	}
 	role := "admin"
 	if user.IsReseller {
 		role = "reseller"
 	}
-	return AccountCreator{UserID: user.Id, Role: role}
+	return AccountCreator{UserID: user.Id, Role: role, Name: user.DisplayUsername()}
+}
+
+func isAccountCreatorRole(role string) bool {
+	switch role {
+	case "admin", "reseller", "superadmin":
+		return true
+	default:
+		return false
+	}
 }
 
 // AccountRow is one line of the Clients table.
@@ -130,11 +141,10 @@ type AccountRow struct {
 	Memberships       []AccountMembershipView `json:"memberships"`
 	// Credentials is set only when Memberships is empty. See AccountCredentials.
 	Credentials *AccountCredentials `json:"credentials,omitempty"`
-	// OwnedByReseller is the reseller's user id, or 0 for a house account. Shown
-	// only to whoever may already see resellers.
+	// OwnedByReseller is the reseller's user id, or 0 for a non-reseller owner.
 	OwnedByReseller int    `json:"ownedByReseller"`
-	CreatorRole     string `json:"creatorRole,omitempty"`
-	CreatorName     string `json:"creatorName,omitempty"`
+	OwnerRole       string `json:"ownerRole,omitempty"`
+	OwnerName       string `json:"ownerName,omitempty"`
 }
 
 // AccountListResult is one page of the Clients table.
@@ -229,29 +239,35 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 		owner[accountKey(rc.Email)] = rc.UserId
 	}
 
-	creatorIDsSet := map[int]bool{}
+	ownerIDsSet := map[int]bool{}
 	for i := range accounts {
-		if accounts[i].CreatorUserId > 0 &&
-			(accounts[i].CreatorRole == "admin" || accounts[i].CreatorRole == "reseller") {
-			creatorIDsSet[accounts[i].CreatorUserId] = true
+		if accounts[i].OwnerUserId > 0 {
+			ownerIDsSet[accounts[i].OwnerUserId] = true
+		} else if accounts[i].CreatorUserId > 0 {
+			ownerIDsSet[accounts[i].CreatorUserId] = true
 		}
 	}
-	creatorNames := map[int]string{}
-	if len(creatorIDsSet) > 0 {
-		creatorIDs := make([]int, 0, len(creatorIDsSet))
-		for id := range creatorIDsSet {
-			creatorIDs = append(creatorIDs, id)
+	for _, ownerID := range owner {
+		if ownerID > 0 {
+			ownerIDsSet[ownerID] = true
 		}
-		var creators []model.User
-		if err := db.Where("id IN ?", creatorIDs).Find(&creators).Error; err != nil {
+	}
+	ownerNames := map[int]string{}
+	if len(ownerIDsSet) > 0 {
+		ownerIDs := make([]int, 0, len(ownerIDsSet))
+		for id := range ownerIDsSet {
+			ownerIDs = append(ownerIDs, id)
+		}
+		var owners []model.User
+		if err := db.Where("id IN ?", ownerIDs).Find(&owners).Error; err != nil {
 			return nil, err
 		}
-		for i := range creators {
-			creatorNames[creators[i].Id] = creators[i].DisplayUsername()
+		for i := range owners {
+			ownerNames[owners[i].Id] = owners[i].DisplayUsername()
 		}
 	}
 
-	visible, err := s.visibilityFilter(user)
+	visible, visibleInboundIDs, err := s.visibilityFilter(user)
 	if err != nil {
 		return nil, err
 	}
@@ -266,11 +282,37 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 	for i := range accounts {
 		account := &accounts[i]
 		key := accountKey(account.Email)
-		mine := memberships[account.Id]
-		if !visible(account, mine) {
+		allMemberships := memberships[account.Id]
+		if !visible(account, allMemberships) {
 			continue
 		}
-		if needle != "" && !accountMatches(account, mine, needle) {
+		// An account can be shared across inbounds with different grants. The row
+		// may be visible because of one granted membership, but the others can carry
+		// protocol credentials in ClientId (for example, a Trojan password). Never
+		// include hidden memberships in the response or in search matching.
+		visibleMemberships := allMemberships
+		if visibleInboundIDs != nil {
+			visibleMemberships = make([]AccountMembershipView, 0, len(allMemberships))
+			for _, membership := range allMemberships {
+				if visibleInboundIDs[membership.InboundId] {
+					visibleMemberships = append(visibleMemberships, membership)
+				}
+			}
+		}
+		ownerUserID, ownerRole, ownerName := account.OwnerUserId, account.OwnerRole, account.OwnerName
+		if owner[key] > 0 {
+			ownerUserID, ownerRole = owner[key], "reseller"
+			if account.OwnerUserId != ownerUserID || account.OwnerRole != "reseller" {
+				ownerName = ""
+			}
+		}
+		if ownerRole == "" && isAccountCreatorRole(account.CreatorRole) {
+			ownerUserID, ownerRole, ownerName = account.CreatorUserId, account.CreatorRole, account.CreatorName
+		}
+		if currentName := ownerNames[ownerUserID]; currentName != "" {
+			ownerName = currentName
+		}
+		if needle != "" && !accountMatches(account, visibleMemberships, ownerName, needle) {
 			continue
 		}
 		row := AccountRow{
@@ -280,14 +322,10 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 			Reset: account.Reset, LimitIP: account.LimitIP, TgID: account.TgID,
 			SpeedLimitDown: account.SpeedLimitDown, SpeedLimitUp: account.SpeedLimitUp,
 			UserLimitOverride: account.UserLimitOverride,
-			Memberships:       mine, OwnedByReseller: owner[key],
+			Memberships:       visibleMemberships, OwnedByReseller: owner[key],
+			OwnerRole: ownerRole, OwnerName: ownerName,
 		}
-		if (account.CreatorRole == "admin" || account.CreatorRole == "reseller") &&
-			creatorNames[account.CreatorUserId] != "" {
-			row.CreatorRole = account.CreatorRole
-			row.CreatorName = creatorNames[account.CreatorUserId]
-		}
-		if len(mine) == 0 {
+		if len(allMemberships) == 0 {
 			// Nothing serves it, so no settings blob carries its credentials and this
 			// row is the only place the edit form can read them from.
 			row.Credentials = &AccountCredentials{
@@ -489,52 +527,65 @@ func (s *AccountService) membershipViews() (map[int][]AccountMembershipView, err
 	return out, nil
 }
 
-// visibilityFilter returns the predicate deciding whether one account is the
-// caller's to see. Built once per request rather than per row.
-func (s *AccountService) visibilityFilter(user *model.User) (func(*model.Account, []AccountMembershipView) bool, error) {
+// visibilityFilter returns the account predicate and the caller's inbound grant set.
+// The latter also scopes membership details in the response; nil means unrestricted
+// only for a super admin. Both are built once per request rather than per row.
+func (s *AccountService) visibilityFilter(user *model.User) (func(*model.Account, []AccountMembershipView) bool, map[int]bool, error) {
 	if user.IsSuperAdmin {
-		return func(*model.Account, []AccountMembershipView) bool { return true }, nil
-	}
-
-	if user.IsReseller {
-		// Narrower than their inbound grants on purpose: a reseller is legitimately
-		// given a SHARED inbound, and that inbound carries other sellers' customers.
-		// Scoping by grant would show them those.
-		var resellerService ResellerService
-		owned, err := resellerService.OwnedEmails(user.Id)
-		if err != nil {
-			return nil, err
-		}
-		return func(a *model.Account, _ []AccountMembershipView) bool {
-			return owned[strings.ToLower(a.Email)]
-		}, nil
+		// nil grants mean unrestricted visibility, but only on this role-checked path.
+		return func(*model.Account, []AccountMembershipView) bool { return true }, nil, nil
 	}
 
 	var adminService AdminService
 	ids, err := adminService.AccessibleInboundIds(user.Id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	granted := make(map[int]bool, len(ids))
 	for _, id := range ids {
 		granted[id] = true
 	}
-	return func(_ *model.Account, memberships []AccountMembershipView) bool {
+
+	if user.IsReseller {
+		// Narrower than their inbound grants on purpose: a reseller is legitimately
+		// given a SHARED inbound, and that inbound carries other sellers' customers.
+		// Scoping account visibility by grant would show them those. Membership
+		// details are separately narrowed by the grant set before being returned.
+		var resellerService ResellerService
+		owned, err := resellerService.OwnedEmails(user.Id)
+		if err != nil {
+			return nil, nil, err
+		}
+		return func(a *model.Account, _ []AccountMembershipView) bool {
+			return owned[accountKey(a.Email)]
+		}, granted, nil
+	}
+
+	return func(account *model.Account, memberships []AccountMembershipView) bool {
+		if account.OwnerRole == "admin" && account.OwnerUserId == user.Id {
+			return true
+		}
+		// Accounts created before current-owner fields existed still belong to their
+		// creator until the first transfer writes OwnerRole/OwnerUserId.
+		if account.OwnerRole == "" && account.CreatorRole == "admin" && account.CreatorUserId == user.Id {
+			return true
+		}
 		for _, m := range memberships {
 			if granted[m.InboundId] {
 				return true
 			}
 		}
 		return false
-	}, nil
+	}, granted, nil
 }
 
-// accountMatches is the search predicate: email, comment, subId, or the name of
-// any inbound it is served on.
-func accountMatches(account *model.Account, memberships []AccountMembershipView, needle string) bool {
+// accountMatches is the search predicate: account fields, current owner name, or
+// the name and protocol of any inbound it is served on.
+func accountMatches(account *model.Account, memberships []AccountMembershipView, ownerName, needle string) bool {
 	if strings.Contains(strings.ToLower(account.Email), needle) ||
 		strings.Contains(strings.ToLower(account.Comment), needle) ||
-		strings.Contains(strings.ToLower(account.SubID), needle) {
+		strings.Contains(strings.ToLower(account.SubID), needle) ||
+		strings.Contains(strings.ToLower(ownerName), needle) {
 		return true
 	}
 	for _, m := range memberships {
@@ -549,11 +600,13 @@ func accountMatches(account *model.Account, memberships []AccountMembershipView,
 // AssignableInboundsFor returns the inbounds the caller may put an account on,
 // for the page's inbound picker. Same grant the write path enforces, so the
 // picker cannot offer something the save would then refuse.
-// settingsHoldClients reports whether an inbound's settings carry a clients array
-// at all. dokodemo-door, socks, http and single-user shadowsocks legitimately do
-// not, and parseSettingsClients cannot answer this: it returns ok=true for them,
-// because "no clients array" and "unparseable" have to stay distinguishable there
-// (treating the first as the second would delete every membership).
+// settingsHoldClients reports whether an inbound's settings carry a clients list
+// at all. An explicit null is treated as an empty list for compatibility with older
+// bulk deletes that marshalled an empty nil slice as null. dokodemo-door, socks, http
+// and single-user shadowsocks legitimately omit the key, and parseSettingsClients
+// cannot answer this: it returns ok=true for them, because "no clients array" and
+// "unparseable" have to stay distinguishable there (treating the first as the second
+// would delete every membership).
 // inboundMethod reads settings.method, which only shadowsocks carries.
 func inboundMethod(settings string) string {
 	var root map[string]any
@@ -578,7 +631,14 @@ func settingsHoldClients(protocol model.Protocol, settings string) bool {
 	if err := json.Unmarshal([]byte(settings), &root); err != nil || root == nil {
 		return false
 	}
-	_, ok := root["clients"].([]any)
+	clients, exists := root["clients"]
+	if !exists {
+		return false
+	}
+	if clients == nil {
+		return true
+	}
+	_, ok := clients.([]any)
 	return ok
 }
 

@@ -156,7 +156,7 @@
                         <a-button size="small" type="primary" :disabled="!canRestart(core)"
                           @click="restart(core.name)">
                           <a-icon :type="core.state === 'stopped' ? 'play-circle' : 'reload'"></a-icon>
-                          [[ core.state === 'stopped' ? 'Запустить' : '{{ i18n "pages.core.restart" }}' ]]
+                          [[ core.state === 'stopped' ? 'Start' : '{{ i18n "pages.core.restart" }}' ]]
                         </a-button>
                         <a-button size="small" type="danger" :disabled="!canStop(core)"
                           @click="stop(core.name)">

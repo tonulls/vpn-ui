@@ -6,6 +6,7 @@
     title='{{ i18n "pages.inbounds.bulkOperations" }}'
     :visible="bulkOps.visible"
     :confirm-loading="bulkOps.confirmLoading"
+    :ok-button-props="{ props: { disabled: bulkOps.op === 'transferUsers' && (!bulkOps.transferRole || !bulkOps.transferOwnerId || !bulkOps.transferOwnersLoaded) } }"
     ok-text='{{ i18n "pages.inbounds.apply" }}'
     cancel-text='{{ i18n "close" }}'
     :class="themeSwitcher.currentTheme"
@@ -18,16 +19,18 @@
         <a-tag color="purple">[[ selectedCount() ]]</a-tag>
       </a-form-item>
       <a-form-item label='{{ i18n "pages.inbounds.operation" }}'>
-        <a-select v-model="bulkOps.op"
+        <a-select v-model="bulkOps.op" @change="onBulkOpChange"
           :dropdown-class-name="themeSwitcher.currentTheme">
-          <!-- Withheld from a reseller: subDays is refused by the server, and addDays
-               is meaningless once their profile derives duration from traffic. See
+          <!-- Withheld from a reseller: subDays is refused by the server, addDays
+               is meaningless once duration derives from traffic, and setUnlimited is
+               an admin-only quota override. See
                isBulkOpAllowed; bulkOps.op is snapped back to a rendered option in
                openBulkOps so the select can never point at a hidden one. -->
           <a-select-option v-if="bulkOpAllowed('addDays')" value="addDays">{{ i18n "pages.inbounds.opAddDays" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('subDays')" value="subDays">{{ i18n "pages.inbounds.opSubDays" }}</a-select-option>
           <a-select-option value="addTraffic">{{ i18n "pages.inbounds.opAddTraffic" }}</a-select-option>
           <a-select-option value="subTraffic">{{ i18n "pages.inbounds.opSubTraffic" }}</a-select-option>
+          <a-select-option v-if="bulkOpAllowed('setUnlimited')" value="setUnlimited">{{ i18n "pages.inbounds.opSetUnlimited" }}</a-select-option>
           <a-select-option value="enable">{{ i18n "pages.inbounds.opEnable" }}</a-select-option>
           <a-select-option value="disable">{{ i18n "pages.inbounds.opDisable" }}</a-select-option>
           <a-select-option value="freeze">{{ i18n "pages.inbounds.opFreeze" }}</a-select-option>
@@ -38,7 +41,31 @@
           <a-select-option v-if="bulkOpAllowed('addInbounds')" value="addInbounds">{{ i18n "pages.inbounds.opAddInbounds" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('removeInbounds')" value="removeInbounds">{{ i18n "pages.inbounds.opRemoveInbounds" }}</a-select-option>
           <a-select-option value="delete">{{ i18n "pages.inbounds.opDelete" }}</a-select-option>
+          <a-select-option v-if="bulkOpAllowed('transferUsers')" value="transferUsers">{{ i18n "pages.inbounds.opTransferUsers" }}</a-select-option>
         </a-select>
+      </a-form-item>
+      <a-form-item v-if="bulkOps.op === 'transferUsers'" label='{{ i18n "pages.inbounds.transferTo" }}'>
+        <a-row :gutter="8">
+          <a-col :span="12">
+            <a-select v-model="bulkOps.transferRole" placeholder='{{ i18n "pages.inbounds.transferRoles" }}'
+              :dropdown-class-name="themeSwitcher.currentTheme"
+              @change="bulkOps.transferOwnerId = null">
+              <a-select-option value="superadmin">{{ i18n "pages.inbounds.transferRoleSuperadmin" }}</a-select-option>
+              <a-select-option value="admin">{{ i18n "pages.inbounds.transferRoleAdmin" }}</a-select-option>
+              <a-select-option value="reseller">{{ i18n "pages.inbounds.transferRoleReseller" }}</a-select-option>
+            </a-select>
+          </a-col>
+          <a-col :span="12">
+            <a-select v-model="bulkOps.transferOwnerId" placeholder='{{ i18n "pages.inbounds.transferOwners" }}'
+              :disabled="!bulkOps.transferRole || bulkOps.transferOwnersLoading"
+              :dropdown-class-name="themeSwitcher.currentTheme">
+              <a-select-option v-for="owner in transferOwnersForRole()"
+                :key="bulkOps.transferRole + ':' + owner.id" :value="owner.id">
+                [[ transferOwnerLabel(owner) ]]
+              </a-select-option>
+            </a-select>
+          </a-col>
+        </a-row>
       </a-form-item>
       <a-form-item v-if="bulkIsNumericOp()" label='{{ i18n "pages.inbounds.amount" }}'>
         <a-input-number v-model="bulkOps.amount" :min="0"
@@ -84,7 +111,7 @@
       <!-- The three skips are filters on a CLIENT field (first use, unlimited quota,
            disabled), and the membership ops read none of them. Rendering them under
            an operation that ignores them would read as three settings that apply. -->
-      <template v-if="!bulkIsMembershipOp()">
+      <template v-if="!bulkIsMembershipOp() && bulkOps.op !== 'transferUsers'">
         <a-divider :style="{ margin: '8px 0' }"></a-divider>
         <a-space direction="vertical" :size="10" :style="{ width: '100%' }">
           <div>
@@ -101,7 +128,7 @@
           </div>
         </a-space>
       </template>
-      <div v-if="bulkOps.progress.running || bulkOps.progress.done > 0" :style="{ marginTop: '14px' }">
+      <div v-if="bulkOps.op !== 'transferUsers' && (bulkOps.progress.running || bulkOps.progress.done > 0)" :style="{ marginTop: '14px' }">
         <a-progress :percent="bulkProgressPercent()"
           :status="bulkOps.progress.running ? 'active' : 'success'"></a-progress>
         <div :style="{ marginTop: '4px', fontSize: '12px', opacity: 0.75 }">

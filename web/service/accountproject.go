@@ -527,13 +527,22 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 
 	var account model.Account
 	err := tx.Where("LOWER(TRIM(email)) = ?", key).First(&account).Error
+	if err == gorm.ErrRecordNotFound {
+		// SQLite's LOWER() is ASCII-only. An exact fallback still finds an existing
+		// account whose email contains non-ASCII case pairs, rather than trying to
+		// insert the same exact email and tripping accounts.email's unique index.
+		err = tx.Where("email = ?", email).First(&account).Error
+	}
 	switch {
 	case err == gorm.ErrRecordNotFound:
 		fresh := newAccountFromEntry(entry)
-		if len(creator) > 0 && creator[0].UserID > 0 &&
-			(creator[0].Role == "admin" || creator[0].Role == "reseller") {
+		if len(creator) > 0 && creator[0].UserID > 0 && isAccountCreatorRole(creator[0].Role) {
 			fresh.CreatorUserId = creator[0].UserID
 			fresh.CreatorRole = creator[0].Role
+			fresh.CreatorName = creator[0].Name
+			fresh.OwnerUserId = creator[0].UserID
+			fresh.OwnerRole = creator[0].Role
+			fresh.OwnerName = creator[0].Name
 		}
 		extractAccountCredential(fresh, entry, protocol, 0, &scratch, scratchConflicts)
 		// The columns the entry carries for OTHER protocols. extractAccountCredential
@@ -557,6 +566,11 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 
 	updated := newAccountFromEntry(entry)
 	updated.Id = account.Id
+	// This lookup matched by normalized identity. Keep the existing spelling rather
+	// than rewriting it from the inbound entry: older SQLite databases can contain
+	// case-variant rows that the exact UNIQUE(email) index permits, and changing one
+	// variant to another's exact spelling would make unrelated membership sync fail.
+	updated.Email = account.Email
 	// An entry reads enable=false for either of two reasons, and only one of them is
 	// the account's. The projection renders the AND of the account flag and the
 	// membership flag, so an account switched off on THIS inbound alone projects a
@@ -600,6 +614,10 @@ func (s *AccountService) upsertAccountFromEntry(tx *gorm.DB, entry map[string]an
 	updated.CreatedAt = account.CreatedAt
 	updated.CreatorUserId = account.CreatorUserId
 	updated.CreatorRole = account.CreatorRole
+	updated.CreatorName = account.CreatorName
+	updated.OwnerUserId = account.OwnerUserId
+	updated.OwnerRole = account.OwnerRole
+	updated.OwnerName = account.OwnerName
 	// subId is not a credential, but it is carried forward for the same reason and
 	// only when the entry does not mention it AT ALL. A caller that omits the key
 	// (any script posting a partial client) was blanking the account's subId, and

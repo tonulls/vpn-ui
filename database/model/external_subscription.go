@@ -24,7 +24,7 @@ type ExternalSubscriptionSlot struct {
 	Name                         string `json:"name" gorm:"not null"`
 	ShowName                     bool   `json:"showName" gorm:"column:show_name;not null;default:true"`
 	SelectionMode                string `json:"selectionMode" gorm:"not null;default:auto"`
-	SourceURL                    string `json:"sourceUrl" gorm:"not null"`
+	SourceURL                    string `json:"-" gorm:"not null"`
 	RefreshIntervalMinutes       int    `json:"refreshIntervalMinutes" gorm:"not null;default:30"`
 	CheckIntervalMinutes         int    `json:"checkIntervalMinutes" gorm:"not null;default:5"`
 	SubscriptionKeyCount         int    `json:"subscriptionKeyCount" gorm:"column:subscription_key_count;not null;default:1"`
@@ -33,13 +33,19 @@ type ExternalSubscriptionSlot struct {
 	CountryFlagsJSON             string `json:"-" gorm:"column:country_flags_json;type:text;not null;default:'[]'"`
 	Enabled                      bool   `json:"enabled" gorm:"not null;default:1"`
 
-	CandidateDataJSON        string `json:"-" gorm:"column:candidate_data_json;type:text;not null;default:'[]'"`
-	SelectedFingerprintsJSON string `json:"-" gorm:"column:selected_fingerprints_json;type:text;not null;default:'[]'"`
-	RotationFingerprintsJSON string `json:"-" gorm:"column:rotation_fingerprints_json;type:text;not null;default:'[]'"`
-	ActiveURI                string `json:"-" gorm:"column:active_uri;type:text"`
-	ActiveFingerprint        string `json:"-" gorm:"column:active_fingerprint;size:64"`
-	SourceETag               string `json:"-" gorm:"column:source_etag;size:512"`
-	SourceLastModified       string `json:"-" gorm:"column:source_last_modified;size:256"`
+	CandidateDataJSON           string `json:"-" gorm:"column:candidate_data_json;type:text;not null;default:'[]'"`
+	SelectedFingerprintsJSON    string `json:"-" gorm:"column:selected_fingerprints_json;type:text;not null;default:'[]'"`
+	ActiveCandidatesJSON        string `json:"-" gorm:"column:active_candidates_json;type:text;not null;default:'[]'"`
+	ReplacementCandidatesJSON   string `json:"-" gorm:"column:replacement_candidates_json;type:text;not null;default:'[]'"`
+	RotationFingerprintsJSON    string `json:"-" gorm:"column:rotation_fingerprints_json;type:text;not null;default:'[]'"`
+	RotationCandidatesJSON      string `json:"-" gorm:"column:rotation_candidates_json;type:text;not null;default:'[]'"`
+	ActiveCheckFingerprintsJSON string `json:"-" gorm:"column:active_check_fingerprints_json;type:text;not null;default:'[]'"`
+	ActiveCheckFailuresJSON     string `json:"-" gorm:"column:active_check_failures_json;type:text;not null;default:'[]'"`
+	ActiveCheckCursor           int    `json:"-" gorm:"column:active_check_cursor;not null;default:0"`
+	ActiveURI                   string `json:"-" gorm:"column:active_uri;type:text"`
+	ActiveFingerprint           string `json:"-" gorm:"column:active_fingerprint;size:64"`
+	SourceETag                  string `json:"-" gorm:"column:source_etag;size:512"`
+	SourceLastModified          string `json:"-" gorm:"column:source_last_modified;size:256"`
 
 	ActiveName           string `json:"activeName" gorm:"column:active_name;size:512"`
 	ActiveFlag           string `json:"activeFlag" gorm:"column:active_flag;size:32"`

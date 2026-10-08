@@ -64,15 +64,15 @@
           </template>
           <div class="ext-note" style="margin-bottom: 6px">Каждый подмодуль отдельно загружает список VPN-ключей.</div>
           <div class="ext-main-actions">
-            <a-button v-if="PERMS.superAdmin" :disabled="!moduleInstalled || moduleAction" :loading="moduleAction" @click="restartModule">
+            <a-button v-if="PERMS.superAdmin" :disabled="!moduleInstalled || !!moduleAction" :loading="moduleAction === 'restart'" @click="restartModule">
               <a-icon :type="settings.enabled ? 'reload' : 'play-circle'"></a-icon>
               [[ settings.enabled ? 'Перезапустить' : 'Запустить' ]]
             </a-button>
             <a-button :loading="loading" @click="loadModule()">
               <a-icon type="sync"></a-icon>Обновить
             </a-button>
-            <a-button v-if="PERMS.superAdmin" type="danger" :disabled="!moduleInstalled || !settings.enabled || moduleAction"
-              :loading="moduleAction" @click="stopModule">
+            <a-button v-if="PERMS.superAdmin" type="danger" :disabled="!moduleInstalled || !settings.enabled || !!moduleAction"
+              :loading="moduleAction === 'stop'" @click="stopModule">
               <a-icon type="pause-circle"></a-icon>Остановить
             </a-button>
             <a-button :disabled="!moduleInstalled" @click="showLogs">
@@ -135,7 +135,7 @@
               </template>
             </a-table-column>
             <a-table-column title="Источник" key="source">
-              <template slot-scope="text, slot"><div class="ext-url">[[ slot.sourceUrl ]]</div></template>
+              <template slot-scope="text, slot"><div class="ext-url">[[ slot.sourceUrl || 'Скрыт для делегированных администраторов' ]]</div></template>
             </a-table-column>
             <a-table-column title="Фильтр" key="filter">
               <template slot-scope="text, slot">
@@ -169,15 +169,21 @@
                 </a-tooltip>
               </template>
               <template slot-scope="text, slot">
-                <a-tag :color="statusColor(slot.status)">[[ statusText(slot.status) ]]</a-tag>
-                <div class="ext-form-help">Прошли фильтр: [[ slot.matchingCount ]] / [[ slot.candidateCount ]]</div>
+                <a-tag :color="statusColor(slot.status)">
+                  <a-icon v-if="slot.status === 'refreshing_source'" type="loading"></a-icon>
+                  [[ statusText(slot.status) ]]
+                </a-tag>
+                <div v-if="slot.status === 'refreshing_source'" class="ext-form-help">
+                  Получаем актуальный список по HTTPS
+                </div>
+                <div v-else class="ext-form-help">Прошли фильтр: [[ slot.matchingCount ]] / [[ slot.candidateCount ]]</div>
                 <div v-if="slot.status === 'checking'" class="ext-form-help">
                   Проверено: [[ slot.checkedCount ]] / [[ slot.matchingCount ]]; проверка идёт группами
                 </div>
                 <div v-else-if="slot.status === 'no_healthy_nodes'" class="ext-form-help">
                   Проверены все [[ slot.matchingCount ]] подходящих узлов
                 </div>
-                <div v-if="slot.rotationPending" class="ext-form-help">
+                <div v-if="slot.status !== 'refreshing_source' && slot.rotationPending" class="ext-form-help">
                   Новый набор: [[ slot.checkedCount ]] / [[ slot.rotationTotal ]]; текущий пока сохранён
                 </div>
                 <div v-if="slot.lastError" class="ext-form-help">[[ slot.lastError ]]</div>
@@ -198,8 +204,8 @@
                   <a-popconfirm title="Удалить подмодуль?" @confirm="deleteSlot(slot)">
                     <a-button size="small" type="danger">Удалить</a-button>
                   </a-popconfirm>
-                  <a-button size="small" title="Обновить источник и перепроверить выбранные ключи"
-                    :disabled="!moduleInstalled || !settings.enabled"
+                  <a-button size="small" title="Сначала загрузить список по HTTPS, затем проверить подходящие по фильтру узлы"
+                    :disabled="!moduleInstalled || !settings.enabled || !slot.enabled || !!refreshingId"
                     :loading="refreshingId === slot.id" @click="refreshSlot(slot)">Обновить</a-button>
                   <a-button size="small" title="Заменить весь набор ключей на новый проверенный набор"
                     :disabled="!moduleInstalled || !settings.enabled || !slot.enabled || slot.rotationPending || rotatingId === slot.id"
@@ -323,7 +329,7 @@
       pageClass: 'external-subscriptions-page',
       loading: false,
       moduleInstalled: false,
-      moduleAction: false,
+      moduleAction: '',
       savingSettings: false,
       refreshingId: 0,
       rotatingId: 0,
@@ -391,27 +397,42 @@
             this.probeURLs = this.savedProbeURLs.length ? this.savedProbeURLs.slice() : [''];
           }
           this.pageTitle = this.settings.displayName || 'External Selector';
-          this.slots = msg.obj.slots || [];
+          this.slots = (msg.obj.slots || []).map(slot => {
+            if (slot.id === this.refreshingId) {
+              return Object.assign({}, slot, {
+                status: 'refreshing_source', checkedCount: 0, lastError: '',
+              });
+            }
+            return slot;
+          });
         }
         if (!quiet) this.loading = false;
       },
       async stopModule() {
-        this.moduleAction = true;
-        const msg = await HttpUtil.post('/panel/core/stop/external-selector');
-        this.moduleAction = false;
-        if (msg && msg.success) {
-          this.$message.success('External Selector остановлен');
-          await this.loadModule(true);
-        } else if (msg && msg.msg) this.$message.error(msg.msg);
+        if (this.moduleAction) return;
+        this.moduleAction = 'stop';
+        try {
+          const msg = await HttpUtil.post('/panel/core/stop/external-selector', null, { suppressSuccessMessage: true });
+          if (msg && msg.success) {
+            this.$message.success('External Selector остановлен');
+            await this.loadModule(true);
+          }
+        } finally {
+          this.moduleAction = '';
+        }
       },
       async restartModule() {
-        this.moduleAction = true;
-        const msg = await HttpUtil.post('/panel/core/restart/external-selector');
-        this.moduleAction = false;
-        if (msg && msg.success) {
-          this.$message.success('External Selector запущен; проверка подмодулей поставлена в очередь');
-          await this.loadModule(true);
-        } else if (msg && msg.msg) this.$message.error(msg.msg);
+        if (this.moduleAction) return;
+        this.moduleAction = 'restart';
+        try {
+          const msg = await HttpUtil.post('/panel/core/restart/external-selector', null, { suppressSuccessMessage: true });
+          if (msg && msg.success) {
+            this.$message.success('External Selector запущен; проверка подмодулей поставлена в очередь');
+            await this.loadModule(true);
+          }
+        } finally {
+          this.moduleAction = '';
+        }
       },
       async showLogs() {
         this.logs.visible = true;
@@ -505,13 +526,24 @@
         }
       },
       async refreshSlot(slot) {
+        if (this.refreshingId) return;
         this.refreshingId = slot.id;
-        const msg = await HttpUtil.post('/panel/core/external-subscriptions/slots/' + slot.id + '/refresh');
-        this.refreshingId = 0;
-        if (msg && msg.success) {
-          this.$message.success('Обновление источника и проверка поставлены в очередь');
+        slot.status = 'refreshing_source';
+        slot.checkedCount = 0;
+        slot.lastError = '';
+        try {
+          const msg = await HttpUtil.post(
+            '/panel/core/external-subscriptions/slots/' + slot.id + '/refresh',
+            null,
+            { suppressSuccessMessage: true },
+          );
+          if (msg && msg.success) {
+            this.$message.success('Запущено обновление HTTPS-списка');
+          }
+        } finally {
+          this.refreshingId = 0;
           await this.loadModule(true);
-        } else if (msg && msg.msg) this.$message.error(msg.msg);
+        }
       },
       async rotateSlot(slot) {
         this.rotatingId = slot.id;
@@ -533,13 +565,14 @@
         return ({ auto: 'AUTO', 'a-z': 'A-Z', 'z-a': 'Z-A' })[(mode || 'auto').toLowerCase()] || 'AUTO';
       },
       statusText(status) {
-        return ({ pending: 'Ожидание', checking: 'Проверка', healthy: 'HTTPS-проверка пройдена', partial: 'Частично заполнен', disabled: 'Отключён',
+        return ({ pending: 'Ожидание', refreshing_source: 'Обновляется HTTPS URL список',
+          checking: 'Проверка', healthy: 'HTTPS-проверка пройдена', partial: 'Частично заполнен', disabled: 'Отключён',
           no_candidates: 'Нет подходящих узлов', no_healthy_nodes: 'Нет доступных узлов',
           source_error: 'Ошибка источника', probe_error: 'Ошибка проверки' })[status] || status || '—';
       },
       statusColor(status) {
         return status === 'healthy' ? 'green' : status === 'partial' ? 'orange'
-          : status === 'checking' || status === 'pending' ? 'blue'
+          : status === 'checking' || status === 'refreshing_source' || status === 'pending' ? 'blue'
           : status === 'disabled' ? 'default' : 'red';
       },
     },

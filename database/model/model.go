@@ -658,11 +658,16 @@ type ClientGrePeer struct {
 type Account struct {
 	Id int `json:"id" gorm:"primaryKey;autoIncrement"`
 
-	// Creator is written only on account creation from an authenticated admin or
-	// reseller action. Empty/zero deliberately means legacy or super-admin-created,
-	// neither of which should display an attribution line in the client list.
+	// Creator is immutable attribution from initial creation. The name is a snapshot
+	// so the database history survives deletion of the creator's user record.
 	CreatorUserId int    `json:"-" gorm:"column:creator_user_id;index"`
 	CreatorRole   string `json:"-" gorm:"column:creator_role"`
+	CreatorName   string `json:"-" gorm:"column:creator_name"`
+
+	// Owner is the current owner, separate from the immutable creator history.
+	OwnerUserId int    `json:"-" gorm:"column:owner_user_id;index"`
+	OwnerRole   string `json:"-" gorm:"column:owner_role"`
+	OwnerName   string `json:"-" gorm:"column:owner_name"`
 
 	// Email is the identity, and is matched case-insensitively after trimming (see
 	// AccountKey). uniqueIndex here mirrors xray.ClientTraffic.Email's own unique
@@ -683,14 +688,16 @@ type Account struct {
 	// the legacy shape, holding a UUID for vmess/vless, a login name for the
 	// credential VPNs and ssh, and the email itself for wg-c/awg/mtproto. Storing
 	// one "id" column would make it impossible to say which of those an account
-	// holds without knowing the protocol it is being rendered for.
-	UUID        string `json:"uuid" gorm:"column:uuid"`                // vmess / vless / tuic
-	VpnUsername string `json:"vpnUsername" gorm:"column:vpn_username"` // l2tp/pptp/openvpn/openconnect/sstp/ikev2/ssh login
-	Password    string `json:"password" gorm:"column:password"`        // trojan/shadowsocks/anytls + every credential VPN
-	Auth        string `json:"auth" gorm:"column:auth"`                // hysteria
-	Security    string `json:"security" gorm:"column:security"`        // vmess
-	Secret      string `json:"secret" gorm:"column:secret"`            // mtproto
-	NaiveUser   string `json:"naiveUser" gorm:"column:naive_username"` // naive HTTP Basic username; empty means "use Email"
+	// holds without knowing the protocol it is being rendered for. These are
+	// database-only credentials; API responses use explicitly scoped DTOs so an
+	// accidental serialization of Account cannot publish them.
+	UUID        string `json:"-" gorm:"column:uuid"`           // vmess / vless / tuic
+	VpnUsername string `json:"-" gorm:"column:vpn_username"`   // l2tp/pptp/openvpn/openconnect/sstp/ikev2/ssh login
+	Password    string `json:"-" gorm:"column:password"`       // trojan/shadowsocks/anytls + every credential VPN
+	Auth        string `json:"-" gorm:"column:auth"`           // hysteria
+	Security    string `json:"-" gorm:"column:security"`       // vmess
+	Secret      string `json:"-" gorm:"column:secret"`         // mtproto
+	NaiveUser   string `json:"-" gorm:"column:naive_username"` // naive HTTP Basic username; empty means "use Email"
 
 	// Quota and lifecycle: the entire point of the table. One set of these per
 	// account, however many inbounds it is on.
@@ -759,6 +766,24 @@ type Account struct {
 // TableName pins the table name so it does not collide with anything GORM would
 // infer, and so a future rename of the Go type cannot silently orphan live data.
 func (Account) TableName() string { return "accounts" }
+
+// AccountTransferHistory is an internal-only audit record for one completed transfer.
+// It is never exposed by the panel API.
+type AccountTransferHistory struct {
+	Id          int    `json:"-" gorm:"primaryKey;autoIncrement"`
+	AccountId   int    `json:"-" gorm:"column:account_id;index"`
+	Email       string `json:"-" gorm:"index"`
+	FromUserId  int    `json:"-" gorm:"column:from_user_id"`
+	FromRole    string `json:"-" gorm:"column:from_role"`
+	FromName    string `json:"-" gorm:"column:from_name"`
+	ToUserId    int    `json:"-" gorm:"column:to_user_id"`
+	ToRole      string `json:"-" gorm:"column:to_role"`
+	ToName      string `json:"-" gorm:"column:to_name"`
+	ActorUserId int    `json:"-" gorm:"column:actor_user_id"`
+	CreatedAt   int64  `json:"-" gorm:"autoCreateTime:milli"`
+}
+
+func (AccountTransferHistory) TableName() string { return "account_transfer_histories" }
 
 // AccountInbound is ONE membership: this account is served on this inbound.
 // Composite primary key, so the same pair cannot be inserted twice.

@@ -8,10 +8,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v2/web/session"
 )
 
 func (a *CoreController) externalSubscriptionList(c *gin.Context) {
 	module, err := a.dynamicSubscriptionService.Module()
+	if err == nil {
+		user := session.GetLoginUser(c)
+		if user == nil || !user.IsSuperAdmin {
+			// Source URLs commonly embed a bearer token in their path or query. Core
+			// Settings delegates may inspect selector status, but only superadmins can
+			// manage it and therefore receive the URL needed to edit a slot.
+			for i := range module.Slots {
+				module.Slots[i].SourceURL = ""
+			}
+		}
+	}
 	jsonObj(c, module, err)
 }
 
