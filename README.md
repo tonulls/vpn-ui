@@ -80,13 +80,16 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 ```
 
 ## Полезные команды
-```Проверить_состояние_службы:
+◾ Проверить состояние службы:
+```bash
 sudo systemctl status vpn-ui.service --no-pager
 ```
-```Следить_за_журналом_в_реальном_времени:
+◾ Следить за журналом в реальном времени:
+```bash
 sudo journalctl -u vpn-ui.service -f
 ```
-```Проверить_версию_установленной_панели:
+◾ Проверить версию установленной панели:
+```bash
 sudo /opt/vpn-ui/vpn-ui-amd64 -v
 ```
 
@@ -267,6 +270,13 @@ sudo ./run.sh --only ubuntu-24
 ```
 
 ## Donate
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
 
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
