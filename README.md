@@ -79,6 +79,17 @@ curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/tonulls/dep
 sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 ```
 
+## Полезные команды
+```Проверить_состояние_службы:
+sudo systemctl status vpn-ui.service --no-pager
+```
+```Следить_за_журналом_в_реальном_времени:
+sudo journalctl -u vpn-ui.service -f
+```
+```Проверить_версию_установленной_панели:
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
+
 > [!NOTE]
 > Путь к базе данных, служба systemd и все порты по умолчанию были изменены, поэтому вы можете без каких-либо проблем установить эту панель рядом с другими вашими панелями.
 
