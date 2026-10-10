@@ -81,6 +81,20 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 > [!NOTE]
 > Veritabanı yolu, systemd servisi ve tüm varsayılan portlar değiştirildi; bu yüzden bu paneli hiçbir sorun yaşamadan diğer panellerinizin yanına kurabilirsiniz.
 
+## Yararlı komutlar
+◾ Hizmet durumunu kontrol et:
+```bash
+sudo systemctl status vpn-ui.service --no-pager
+```
+◾ Panel günlüğünü gerçek zamanlı izle:
+```bash
+sudo journalctl -u vpn-ui.service -f
+```
+◾ Yüklü panel sürümünü kontrol et:
+```bash
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
+
 ## Yeni Protokollerin Xray-core Çekirdeği ile Etkileşimi
 
 ```mermaid
@@ -256,6 +270,16 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
+
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
 🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
+
+🛠️ Codex yardımıyla düzenlendi

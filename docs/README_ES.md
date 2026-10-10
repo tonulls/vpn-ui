@@ -81,6 +81,20 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 > [!NOTE]
 > La ruta de la base de datos, el servicio **systemd** y todos los puertos predeterminados han cambiado, así que puedes instalar este panel junto a tus otros paneles sin ningún problema.
 
+## Comandos útiles
+◾ Comprobar el estado del servicio:
+```bash
+sudo systemctl status vpn-ui.service --no-pager
+```
+◾ Seguir el registro del panel en tiempo real:
+```bash
+sudo journalctl -u vpn-ui.service -f
+```
+◾ Comprobar la versión instalada del panel:
+```bash
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
+
 ## Cómo interactúan los nuevos protocolos con el núcleo de Xray-core
 
 ```mermaid
@@ -256,6 +270,16 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
+
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
 🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
+
+🛠️ Modificado con ayuda de Codex

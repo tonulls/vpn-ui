@@ -82,6 +82,20 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 > [!NOTE]
 > مسیر دیتابیس، سرویس systemd و همه‌ی پورت‌های پیش‌فرض تغییر کرده‌اند، پس می‌تونید این پنل رو بدون هیچ مشکلی کنار پنل‌های دیگه‌تون نصب کنید.
 
+## دستورهای مفید
+◾ بررسی وضعیت سرویس:
+```bash
+sudo systemctl status vpn-ui.service --no-pager
+```
+◾ دنبال‌کردن زندهٔ گزارش پنل:
+```bash
+sudo journalctl -u vpn-ui.service -f
+```
+◾ بررسی نسخهٔ نصب‌شدهٔ پنل:
+```bash
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
+
 ## نحوه‌ی تعامل پروتکل‌های جدید با هسته‌ی Xray-core
 
 ```mermaid
@@ -255,6 +269,16 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
+
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
 🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
+
+🛠️ با کمک Codex ویرایش شده

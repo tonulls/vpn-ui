@@ -81,6 +81,20 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 > [!NOTE]
 > 数据库路径、systemd 服务以及所有默认端口均已更改，因此您可以将本面板与您的其他面板并存安装，而不会产生任何问题。
 
+## 实用命令
+◾ 检查服务状态：
+```bash
+sudo systemctl status vpn-ui.service --no-pager
+```
+◾ 实时查看面板日志：
+```bash
+sudo journalctl -u vpn-ui.service -f
+```
+◾ 检查已安装的面板版本：
+```bash
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
+
 ## 新增协议与 Xray-core 内核的交互方式
 
 ```mermaid
@@ -256,6 +270,16 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
+
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
 🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
+
+🛠️ 由 Codex 辅助修改

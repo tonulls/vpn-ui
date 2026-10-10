@@ -37,26 +37,24 @@
 - إمكانية **تجميد (Freeze)** الحسابات
 - إضافة **checkbox** إلى الـ client والـ Inbound
 - إمكانية **Bulk Operation**:
-    * تغيير حجم الحسابات بشكل جماعي
-    * تغيير مدة الحسابات بشكل جماعي
-    * تفعيل/تعطيل الحسابات بشكل جماعي
-    * حذف الحسابات بشكل جماعي
-    * حذف الـ Inbound بشكل جماعي
-    * **تجميد/إلغاء تجميد (Freeze/Un-Freeze)** الحسابات بشكل جماعي
+  * تغيير حجم الحسابات بشكل جماعي
+  * تغيير مدة الحسابات بشكل جماعي
+  * تفعيل/تعطيل الحسابات بشكل جماعي
+  * حذف الحسابات بشكل جماعي
+  * حذف الـ Inbound بشكل جماعي
+  * **تجميد/إلغاء تجميد (Freeze/Un-Freeze)** الحسابات بشكل جماعي
 
 ## أنظمة التشغيل المُختبَرة
 
-
-| | التوزيعة |الإصدار |الإصدار |
-|:---:|:---|:---:|:---:|
-| <img src="https://cdn.simpleicons.org/ubuntu" width="32" height="32" alt="Ubuntu"> | **Ubuntu** | `24.04` | `26.04` |
-| <img src="https://cdn.simpleicons.org/debian" width="32" height="32" alt="Debian"> | **Debian** | `12` | `13` |
-| <img src="https://cdn.simpleicons.org/fedora" width="32" height="32" alt="Fedora"> | **Fedora** | `43` | `44` |
-| <img src="https://cdn.simpleicons.org/almalinux/2F80ED" width="32" height="32" alt="AlmaLinux"> | **AlmaLinux** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/rockylinux" width="32" height="32" alt="Rocky Linux"> | **Rocky Linux** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/centos" width="32" height="32" alt="CentOS Stream"> | **CentOS Stream** | `9` | `10` |
-| <img src="https://cdn.simpleicons.org/archlinux" width="32" height="32" alt="Arch Linux"> | **Arch Linux** | `Rolling` | |
-
+|  | التوزيعة        | الإصدار | الإصدار |
+| :-: | :---------------------- | :------------: | :------------: |
+|  | **Ubuntu**        |   `24.04`   |   `26.04`   |
+|  | **Debian**        |     `12`     |     `13`     |
+|  | **Fedora**        |     `43`     |     `44`     |
+|  | **AlmaLinux**     |     `9`     |     `10`     |
+|  | **Rocky Linux**   |     `9`     |     `10`     |
+|  | **CentOS Stream** |     `9`     |     `10`     |
+|  | **Arch Linux**    |  `Rolling`  |                |
 
 > [!IMPORTANT]
 > يُوصى بشدّة بتثبيت اللوحة على أنظمة التشغيل المُختبَرة؛ لأن احتمال ألّا تعمل النوى الجديدة بشكل صحيح على بقية أنظمة التشغيل مرتفع!
@@ -80,6 +78,26 @@ sudo /opt/vpn-ui/vpn-ui-amd64 --uninstall
 
 > [!NOTE]
 > تم تغيير مسار قاعدة البيانات وخدمة systemd وجميع المنافذ الافتراضية، لذا يمكنك تثبيت هذه اللوحة بجانب لوحاتك الأخرى دون أي مشكلة.
+
+## أوامر مفيدة
+
+◾ تحقق من حالة الخدمة:
+
+```bash
+sudo systemctl status vpn-ui.service --no-pager
+```
+
+◾ متابعة سجل اللوحة مباشرةً:
+
+```bash
+sudo journalctl -u vpn-ui.service -f
+```
+
+◾ التحقق من إصدار اللوحة المثبّت:
+
+```bash
+sudo /opt/vpn-ui/vpn-ui-amd64 -v
+```
 
 ## كيفية تفاعل البروتوكولات الجديدة مع نواة Xray-core
 
@@ -218,35 +236,35 @@ git clone --branch tonulls https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 > [!IMPORTANT]
 > اختبار E2E الكامل يستغرق وقتاً طويلاً جداً؛ إذا أجريت تغييراً صغيراً فقط في المشروع، فمن الأفضل اختبار ذلك الجزء فقط باستخدام الخيار `--tests`:
 
-| Test ID | Description |
-| :--- | :--- |
-| `core-init` | provision kernel modules + packages + xray core |
-| `server-setup` | create inbounds + accounts + source-IP routing rules |
-| `openvpn` | connect variants + checks + peer reachability (OpenVPN) |
-| `l2tp` | connect variants + checks + peer reachability (L2TP/IPsec) |
-| `pptp` | connect variants + checks + peer reachability (PPTP) |
-| `openconnect` | connect variants + checks + peer reachability + same-NAT user-limit (OpenConnect/ocserv) |
-| `sstp` | connect variants + checks + peer reachability (SSTP/accel-ppp, PPP-over-TLS) |
-| `ikev2` | connect + checks + peer reachability (IKEv2/IPsec, strongSwan charon; eap-mschapv2 + psk + eap-tls) |
-| `wg-c` | connect + checks + peer reachability + per-account usage/termination (WireGuard C, in-kernel wgctrl, gateway /29, + preshared-key mode) |
-| `awg` | connect + checks + peer reachability + per-account usage/termination (AmneziaWG, in-kernel amneziawg DKMS module, obfuscation params, + preshared-key mode) |
-| `gre` | connect + checks + peer reachability + per-account usage/termination (GRE site-to-site, in-kernel ip_gre; raw / IPsec / FOU peer modes, static and dynamic peers) |
-| `mtproto` | alias: runs every MTProto phase below (MTProto Proxy, telemt) |
-| `mtproto-classic` | handshake + relay to a real Telegram DC + wrong-secret control + usage (obfuscated2) |
-| `mtproto-secure` | same, "dd" random-padding secret |
-| `mtproto-tls` | same + FakeTLS ServerHello HMAC verified, "ee" secret |
-| `mtproto-toggle` | editing an account's modes takes effect on the RUNNING daemon (no restart) |
-| `mtproto-termination` | quota auto-disables the account AND the proxy stops relaying for it |
-| `mtproto-adtag` | an ad tag forces middle-proxy egress and drops the inbound's Xray routing, and clearing it restores both |
-| `ssh` | connect + checks + routing + user-limit + both strategies + per-account usage/termination (SSH relay, in-binary Go gateway) |
-| `ssh-udp` | UDP through the relay: udpgw terminated in-process and bridged to Xray via SOCKS5 UDP ASSOCIATE, plus accounting |
-| `bulk-ops` | bulk client add/sub/enable/disable + TXT/PDF export via API |
-| `backup-restore` | DB export + import round-trip |
-| `warp-socks` | Cloudflare warp-cli SOCKS install + egress |
-| `random-cfg` | `--random` switch: randomize port + creds + webpath, then restore |
-| `systemd` | `--systemd` switch: install + run the panel as a systemd unit |
-| `uninstall` | `--uninstall` switch: install everything, tear down, assert clean host |
-| `export-js` | host-side Node TXT/PDF export test (no VM) |
+| Test ID                 | Description                                                                                                                                                       |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core-init`           | provision kernel modules + packages + xray core                                                                                                                   |
+| `server-setup`        | create inbounds + accounts + source-IP routing rules                                                                                                              |
+| `openvpn`             | connect variants + checks + peer reachability (OpenVPN)                                                                                                           |
+| `l2tp`                | connect variants + checks + peer reachability (L2TP/IPsec)                                                                                                        |
+| `pptp`                | connect variants + checks + peer reachability (PPTP)                                                                                                              |
+| `openconnect`         | connect variants + checks + peer reachability + same-NAT user-limit (OpenConnect/ocserv)                                                                          |
+| `sstp`                | connect variants + checks + peer reachability (SSTP/accel-ppp, PPP-over-TLS)                                                                                      |
+| `ikev2`               | connect + checks + peer reachability (IKEv2/IPsec, strongSwan charon; eap-mschapv2 + psk + eap-tls)                                                               |
+| `wg-c`                | connect + checks + peer reachability + per-account usage/termination (WireGuard C, in-kernel wgctrl, gateway /29, + preshared-key mode)                           |
+| `awg`                 | connect + checks + peer reachability + per-account usage/termination (AmneziaWG, in-kernel amneziawg DKMS module, obfuscation params, + preshared-key mode)       |
+| `gre`                 | connect + checks + peer reachability + per-account usage/termination (GRE site-to-site, in-kernel ip_gre; raw / IPsec / FOU peer modes, static and dynamic peers) |
+| `mtproto`             | alias: runs every MTProto phase below (MTProto Proxy, telemt)                                                                                                     |
+| `mtproto-classic`     | handshake + relay to a real Telegram DC + wrong-secret control + usage (obfuscated2)                                                                              |
+| `mtproto-secure`      | same, "dd" random-padding secret                                                                                                                                  |
+| `mtproto-tls`         | same + FakeTLS ServerHello HMAC verified, "ee" secret                                                                                                             |
+| `mtproto-toggle`      | editing an account's modes takes effect on the RUNNING daemon (no restart)                                                                                        |
+| `mtproto-termination` | quota auto-disables the account AND the proxy stops relaying for it                                                                                               |
+| `mtproto-adtag`       | an ad tag forces middle-proxy egress and drops the inbound's Xray routing, and clearing it restores both                                                          |
+| `ssh`                 | connect + checks + routing + user-limit + both strategies + per-account usage/termination (SSH relay, in-binary Go gateway)                                       |
+| `ssh-udp`             | UDP through the relay: udpgw terminated in-process and bridged to Xray via SOCKS5 UDP ASSOCIATE, plus accounting                                                  |
+| `bulk-ops`            | bulk client add/sub/enable/disable + TXT/PDF export via API                                                                                                       |
+| `backup-restore`      | DB export + import round-trip                                                                                                                                     |
+| `warp-socks`          | Cloudflare warp-cli SOCKS install + egress                                                                                                                        |
+| `random-cfg`          | `--random` switch: randomize port + creds + webpath, then restore                                                                                               |
+| `systemd`             | `--systemd` switch: install + run the panel as a systemd unit                                                                                                   |
+| `uninstall`           | `--uninstall` switch: install everything, tear down, assert clean host                                                                                          |
+| `export-js`           | host-side Node TXT/PDF export test (no VM)                                                                                                                        |
 
 ولاختبار نظام تشغيل واحد محدّد فقط، يمكنك أيضاً استخدام الخيار `--only`:
 
@@ -256,6 +274,16 @@ sudo ./run.sh --only ubuntu-24
 
 ## Donate
 
+🔹EVM:      ``0x6Ad56B8C723140ACb43F6070Af2102A98F28A72C``
+
+🔹BTC:      ``bc1qvp9mx5w6m0gv022p0xdde5qqmzfyd4yuys6c93``
+
+🔹TRON:     ``TLLUSBZBLb7x994TH1eYrDZhmLFPBLZSrv``
+
+🔹SOLANA:   ``8p5FjXzNYraUvckfzNt37ZRCzx36pd2SWdVvRErTkMyH``
+
 🔹GRAM-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
 
 🔹USDT-TON: ``UQD1gNMVhlJewKXMUY1E3_bedZsc-ktzt8ZxZCUhzrcEcPyg``
+
+🛠️ تم التعديل بمساعدة Codex
