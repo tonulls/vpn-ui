@@ -18,18 +18,29 @@
 
               <a-card hoverable :bodyStyle="{ padding: 0 }">
                 <a-table :columns="columns" :row-key="r => r.id" :data-source="admins"
-                  :scroll="isMobile ? {} : { x: 700 }" :pagination="false" bordered
+                  :scroll="{ x: 700 }" table-layout="fixed" :pagination="false" bordered
                   :locale='{ emptyText: `{{ i18n "noData" }}` }'>
 
                   <template slot="username" slot-scope="text, admin">
-                    <span>[[ admin.username ]]</span>
-                    <a-tag v-if="admin.isSuperAdmin" color="purple" :style="{ marginLeft: '6px' }">
+                    <span :title="admin.username" :style="{
+                      display: 'block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }">[[ admin.username ]]</span>
+                    <a-tag v-if="admin.isSuperAdmin" color="purple" title='{{ i18n "pages.admins.superAdmin" }}' :style="{
+                      display: 'block', maxWidth: '100%', margin: '3px 0 0', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }">
                       {{ i18n "pages.admins.superAdmin" }}
                     </a-tag>
                   </template>
 
+                  <template slot="nickname" slot-scope="text">
+                    <span :title="text" :style="{
+                      display: 'block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }">[[ text ]]</span>
+                  </template>
+
                   <template slot="enable" slot-scope="text, admin">
-                    <a-tag :color="admin.enable ? 'green' : 'red'">
+                    <a-tag :color="admin.enable ? 'green' : 'red'" :style="{ whiteSpace: 'nowrap' }">
                       [[ admin.enable ? '{{ i18n "enabled" }}' : '{{ i18n "disabled" }}' ]]
                     </a-tag>
                   </template>
@@ -95,11 +106,50 @@
 
 <script>
   const columns = [
-    { title: '{{ i18n "pages.admins.username" }}', align: 'center', width: 90, scopedSlots: { customRender: 'username' } },
-    { title: '{{ i18n "pages.admins.nickname" }}', dataIndex: 'nickname', align: 'center', width: 70 },
-    { title: '{{ i18n "status" }}', align: 'center', width: 50, scopedSlots: { customRender: 'enable' } },
-    { title: '{{ i18n "pages.admins.twoFactor" }}', align: 'center', width: 45, scopedSlots: { customRender: 'twoFactor' } },
-    { title: '{{ i18n "pages.admins.inboundAccess" }}', align: 'center', width: 45, scopedSlots: { customRender: 'inboundAccess' } },
+    {
+      title: '{{ i18n "pages.admins.username" }}', align: 'center', width: '100px',
+      customHeaderCell: () => ({ style: {
+        width: '100px', minWidth: '100px', maxWidth: '100px', whiteSpace: 'normal',
+        wordBreak: 'keep-all', overflowWrap: 'normal', paddingLeft: '0', paddingRight: '0',
+      } }),
+      customCell: () => ({ style: { width: '100px', minWidth: '100px', maxWidth: '100px' } }),
+      scopedSlots: { customRender: 'username' },
+    },
+    {
+      title: '{{ i18n "pages.admins.nickname" }}', dataIndex: 'nickname', align: 'center', width: '100px',
+      customHeaderCell: () => ({ style: {
+        width: '100px', minWidth: '100px', maxWidth: '100px', whiteSpace: 'normal',
+        wordBreak: 'keep-all', overflowWrap: 'normal', paddingLeft: '0', paddingRight: '0',
+      } }),
+      customCell: () => ({ style: { width: '100px', minWidth: '100px', maxWidth: '100px' } }),
+      scopedSlots: { customRender: 'nickname' },
+    },
+    {
+      title: '{{ i18n "status" }}', align: 'center', width: '100px',
+      customHeaderCell: () => ({ style: { width: '100px', minWidth: '100px', maxWidth: '100px' } }),
+      customCell: () => ({ style: {
+        width: '100px', minWidth: '100px', maxWidth: '100px', paddingLeft: '0', paddingRight: '0',
+      } }),
+      scopedSlots: { customRender: 'enable' },
+    },
+    {
+      title: '{{ i18n "pages.admins.twoFactor" }}', align: 'center', width: '100px',
+      customHeaderCell: () => ({ style: {
+        width: '100px', minWidth: '100px', maxWidth: '100px', whiteSpace: 'normal',
+        wordBreak: 'keep-all', overflowWrap: 'normal', paddingLeft: '0', paddingRight: '0',
+      } }),
+      customCell: () => ({ style: { width: '100px', minWidth: '100px', maxWidth: '100px' } }),
+      scopedSlots: { customRender: 'twoFactor' },
+    },
+    {
+      title: '{{ i18n "pages.admins.inboundAccess" }}', align: 'center', width: '100px',
+      customHeaderCell: () => ({ style: {
+        width: '100px', minWidth: '100px', maxWidth: '100px', whiteSpace: 'normal',
+        wordBreak: 'keep-all', overflowWrap: 'normal', paddingLeft: '0', paddingRight: '0',
+      } }),
+      customCell: () => ({ style: { width: '100px', minWidth: '100px', maxWidth: '100px' } }),
+      scopedSlots: { customRender: 'inboundAccess' },
+    },
     { title: '{{ i18n "pages.admins.permissions" }}', align: 'left', width: 180, scopedSlots: { customRender: 'permissions' } },
     { title: '', align: 'center', width: 30, scopedSlots: { customRender: 'action' } },
   ];

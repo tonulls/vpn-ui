@@ -33,9 +33,9 @@ func NewClientsController(g *gin.RouterGroup) *ClientsController {
 }
 
 func (a *ClientsController) initRouter(g *gin.RouterGroup) {
-	// accessInbounds, the same claim the Inbounds page takes: this shows the same
-	// accounts from the other side, so a caller who may see one may see the other.
-	// The rows are then narrowed per caller inside ListAccounts.
+	// Inbound access or any client-action permission opens this account-centric view;
+	// callers who may manage clients need its list even when they cannot administer
+	// the inbounds themselves. Rows are narrowed per caller inside ListAccounts.
 	g.GET("/list", a.list)
 	g.GET("/assignable", a.assignable)
 	g.POST("/transfer", requireSuperAdmin(), a.transfer)

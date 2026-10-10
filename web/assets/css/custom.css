@@ -1653,6 +1653,15 @@ strong {
   font-weight:500;
 }
 
+.account-transfer-message {
+  display:inline-block;
+  max-width:min(760px, 82vw);
+  text-align:left;
+  vertical-align:top;
+}
+.account-transfer-message > span { display:block; }
+.account-transfer-message .account-transfer-summary { font-weight:600; }
+
 .ant-collapse>.ant-collapse-item>.ant-collapse-header {
   padding:10px 16px 10px 40px;
 }

@@ -102,6 +102,9 @@ var (
 
 // BulkCharge is one account's new standing under a priced batch.
 type BulkCharge struct {
+	// UserId is the reseller whose balance owns this charge. It is populated for
+	// both reseller-initiated and admin-initiated operations on reseller accounts.
+	UserId int
 	// Email is the LEDGER's spelling of the account, not the request's, because
 	// it is the key the charge is written back on.
 	Email       string
@@ -128,32 +131,37 @@ type BulkCharge struct {
 	ExpiryTime  int64
 }
 
-// BulkTicket is a reservation covering a whole batch. One ticket rather than N,
-// because the balance check that matters is against the batch total and a
-// half-applied batch must be undoable in one call.
-type BulkTicket struct {
-	// Active is false for an admin, and for any reseller op that moves no bytes.
-	// Nothing to reserve means nothing to roll back.
-	Active     bool
+// BulkReservation is one owner's net balance movement within an all-or-nothing
+// batch. Admin batches can contain accounts owned by several resellers.
+type BulkReservation struct {
 	UserId     int
 	DeltaSpent int64
-	Charges    []BulkCharge
 }
 
-// PrepareBulk scopes a bulk request down to the caller's own accounts and
-// reserves what the operation costs them.
-//
-// Returns an INACTIVE ticket for anyone who is not a reseller, having touched
-// neither the request nor the ledger: an admin's bulk operation behaves exactly
-// as it did before this file existed.
-//
-// Reserve first, apply second, matching PrepareClientCreate. A crash between the
-// two loses the reseller balance an admin can hand back; the other order hands
-// out traffic with nothing charged for it, which no operator can find later.
+// BulkTicket reserves every affected reseller balance before any quota is changed.
+type BulkTicket struct {
+	Active       bool
+	UserId       int   // retained for the single-reseller call shape
+	DeltaSpent   int64 // aggregate, retained for existing callers/tests
+	Reservations []BulkReservation
+	Charges      []BulkCharge
+}
+
+// PrepareBulk reserves reseller-owned traffic changes before the generic bulk
+// applier mutates quotas. Reseller callers are scoped to their own accounts;
+// admin callers retain the broad selection while additions and deductions on
+// reseller-owned accounts settle against each account owner's balance.
 func (s *ResellerService) PrepareBulk(user *model.User, req *BulkClientUpdateRequest) (BulkTicket, error) {
-	if user == nil || req == nil || !user.IsReseller {
+	if user == nil || req == nil {
 		return BulkTicket{}, nil
 	}
+	if !user.IsReseller {
+		if req.Op != bulkOpAddTraffic && req.Op != bulkOpSubTraffic {
+			return BulkTicket{}, nil
+		}
+		return s.prepareAdminBulkTrafficChange(req)
+	}
+
 	profile, err := s.ProfileFor(user.Id)
 	if err != nil {
 		return BulkTicket{}, err
@@ -171,45 +179,134 @@ func (s *ResellerService) PrepareBulk(user *model.User, req *BulkClientUpdateReq
 	scopeBulkTargets(req, owned)
 
 	if req.Op != bulkOpAddTraffic && req.Op != bulkOpSubTraffic {
-		// SECURITY: these two are free, and on a DEPLETED account either is also a
-		// traffic grant. disableInvalidClients switches those off again, but on a
-		// 10 second cron tick, so a loop keeps accounts that have spent everything
-		// they were sold permanently online. Dropped from the batch rather than
-		// refused, so a mixed selection still switches on the ones with traffic
-		// left.
-		//
-		// unfreeze belongs here as much as enable does: it writes enable=true just
-		// the same (see applyBulkClientOp), and nothing in it looks at the quota.
-		// Exempting it because it "only restores a deadline" was wrong.
 		if req.Op == bulkOpEnable || req.Op == bulkOpUnfreeze {
 			if err := s.dropDepletedTargets(req); err != nil {
 				return BulkTicket{}, err
 			}
 		}
-		return BulkTicket{}, nil // scoped, and free
+		return BulkTicket{}, nil
 	}
 
-	// The applier's own clock, mirrored. Irrelevant to the two ops that reach
-	// here (only the day ops and freeze read it), but a divergent clock in a
-	// pricing path is the kind of thing that is only wrong once.
 	now := time.Now().Unix() * 1000
 	items, err := s.bulkPriceables(user.Id, req, now)
 	if err != nil {
 		return BulkTicket{}, err
 	}
-	// The applier about to run iterates the REQUEST's targets; the pricing above is
-	// per account. Narrowing the request to what was priced is what stops the two
-	// acting on different sets.
 	scopeBulkTargetsToPriced(req, items)
 	ticket, err := priceBulk(*profile, req, items, now)
 	if err != nil {
+		var shortfall *BalanceShortfallError
+		if errors.As(err, &shortfall) {
+			shortfall.OwnerName = user.DisplayUsername()
+		}
 		return BulkTicket{}, err
 	}
-	ticket.UserId = user.Id
+	setBulkTicketOwner(&ticket, user.Id)
 	if err := s.reserveBulk(ticket); err != nil {
 		return BulkTicket{}, err
 	}
 	return ticket, nil
+}
+
+// prepareAdminBulkTrafficChange preserves admin access to house-owned accounts,
+// but prices additions and refunds for selected accounts with reseller ledger
+// rows. All owner reservations are committed in one transaction before the generic
+// applier sees the original, unfiltered target list.
+func (s *ResellerService) prepareAdminBulkTrafficChange(req *BulkClientUpdateRequest) (BulkTicket, error) {
+	emails := make([]string, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		if key := emailKey(target.Email); key != "" {
+			emails = append(emails, key)
+		}
+	}
+	if len(emails) == 0 {
+		return BulkTicket{}, nil
+	}
+	var ledgerRows []model.ResellerClient
+	if err := database.GetDB().Where("LOWER(TRIM(email)) IN ?", emails).Find(&ledgerRows).Error; err != nil {
+		return BulkTicket{}, err
+	}
+	ownerByEmail := make(map[string]int, len(ledgerRows))
+	for _, row := range ledgerRows {
+		ownerByEmail[emailKey(row.Email)] = row.UserId
+	}
+	if len(ownerByEmail) == 0 {
+		return BulkTicket{}, nil
+	}
+
+	// Preserve input order and include each (inbound,email) membership for its
+	// owner; bulkPriceables deduplicates billing to one charge per account.
+	byOwner := make(map[int][]BulkClientTarget)
+	ownerIDs := make([]int, 0)
+	seenOwner := make(map[int]bool)
+	for _, target := range req.Targets {
+		ownerID := ownerByEmail[emailKey(target.Email)]
+		if ownerID <= 0 {
+			continue
+		}
+		if !seenOwner[ownerID] {
+			seenOwner[ownerID] = true
+			ownerIDs = append(ownerIDs, ownerID)
+		}
+		byOwner[ownerID] = append(byOwner[ownerID], target)
+	}
+	sort.Ints(ownerIDs)
+
+	now := time.Now().Unix() * 1000
+	ticket := BulkTicket{}
+	for _, ownerID := range ownerIDs {
+		profile, err := s.ProfileFor(ownerID)
+		if err != nil {
+			return BulkTicket{}, fmt.Errorf("load reseller profile for owner %d: %w", ownerID, err)
+		}
+		ownerReq := *req
+		ownerReq.Targets = byOwner[ownerID]
+		if err := bulkOpAllowed(*profile, &ownerReq); err != nil {
+			return BulkTicket{}, err
+		}
+		items, err := s.bulkPriceables(ownerID, &ownerReq, now)
+		if err != nil {
+			return BulkTicket{}, err
+		}
+		part, err := priceBulk(*profile, &ownerReq, items, now)
+		if err != nil {
+			var shortfall *BalanceShortfallError
+			if errors.As(err, &shortfall) {
+				var owner model.User
+				if loadErr := database.GetDB().Where("id = ?", ownerID).First(&owner).Error; loadErr == nil {
+					shortfall.OwnerName = owner.DisplayUsername()
+				}
+				if shortfall.OwnerName == "" {
+					shortfall.OwnerName = fmt.Sprintf("#%d", ownerID)
+				}
+			}
+			return BulkTicket{}, err
+		}
+		if !part.Active {
+			continue
+		}
+		setBulkTicketOwner(&part, ownerID)
+		ticket.Active = true
+		ticket.DeltaSpent += part.DeltaSpent
+		ticket.Charges = append(ticket.Charges, part.Charges...)
+		ticket.Reservations = append(ticket.Reservations, part.Reservations...)
+	}
+	if err := s.reserveBulk(ticket); err != nil {
+		return BulkTicket{}, err
+	}
+	return ticket, nil
+}
+
+func setBulkTicketOwner(ticket *BulkTicket, userID int) {
+	ticket.UserId = userID
+	for i := range ticket.Charges {
+		ticket.Charges[i].UserId = userID
+	}
+	if ticket.Active {
+		ticket.Reservations = append(ticket.Reservations, BulkReservation{
+			UserId: userID, DeltaSpent: ticket.DeltaSpent,
+		})
+	}
 }
 
 // dropDepletedTargets removes accounts that have already moved everything their
@@ -470,13 +567,12 @@ func (s *ResellerService) bulkPriceables(userId int, req *BulkClientUpdateReques
 	return out, nil
 }
 
-// priceBulk turns the affected accounts into one reservation.
+// priceBulk turns one owner's affected accounts into one reservation.
 //
 // The balance check is on the TOTAL and happens before any account is priced, so
-// that the reseller is told the batch's real shortfall. Doing it per account
-// would let a batch of fifty pass on a balance that fits one, and quoting first
-// would report the shortfall of a single account, which is the wrong number to
-// go and ask an admin for.
+// the owner is told the batch's real shortfall. Doing it per account would let a
+// batch of fifty pass on a balance that fits one, and quoting first would report
+// the shortfall of a single account, which is the wrong number to ask an admin for.
 func priceBulk(p model.ResellerProfile, req *BulkClientUpdateRequest, items []bulkPriceable, now int64) (BulkTicket, error) {
 	ticket := BulkTicket{}
 	if len(items) == 0 {
@@ -552,8 +648,10 @@ func (s *ResellerService) reserveBulk(t BulkTicket) error {
 		return nil
 	}
 	return database.GetDB().Transaction(func(tx *gorm.DB) error {
-		if err := addSpent(tx, t.UserId, t.DeltaSpent); err != nil {
-			return err
+		for _, reservation := range bulkReservations(t) {
+			if err := addSpent(tx, reservation.UserId, reservation.DeltaSpent); err != nil {
+				return err
+			}
 		}
 		return writeBulkCharges(tx, t, false)
 	})
@@ -801,11 +899,21 @@ func (s *ResellerService) RollbackBulk(t BulkTicket) error {
 	return database.GetDB().Transaction(func(tx *gorm.DB) error {
 		// Unguarded: undoing a batch is a correction, not a commitment, and a
 		// bulk deduct unwinds as a debit that the headroom check would refuse.
-		if err := restoreSpent(tx, t.UserId, -t.DeltaSpent); err != nil {
-			return err
+		for _, reservation := range bulkReservations(t) {
+			if err := restoreSpent(tx, reservation.UserId, -reservation.DeltaSpent); err != nil {
+				return err
+			}
 		}
 		return writeBulkCharges(tx, t, true)
 	})
+}
+
+func bulkReservations(t BulkTicket) []BulkReservation {
+	if len(t.Reservations) > 0 {
+		return t.Reservations
+	}
+	// Compatibility for tickets constructed by older callers/tests.
+	return []BulkReservation{{UserId: t.UserId, DeltaSpent: t.DeltaSpent}}
 }
 
 func writeBulkCharges(tx *gorm.DB, t BulkTicket, restore bool) error {
@@ -814,9 +922,16 @@ func writeBulkCharges(tx *gorm.DB, t BulkTicket, restore bool) error {
 		if restore {
 			charged = c.PrevCharged
 		}
-		if err := tx.Model(&model.ResellerClient{}).Where("email = ?", c.Email).
-			Update("charged_bytes", charged).Error; err != nil {
-			return err
+		query := tx.Model(&model.ResellerClient{}).Where("email = ?", c.Email)
+		if c.UserId > 0 {
+			query = query.Where("user_id = ?", c.UserId)
+		}
+		res := query.Update("charged_bytes", charged)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("reseller ledger row changed during bulk operation: %s", c.Email)
 		}
 	}
 	return nil

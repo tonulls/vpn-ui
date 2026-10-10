@@ -78,7 +78,7 @@ func (s *AccountTransferService) TransferAccounts(actor *model.User, req Account
 	if !target.Enable || ownerRoleForUser(&target) != req.TargetRole {
 		return result, errors.New("получатель отключён или его роль не совпадает с выбранной")
 	}
-	if !target.Can(model.PermAccessInbounds) {
+	if !target.CanAccessClients() {
 		return result, errors.New("получателю не разрешено управлять подключениями и клиентами")
 	}
 

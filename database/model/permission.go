@@ -165,3 +165,11 @@ func (u *User) Can(perm Permission) bool {
 	}
 	return u.Permissions.Has(perm)
 }
+
+// CanAccessClients reports whether an account-centric client page is readable.
+// The inbound-reader permission grants the page directly; any client operation
+// permission also grants the read surface needed to manage those accounts.
+func (u *User) CanAccessClients() bool {
+	return u.Can(PermAccessInbounds) || u.Can(PermCreateClient) ||
+		u.Can(PermEditClient) || u.Can(PermDeleteClient) || u.Can(PermBulkOperation)
+}

@@ -29,18 +29,19 @@ type ResellerService struct{}
 const oneGB = int64(1024 * 1024 * 1024)
 
 var (
-	ErrNotAReseller         = errors.New("that account is not a reseller")
-	ErrResellerNotFound     = errors.New("reseller not found")
-	ErrResellerNameTaken    = errors.New("that username is already taken")
-	ErrInsufficientBalance  = errors.New("not enough traffic left on your balance")
-	ErrResetNotOwned        = errors.New("you can only reset accounts you created")
-	ErrBelowMinCreate       = errors.New("below the minimum traffic you may create an account with")
-	ErrBelowMinAdd          = errors.New("below the minimum traffic you may add in one edit")
-	ErrUnlimitedAccount     = errors.New("you cannot create an account with unlimited traffic")
-	ErrInvalidQuota         = errors.New("that traffic quota is not a number of bytes an account can hold")
-	ErrClientNotOwned       = errors.New("not found")
-	ErrResellerHasClients   = errors.New("this reseller still owns accounts; delete them first")
-	ErrInboundNotAssignable = errors.New("you can only assign inbounds you have access to")
+	ErrNotAReseller           = errors.New("that account is not a reseller")
+	ErrResellerNotFound       = errors.New("reseller not found")
+	ErrResellerNameTaken      = errors.New("that username is already taken")
+	ErrInsufficientBalance    = errors.New("not enough traffic left on your balance")
+	ErrResetNotOwned          = errors.New("you can only reset accounts you created")
+	ErrBelowMinCreate         = errors.New("below the minimum traffic you may create an account with")
+	ErrBelowMinAdd            = errors.New("below the minimum traffic you may add in one edit")
+	ErrUnlimitedAccount       = errors.New("you cannot create an account with unlimited traffic")
+	ErrInvalidQuota           = errors.New("that traffic quota is not a number of bytes an account can hold")
+	ErrClientNotOwned         = errors.New("not found")
+	ErrResellerHasClients     = errors.New("this reseller still owns accounts; delete them first")
+	ErrInboundNotAssignable   = errors.New("you can only assign inbounds you have access to")
+	ErrDeductExceedsAvailable = errors.New("deduction exceeds the reseller's available traffic")
 )
 
 // gbToBytes converts a whole-GB operator setting. The levers an admin types are
@@ -84,12 +85,25 @@ func AvailableBytes(p model.ResellerProfile) int64 {
 // shortBy names the exact deficit, because "not enough traffic" leaves a reseller
 // guessing how much to ask an admin for. The shortfall, not the price: they can
 // see what they asked for, what they cannot see is the gap.
+// BalanceShortfallError keeps the numeric deficit available to HTTP handlers so
+// they can explain a reseller-funded operation in the caller's locale.
+type BalanceShortfallError struct {
+	Shortfall string
+	OwnerName string
+}
+
+func (e *BalanceShortfallError) Error() string {
+	return fmt.Sprintf("%v: you are short %s", ErrInsufficientBalance, e.Shortfall)
+}
+
+func (e *BalanceShortfallError) Unwrap() error { return ErrInsufficientBalance }
+
 func shortBy(want, available int64) error {
 	short := want - available
 	if short < 0 {
 		short = 0
 	}
-	return fmt.Errorf("%w: you are short %s", ErrInsufficientBalance, common.FormatTraffic(short))
+	return &BalanceShortfallError{Shortfall: common.FormatTraffic(short)}
 }
 
 // --- balance arithmetic ---------------------------------------------------------
@@ -674,12 +688,8 @@ func (s *ResellerService) PrepareClientCreate(user *model.User, data *model.Inbo
 // rename priceable at all, and the caller finishes the job with RenameClient
 // once the write has landed.
 func (s *ResellerService) PrepareClientUpdate(user *model.User, data *model.Inbound, clientId string) (ChargeTicket, error) {
-	if user == nil || !user.IsReseller {
+	if user == nil {
 		return ChargeTicket{}, nil
-	}
-	profile, err := s.ProfileFor(user.Id)
-	if err != nil {
-		return ChargeTicket{}, err
 	}
 	cm, settings, clients, err := postedClient(data)
 	if err != nil {
@@ -690,15 +700,26 @@ func (s *ResellerService) PrepareClientUpdate(user *model.User, data *model.Inbo
 	if err != nil {
 		return ChargeTicket{}, err
 	}
-	// The account being edited must already be theirs. The route middleware only
-	// proves they can reach the INBOUND, which they share with admins, so it
-	// cannot answer this.
 	owner, err := s.ClientOwner(oldEmail)
 	if err != nil {
 		return ChargeTicket{}, err
 	}
-	if owner == nil || owner.UserId != user.Id {
+	if owner == nil {
+		if user.IsReseller {
+			return ChargeTicket{}, ErrClientNotOwned
+		}
+		// House-owned accounts keep the existing admin behavior: no reseller
+		// balance exists to charge.
+		return ChargeTicket{}, nil
+	}
+	if user.IsReseller && owner.UserId != user.Id {
 		return ChargeTicket{}, ErrClientNotOwned
+	}
+	// Admin edits are charged to the account's reseller owner, not to the actor.
+	// The inbound permission check only proves access to the shared inbound.
+	profile, err := s.ProfileFor(owner.UserId)
+	if err != nil {
+		return ChargeTicket{}, err
 	}
 
 	ct := &xray.ClientTraffic{}
@@ -720,6 +741,16 @@ func (s *ResellerService) PrepareClientUpdate(user *model.User, data *model.Inbo
 
 	q, err := Quote(in)
 	if err != nil {
+		var shortfall *BalanceShortfallError
+		if errors.As(err, &shortfall) {
+			var reseller model.User
+			if loadErr := database.GetDB().Select("username", "username_display").Where("id = ?", owner.UserId).First(&reseller).Error; loadErr == nil {
+				shortfall.OwnerName = reseller.DisplayUsername()
+			}
+			if shortfall.OwnerName == "" {
+				shortfall.OwnerName = fmt.Sprintf("#%d", owner.UserId)
+			}
+		}
 		return ChargeTicket{}, err
 	}
 	// SECURITY: a reseller cannot switch a depleted account back on without
@@ -742,7 +773,7 @@ func (s *ResellerService) PrepareClientUpdate(user *model.User, data *model.Inbo
 	}
 
 	ticket := ChargeTicket{
-		Active: true, UserId: user.Id, Email: oldEmail, InboundId: data.Id,
+		Active: true, UserId: owner.UserId, Email: oldEmail, InboundId: data.Id,
 		Quote: q, Create: false, PrevCharged: owner.ChargedBytes,
 	}
 	if err := s.reserve(ticket); err != nil {
@@ -1238,9 +1269,10 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 		if gs == nil {
 			gs = []int{} // marshal as [], not null: the UI ticks against it
 		}
-		available := p.AllowanceBytes - p.SpentBytes
-		if available < 0 {
-			available = 0
+		available := AvailableBytes(p)
+		spent := p.SpentBytes
+		if spent < 0 {
+			spent = 0
 		}
 		out = append(out, ResellerView{
 			Id:                    u.Id,
@@ -1249,7 +1281,7 @@ func (s *ResellerService) GetResellers(caller *model.User) ([]ResellerView, erro
 			Enable:                u.Enable,
 			TwoFactorEnable:       u.TwoFactorEnable,
 			AllowanceBytes:        p.AllowanceBytes,
-			SpentBytes:            p.SpentBytes,
+			SpentBytes:            spent,
 			AvailableBytes:        available,
 			Unlimited:             p.Unlimited,
 			DaysPerGB:             p.DaysPerGB,
@@ -1589,16 +1621,33 @@ func (s *ResellerService) UpdateReseller(caller *model.User, id int, spec Resell
 // Recharge moves a reseller's allowance. Positive tops them up; negative takes
 // back, clamped so an allowance never goes below zero.
 func (s *ResellerService) Recharge(caller *model.User, id int, deltaBytes int64) error {
-	_, profile, err := s.manageable(caller, id)
-	if err != nil {
+	if _, _, err := s.manageable(caller, id); err != nil {
 		return err
 	}
-	next := profile.AllowanceBytes + deltaBytes
-	if next < 0 {
-		next = 0
+	if deltaBytes == math.MinInt64 {
+		return ErrDeductExceedsAvailable
 	}
-	return database.GetDB().Model(&model.ResellerProfile{}).
-		Where("user_id = ?", id).Update("allowance_bytes", next).Error
+	db := database.GetDB()
+	return db.Transaction(func(tx *gorm.DB) error {
+		query := tx.Model(&model.ResellerProfile{}).Where("user_id = ?", id)
+		if deltaBytes < 0 {
+			// A deduction can remove only uncommitted traffic. Keep the check in the
+			// UPDATE predicate so concurrent recharges cannot take back the same GB.
+			query = query.Where("unlimited = ? AND allowance_bytes - CASE WHEN spent_bytes > 0 THEN spent_bytes ELSE 0 END >= ?",
+				false, -deltaBytes)
+		}
+		result := query.Update("allowance_bytes", gorm.Expr("allowance_bytes + ?", deltaBytes))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 && deltaBytes < 0 {
+			return ErrDeductExceedsAvailable
+		}
+		if result.RowsAffected == 0 {
+			return ErrResellerNotFound
+		}
+		return nil
+	})
 }
 
 // Delete modes decide the fate of a reseller's accounts when it still owns some.

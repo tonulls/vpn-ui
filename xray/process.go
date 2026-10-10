@@ -15,6 +15,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/logretention"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
 )
 
@@ -74,9 +75,14 @@ func GetAccessPersistentLogPath() string {
 	return config.GetLogFolder() + "/3xipl-ap.log"
 }
 
-// GetAccessPersistentPrevLogPath returns the path to the previous persistent access log file.
+// GetAccessPersistentPrevLogPath returns the path to yesterday's persistent access log.
 func GetAccessPersistentPrevLogPath() string {
 	return config.GetLogFolder() + "/3xipl-ap.prev.log"
+}
+
+// GetAccessPersistentPrev2LogPath returns the path to the persistent access log from two days ago.
+func GetAccessPersistentPrev2LogPath() string {
+	return config.GetLogFolder() + "/3xipl-ap.prev2.log"
 }
 
 // GetAccessLogPath reads the Xray config and returns the access log file path.
@@ -117,6 +123,24 @@ func AccessLogEnabled() bool {
 	return p != "" && p != "none"
 }
 
+// GetErrorLogPath reads the error log path from the active Xray config.
+func GetErrorLogPath() (string, error) {
+	data, err := os.ReadFile(GetConfigPath())
+	if err != nil {
+		return "", err
+	}
+	var configMap map[string]any
+	if err := json.Unmarshal(data, &configMap); err != nil {
+		return "", err
+	}
+	logConfig, ok := configMap["log"].(map[string]any)
+	if !ok {
+		return "", nil
+	}
+	path, _ := logConfig["error"].(string)
+	return path, nil
+}
+
 // stopProcess calls Stop on the given Process instance.
 func stopProcess(p *Process) {
 	p.Stop()
@@ -143,6 +167,15 @@ func NewTestProcess(xrayConfig *Config, configPath string) *Process {
 	return p
 }
 
+// NewExternalSelectorTestProcess isolates External Selector probe output in
+// the module journal rather than the shared Xray log.
+func NewExternalSelectorTestProcess(xrayConfig *Config, configPath string) *Process {
+	p := NewTestProcess(xrayConfig, configPath)
+	p.logWriter = NewExternalSelectorLogWriter()
+	p.externalSelectorProbe = true
+	return p
+}
+
 type process struct {
 	cmd *exec.Cmd
 
@@ -157,11 +190,12 @@ type process struct {
 	// (nothing persists liveness; the next tick rebuilds it in full).
 	onlineMemberships []string
 
-	config     *Config
-	configPath string // if set, use this path instead of GetConfigPath() and remove on Stop
-	logWriter  *LogWriter
-	exitErr    error
-	startTime  time.Time
+	config                *Config
+	configPath            string // if set, use this path instead of GetConfigPath() and remove on Stop
+	externalSelectorProbe bool
+	logWriter             *LogWriter
+	exitErr               error
+	startTime             time.Time
 }
 
 // newProcess creates a new internal process struct for Xray.
@@ -335,6 +369,9 @@ func (p *process) Start() (err error) {
 		speedLimitPath = abs
 	}
 	cmd.Env = append(os.Environ(), "XRAY_SPEEDLIMIT_FILE="+speedLimitPath)
+	if p.externalSelectorProbe {
+		cmd.Env = append(cmd.Env, "XRAY_EXTERNAL_SELECTOR_PROBE=1")
+	}
 
 	cmd.Stdout = p.logWriter
 	cmd.Stderr = p.logWriter
@@ -374,6 +411,13 @@ func (p *process) Stop() error {
 
 // writeCrashReport writes a crash report to the binary folder with a timestamped filename.
 func writeCrashReport(m []byte) error {
-	crashReportPath := config.GetBinFolderPath() + "/core_crash_" + time.Now().Format("20060102_150405") + ".log"
-	return os.WriteFile(crashReportPath, m, os.ModePerm)
+	crashDir := config.GetBinFolderPath()
+	crashReportPath := filepath.Join(crashDir, "core_crash_"+time.Now().Format("20060102_150405")+".log")
+	if err := os.WriteFile(crashReportPath, m, os.ModePerm); err != nil {
+		return err
+	}
+	if err := logretention.KeepNewestFiles(filepath.Join(crashDir, "core_crash_*.log"), 5); err != nil {
+		logger.Warning("Failed to prune Xray crash reports: ", err)
+	}
+	return nil
 }

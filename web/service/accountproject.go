@@ -449,19 +449,78 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int, creator
 	}
 
 	present := map[int]bool{}
+	resellerGrants := make(map[int]map[int]bool)
+	filteredClients := make([]map[string]any, 0, len(clients))
+	removedUnassigned := false
+	preserveUnassignedAccounts := make(map[int]bool)
+	accountKeys := make([]string, 0, len(clients))
+	for _, entry := range clients {
+		if email, _ := entry["email"].(string); accountKey(email) != "" {
+			accountKeys = append(accountKeys, accountKey(email))
+		}
+	}
+	legacyLedgerOwners := make(map[string]int)
+	if len(accountKeys) > 0 {
+		var ledgers []model.ResellerClient
+		if err := tx.Select("email", "user_id").Where("LOWER(TRIM(email)) IN ?", accountKeys).Find(&ledgers).Error; err != nil {
+			return err
+		}
+		for _, ledger := range ledgers {
+			legacyLedgerOwners[accountKey(ledger.Email)] = ledger.UserId
+		}
+	}
 	for listIndex, entry := range clients {
 		email, _ := entry["email"].(string)
 		if accountKey(email) == "" {
+			filteredClients = append(filteredClients, entry)
 			continue
 		}
 		account, err := s.upsertAccountFromEntry(tx, entry, &inbound, creator...)
 		if err != nil {
 			return err
 		}
+		resellerID := resellerMembershipOwnerID(account, legacyLedgerOwners[accountKey(account.Email)])
+		if resellerID > 0 {
+			allowed, ok := resellerGrants[resellerID]
+			if !ok {
+				allowed, err = resellerInboundGrantSet(tx, resellerID)
+				if err != nil {
+					return err
+				}
+				resellerGrants[resellerID] = allowed
+			}
+			if !allowed[inbound.Id] {
+				// Admin-written legacy settings are clamped too: otherwise the
+				// client could keep using an inbound the owner cannot manage.
+				removedUnassigned = true
+				preserveUnassignedAccounts[account.Id] = true
+				continue
+			}
+		}
+		filteredClients = append(filteredClients, entry)
 		if err := s.upsertMembership(tx, account.Id, &inbound, entry, listIndex); err != nil {
 			return err
 		}
 		present[account.Id] = true
+	}
+	if removedUnassigned {
+		var root map[string]any
+		if err := json.Unmarshal([]byte(inbound.Settings), &root); err != nil || root == nil {
+			if err == nil {
+				err = common.NewErrorf("inbound %d has empty settings", inbound.Id)
+			}
+			return err
+		}
+		root["clients"] = filteredClients
+		settings, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			return err
+		}
+		inbound.Settings = string(settings)
+		if err := tx.Model(&model.Inbound{}).Where("id = ?", inbound.Id).
+			Update("settings", inbound.Settings).Error; err != nil {
+			return err
+		}
 	}
 
 	var existing []model.AccountInbound
@@ -483,7 +542,13 @@ func (s *AccountService) SyncInboundAccounts(tx *gorm.DB, inboundId int, creator
 		}
 		dropped = append(dropped, membership.AccountId)
 	}
-	if err := s.pruneOrphanAccounts(tx, dropped); err != nil {
+	prunable := make([]int, 0, len(dropped))
+	for _, id := range dropped {
+		if !preserveUnassignedAccounts[id] {
+			prunable = append(prunable, id)
+		}
+	}
+	if err := s.pruneOrphanAccounts(tx, prunable); err != nil {
 		return err
 	}
 	return s.markAccountsMigratedIfComplete(tx)
@@ -1391,13 +1456,76 @@ func mergeKeepSet(wanted, current, removable []int) []int {
 	return out
 }
 
+func resellerMembershipOwnerID(account *model.Account, legacyLedgerOwnerID int) int {
+	if legacyLedgerOwnerID > 0 {
+		// The reseller ledger is the canonical owner record; transfers to admins
+		// remove it in the same transaction that updates owner_role.
+		return legacyLedgerOwnerID
+	}
+	if account == nil {
+		return 0
+	}
+	if account.OwnerRole == "reseller" {
+		return account.OwnerUserId
+	}
+	if account.OwnerRole != "" {
+		return 0
+	}
+	if account.CreatorRole == "reseller" {
+		return account.CreatorUserId
+	}
+	return 0
+}
+
+func resellerInboundGrantSet(tx *gorm.DB, userID int) (map[int]bool, error) {
+	ids := make([]int, 0)
+	if err := tx.Model(&model.InboundAccess{}).Where("user_id = ?", userID).Pluck("inbound_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	allowed := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		allowed[id] = true
+	}
+	return allowed, nil
+}
+
 // SetMemberships makes an account's membership set exactly inboundIds, adding and
-// removing rows as needed, then re-projects so settings.clients agrees.
+// removing rows as needed, then re-projects so settings.clients agrees. A reseller's
+// own inbound grants are an additional hard boundary even when an administrator
+// initiated the edit: assignments outside that set are discarded.
 //
 // The credential fields must already be on the account: a new membership renders
 // the credential its protocol keys on, and a blank one produces an account that
 // is listed but cannot authenticate.
 func (s *AccountService) SetMemberships(tx *gorm.DB, accountId int, inboundIds []int) error {
+	var account model.Account
+	if err := tx.Select("id", "email", "owner_user_id", "owner_role", "creator_user_id", "creator_role").
+		Where("id = ?", accountId).First(&account).Error; err != nil {
+		return err
+	}
+	legacyLedgerOwnerID := 0
+	var ledger model.ResellerClient
+	lookupErr := tx.Select("user_id").Where("LOWER(TRIM(email)) = ?", accountKey(account.Email)).First(&ledger).Error
+	if lookupErr != nil && lookupErr != gorm.ErrRecordNotFound {
+		return lookupErr
+	}
+	legacyLedgerOwnerID = ledger.UserId
+	resellerID := resellerMembershipOwnerID(&account, legacyLedgerOwnerID)
+	if resellerID > 0 {
+		allowed, err := resellerInboundGrantSet(tx, resellerID)
+		if err != nil {
+			return err
+		}
+		filtered := make([]int, 0, len(inboundIds))
+		seen := make(map[int]bool, len(inboundIds))
+		for _, id := range inboundIds {
+			if allowed[id] && !seen[id] {
+				filtered = append(filtered, id)
+				seen[id] = true
+			}
+		}
+		inboundIds = filtered
+	}
 	wanted := map[int]bool{}
 	for _, id := range inboundIds {
 		wanted[id] = true
@@ -1452,6 +1580,90 @@ func (s *AccountService) SetMemberships(tx *gorm.DB, accountId int, inboundIds [
 		}
 	}
 	return nil
+}
+
+// ReconcileResellerMemberships removes memberships outside one reseller's current
+// inbound grants from every account they own. A zero userID reconciles all resellers;
+// touched inbound IDs are returned so a live caller can refresh daemon configs.
+func (s *AccountService) ReconcileResellerMemberships(userID int) ([]int, error) {
+	db := database.GetDB()
+	if db == nil {
+		return nil, nil
+	}
+	var touched []int
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var accounts []model.Account
+		query := tx
+		if userID > 0 {
+			query = query.Where("(owner_role = ? AND owner_user_id = ?) OR (owner_role = '' AND creator_role = ? AND creator_user_id = ?) OR LOWER(TRIM(email)) IN (SELECT LOWER(TRIM(email)) FROM reseller_clients WHERE user_id = ?)",
+				"reseller", userID, "reseller", userID, userID)
+		} else {
+			query = query.Where("owner_role = ? OR (owner_role = '' AND creator_role = ?) OR LOWER(TRIM(email)) IN (SELECT LOWER(TRIM(email)) FROM reseller_clients)",
+				"reseller", "reseller")
+		}
+		if err := query.Order("id ASC").Find(&accounts).Error; err != nil {
+			return err
+		}
+		var ledgerRows []model.ResellerClient
+		ledgerQuery := tx.Select("email", "user_id")
+		if userID > 0 {
+			ledgerQuery = ledgerQuery.Where("user_id = ?", userID)
+		}
+		if err := ledgerQuery.Find(&ledgerRows).Error; err != nil {
+			return err
+		}
+		ledgerOwnerByEmail := make(map[string]int, len(ledgerRows))
+		for _, ledger := range ledgerRows {
+			ledgerOwnerByEmail[accountKey(ledger.Email)] = ledger.UserId
+		}
+		grantSets := make(map[int]map[int]bool)
+		for i := range accounts {
+			account := &accounts[i]
+			ownerID := resellerMembershipOwnerID(account, ledgerOwnerByEmail[accountKey(account.Email)])
+			if ownerID <= 0 || (userID > 0 && ownerID != userID) {
+				continue
+			}
+			allowed, ok := grantSets[ownerID]
+			if !ok {
+				var err error
+				allowed, err = resellerInboundGrantSet(tx, ownerID)
+				if err != nil {
+					return err
+				}
+				grantSets[ownerID] = allowed
+			}
+			var current []int
+			if err := tx.Model(&model.AccountInbound{}).Where("account_id = ?", account.Id).
+				Order("inbound_id ASC").Pluck("inbound_id", &current).Error; err != nil {
+				return err
+			}
+			wanted := make([]int, 0, len(current))
+			removed := false
+			for _, inboundID := range current {
+				if allowed[inboundID] {
+					wanted = append(wanted, inboundID)
+				} else {
+					removed = true
+				}
+			}
+			if !removed {
+				continue
+			}
+			if err := s.SetMemberships(tx, account.Id, wanted); err != nil {
+				return err
+			}
+			changed, err := s.ProjectAccount(tx, account.Id)
+			if err != nil {
+				return err
+			}
+			touched = uniqueTransferInboundIDs(touched, changed)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return touched, nil
 }
 
 // ensureCredentialsFor mints any credential field a protocol needs and the

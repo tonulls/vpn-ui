@@ -1,15 +1,15 @@
 package job
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/logretention"
 	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
-// ClearLogsJob clears old log files to prevent disk space issues.
+// ClearLogsJob rolls security and access logs once a day.
 type ClearLogsJob struct{}
 
 // NewClearLogsJob creates a new log cleanup job instance.
@@ -17,62 +17,66 @@ func NewClearLogsJob() *ClearLogsJob {
 	return new(ClearLogsJob)
 }
 
-// ensureFileExists creates the necessary directories and file if they don't exist
 func ensureFileExists(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o640)
 	if err != nil {
 		return err
 	}
-	file.Close()
-	return nil
+	return file.Close()
 }
 
-// Here Run is an interface method of the Job interface
+// Run rolls the banned-IP log by one day and keeps three daily generations of
+// persistent Xray access history (today plus the two previous days).
 func (j *ClearLogsJob) Run() {
-	logFiles := []string{xray.GetIPLimitLogPath(), xray.GetIPLimitBannedLogPath(), xray.GetAccessPersistentLogPath()}
-	logFilesPrev := []string{xray.GetIPLimitBannedPrevLogPath(), xray.GetAccessPersistentPrevLogPath()}
+	ipLimit := xray.GetIPLimitLogPath()
+	banned := xray.GetIPLimitBannedLogPath()
+	bannedPrev := xray.GetIPLimitBannedPrevLogPath()
+	accessCurrent := xray.GetAccessPersistentLogPath()
+	accessPrev := xray.GetAccessPersistentPrevLogPath()
+	accessPrev2 := xray.GetAccessPersistentPrev2LogPath()
 
-	// Ensure all log files and their paths exist
-	for _, path := range append(logFiles, logFilesPrev...) {
+	all := []string{ipLimit, banned, bannedPrev, accessCurrent, accessPrev, accessPrev2}
+	for _, path := range all {
 		if err := ensureFileExists(path); err != nil {
 			logger.Warning("Failed to ensure log file exists:", path, "-", err)
 		}
 	}
 
-	// Clear log files and copy to previous logs
-	for i := range len(logFiles) {
-		if i > 0 {
-			// Copy to previous logs
-			logFilePrev, err := os.OpenFile(logFilesPrev[i-1], os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
-			if err != nil {
-				logger.Warning("Failed to open previous log file for writing:", logFilesPrev[i-1], "-", err)
-				continue
-			}
+	// This is an intentionally transient diagnostic file; the current day's content
+	// is kept until midnight and then cleared. Size-triggered backups are handled by
+	// LogRetentionJob if a busy day reaches the hard cap first.
+	if err := os.Truncate(ipLimit, 0); err != nil {
+		logger.Warning("Failed to clear IP limit log:", ipLimit, "-", err)
+	}
 
-			logFile, err := os.OpenFile(logFiles[i], os.O_RDONLY, 0644)
-			if err != nil {
-				logger.Warning("Failed to open current log file for reading:", logFiles[i], "-", err)
-				logFilePrev.Close()
-				continue
-			}
+	if err := rotateDailyLog(banned, []string{bannedPrev}); err != nil {
+		logger.Warning("Failed to roll banned-IP log:", err)
+	}
+	accessPersistentLogMu.Lock()
+	err := rotateDailyLog(accessCurrent, []string{accessPrev, accessPrev2})
+	accessPersistentLogMu.Unlock()
+	if err != nil {
+		logger.Warning("Failed to roll persistent access log:", err)
+	}
+}
 
-			_, err = io.Copy(logFilePrev, logFile)
-			if err != nil {
-				logger.Warning("Failed to copy log file:", logFiles[i], "to", logFilesPrev[i-1], "-", err)
-			}
-
-			logFile.Close()
-			logFilePrev.Close()
+func rotateDailyLog(current string, previous []string) error {
+	for i := len(previous) - 1; i > 0; i-- {
+		older, newer := previous[i-1], previous[i]
+		if err := os.Remove(newer); err != nil && !os.IsNotExist(err) {
+			return err
 		}
-
-		err := os.Truncate(logFiles[i], 0)
-		if err != nil {
-			logger.Warning("Failed to truncate log file:", logFiles[i], "-", err)
+		if err := os.Rename(older, newer); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
+	if len(previous) > 0 {
+		if err := logretention.CopyTail(current, previous[0], logretention.MaxFileBytes); err != nil {
+			return err
+		}
+	}
+	return os.Truncate(current, 0)
 }

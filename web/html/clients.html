@@ -290,8 +290,10 @@
                        countdown that has not started, and nothing at all. Each has
                        to READ as what it is, which a single tag could not do. -->
                   <template slot="expiresCol" slot-scope="text, row">
-                    <div class="bo-lg-rel" :class="expiryView(row).toneClass">[[ expiryView(row).rel ]]</div>
-                    <div class="bo-lg-abs" v-if="expiryView(row).abs">[[ expiryView(row).abs ]]</div>
+                    <div class="bo-lg-expiry">
+                      <div class="bo-lg-rel" :class="expiryView(row).toneClass">[[ expiryView(row).rel ]]</div>
+                      <div class="bo-lg-abs" v-if="expiryView(row).abs">[[ expiryView(row).abs ]]</div>
+                    </div>
                   </template>
 
                   <!-- Capped, with the rest behind a +N. An account on six inbounds
@@ -722,8 +724,15 @@
       // IntlUtil is what every other table in this panel formats dates with;
       // there is no DateUtil.
       formatExpiry(row) { return IntlUtil.formatDate(row.expiryTime); },
-      // Stored negative, in milliseconds, counting DOWN from first use.
-      delayedDays(row) { return Math.round(Math.abs(row.expiryTime) / 86400000); },
+      // Stored negative for a delayed-start account. Frozen accounts use reserved
+      // negative ranges so their paused duration can retain its original meaning.
+      delayedDays(row) {
+        const expiry = Number(row.expiryTime) || 0;
+        const magnitude = Math.abs(expiry);
+        if (magnitude >= 20000000000000) return Math.round((magnitude - 20000000000000) / 86400000);
+        if (magnitude >= 10000000000000) return Math.round((magnitude - 10000000000000) / 86400000);
+        return Math.round(magnitude / 86400000);
+      },
 
       // --- the ledger row --------------------------------------------------
       depleted(row) { return row.totalGB > 0 && row.up + row.down >= row.totalGB; },
@@ -1063,9 +1072,11 @@
       // client action needs the real inbound (its settings, its clientStats), not
       // the summary the accounts API returns.
       accountInbounds(row) {
-        return (row.memberships || [])
-          .map(m => this.dbInbounds.find(r => r.id === m.inboundId))
-          .filter(Boolean);
+        const membershipIds = new Set((row.memberships || []).map(m => Number(m.inboundId)));
+        // dbInbounds arrives in the same display order as /panel/inbounds. Filter
+        // that ordered list instead of replaying row.memberships, whose API order
+        // is unrelated to the operator's drag-and-drop order.
+        return (this.dbInbounds || []).filter(record => membershipIds.has(Number(record.id)));
       },
       // A one-element list, not the client itself: it is consumed by a v-for, which
       // is what puts BOTH `record` and `client` in scope for clientActionIcons
@@ -1216,6 +1227,11 @@
       // Add is account-shaped, not protocol-shaped: pick the inbounds, and the
       // server mints whatever credential each protocol needs. Editing one
       // membership's protocol fields is what openEdit is for.
+      assignableForAccount(row) {
+        if (!row || row.ownerRole !== 'reseller') return this.assignable;
+        const granted = new Set((row.resellerInboundIds || []).map(Number));
+        return this.assignable.filter(inbound => granted.has(Number(inbound.inboundId)));
+      },
       openAdd() {
         clientMembershipModal.show({ assignable: this.assignable, onDone: () => this.getDBInbounds() });
       },
@@ -1227,7 +1243,7 @@
       openEdit(row) {
         clientMembershipModal.show({
           row, storedBy: this.storedClients(row),
-          assignable: this.assignable, onDone: () => this.getDBInbounds(),
+          assignable: this.assignableForAccount(row), onDone: () => this.getDBInbounds(),
         });
       },
       // Bulk add opens straight onto the form. The inbounds are ticked inside it,
@@ -1271,6 +1287,19 @@
 
       async toggleEnable(row, next) {
         const want = typeof next === 'boolean' ? next : !row.enable;
+        // A frozen account stores its remaining expiry as a negative value. Simply
+        // setting enable=true would misread that value as a delayed-start expiry and
+        // render "days after first use" over the table. Route this transition through
+        // the unfreeze operation, which restores the absolute deadline from now.
+        if (want && this.isAccountFrozen(row)) {
+          return this.toggleAccountFreeze(row);
+        }
+        // Turning off a delayed-start account must use freeze too: plain disable
+        // leaves a negative expiry with no marker, so a later enable cannot tell it
+        // apart from a paused absolute deadline and may turn it into a calendar date.
+        if (!want && row.enable && Number(row.expiryTime) < 0) {
+          return this.toggleAccountFreeze(row);
+        }
         // Optimistic, and deliberately so: a-switch is controlled off row.enable,
         // so without this the toggle springs back under the cursor and sits there
         // for the whole round trip. getDBInbounds replaces the row with the

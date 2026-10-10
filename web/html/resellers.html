@@ -51,6 +51,10 @@
                             <a-icon type="plus-circle"></a-icon>
                             <span>{{ i18n "pages.resellers.recharge" }}</span>
                           </a-menu-item>
+                          <a-menu-item @click="openDeduct(reseller)" :disabled="!canDeduct(reseller)">
+                            <a-icon type="minus-circle"></a-icon>
+                            <span>{{ i18n "pages.resellers.deduct" }}</span>
+                          </a-menu-item>
                           <!-- A reseller that still owns accounts opens a modal asking whether to
                                delete the accounts too or hand them to the admin; a childless one
                                deletes straight away. -->
@@ -164,10 +168,10 @@
       </a-spin>
 
       <a-modal id="recharge-modal"
-        title='{{ i18n "pages.resellers.rechargeTitle" }}'
+        :title="rechargeTitle"
         :visible="recharge.visible"
         :confirm-loading="recharge.confirmLoading"
-        ok-text='{{ i18n "confirm" }}'
+        :ok-text="rechargeConfirmText"
         cancel-text='{{ i18n "close" }}'
         :class="themeSwitcher.currentTheme"
         :closable="true"
@@ -176,17 +180,16 @@
         @cancel="() => recharge.visible = false">
         <a-form :colon="false" layout="vertical">
           <a-alert type="info" show-icon :style="{ marginBottom: '12px' }"
-            message='{{ i18n "pages.resellers.rechargeDesc" }}'></a-alert>
+            :message="rechargeDescription"></a-alert>
           <a-form-item label='{{ i18n "pages.resellers.username" }}'>
             <span>[[ recharge.username ]]</span>
           </a-form-item>
           <a-form-item label='{{ i18n "pages.resellers.available" }}'>
             <span>[[ fmtBytes(recharge.availableBytes) ]]</span>
           </a-form-item>
-          <!-- Negative is allowed on purpose: an admin who over-credited needs to take it
-               back, and the server is the one that refuses to cut below what is already sold. -->
-          <a-form-item label='{{ i18n "pages.resellers.rechargeAmount" }}'>
-            <a-input-number v-model.number="recharge.gb" :step="1" :style="{ width: '100%' }"></a-input-number>
+          <a-form-item :label="rechargeAmountLabel">
+            <a-input-number v-model.number="recharge.gb" :min="1" :max="rechargeMaxGb"
+              :precision="0" :step="1" :style="{ width: '100%' }"></a-input-number>
           </a-form-item>
         </a-form>
       </a-modal>
@@ -242,14 +245,38 @@
       spinning: false,
       resellers: [],
       allInbounds: [],
-      recharge: { visible: false, confirmLoading: false, id: 0, username: '', availableBytes: 0, gb: 0 },
+      recharge: { visible: false, confirmLoading: false, id: 0, username: '', availableBytes: 0, gb: 1, operation: 'add' },
       // Cascade-or-keep choice for deleting a reseller that still owns accounts;
       // mode defaults to the non-destructive 'keep'.
       del: { visible: false, confirmLoading: false, id: 0, username: '', clientCount: 0, mode: 'keep' },
     },
     computed: {
+      rechargeTitle() {
+        return this.recharge.operation === 'deduct'
+          ? '{{ i18n "pages.resellers.deductTitle" }}'
+          : '{{ i18n "pages.resellers.rechargeTitle" }}';
+      },
+      rechargeConfirmText() {
+        return this.recharge.operation === 'deduct'
+          ? '{{ i18n "pages.resellers.deduct" }}'
+          : '{{ i18n "confirm" }}';
+      },
+      rechargeDescription() {
+        return this.recharge.operation === 'deduct'
+          ? '{{ i18n "pages.resellers.deductDesc" }}'
+          : '{{ i18n "pages.resellers.rechargeDesc" }}';
+      },
+      rechargeAmountLabel() {
+        return this.recharge.operation === 'deduct'
+          ? '{{ i18n "pages.resellers.deductAmount" }}'
+          : '{{ i18n "pages.resellers.rechargeAmount" }}';
+      },
+      rechargeMaxGb() {
+        if (this.recharge.operation !== 'deduct') return 1073741824;
+        return Math.floor(Math.max(0, Number(this.recharge.availableBytes) || 0) / 1073741824);
+      },
       // Built here in the <script> so Go JS-escapes the translation; an apostrophe
-      // in a locale would break it inside a :title HTML attribute (see recharge).
+      // in a locale would break it inside a :title HTML attribute.
       delTitle() {
         return '{{ i18n "pages.resellers.del" }}' + ': ' + this.del.username;
       },
@@ -310,6 +337,10 @@
           },
         });
       },
+      canDeduct(reseller) {
+        return !!reseller && !reseller.unlimited &&
+          Math.floor((Number(reseller.availableBytes) || 0) / 1073741824) >= 1;
+      },
       openRecharge(reseller) {
         this.recharge = {
           visible: true,
@@ -317,15 +348,30 @@
           id: reseller.id,
           username: reseller.username,
           availableBytes: Number(reseller.availableBytes) || 0,
-          gb: 0,
+          gb: 1,
+          operation: 'add',
+        };
+      },
+      openDeduct(reseller) {
+        if (!this.canDeduct(reseller)) return;
+        this.recharge = {
+          visible: true,
+          confirmLoading: false,
+          id: reseller.id,
+          username: reseller.username,
+          availableBytes: Number(reseller.availableBytes) || 0,
+          gb: 1,
+          operation: 'deduct',
         };
       },
       async submitRecharge() {
-        const gb = Number(this.recharge.gb) || 0;
-        if (gb === 0) {
+        const amount = Math.floor(Math.abs(Number(this.recharge.gb) || 0));
+        if (amount === 0) {
           this.recharge.visible = false;
           return;
         }
+        if (this.recharge.operation === 'deduct' && amount > this.rechargeMaxGb) return;
+        const gb = this.recharge.operation === 'deduct' ? -amount : amount;
         this.recharge.confirmLoading = true;
         const msg = await HttpUtil.post('/panel/resellers/recharge/' + this.recharge.id, { gb });
         this.recharge.confirmLoading = false;
@@ -367,6 +413,9 @@
       },
     },
     async mounted() {
+      window.addEventListener('storage', event => {
+        if (event.key === 'vpn-ui-resellers-refresh') this.loadResellers();
+      });
       await this.loadInbounds();
       await this.loadResellers(true);
     },

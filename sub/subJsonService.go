@@ -164,11 +164,10 @@ func (s *SubJsonService) GetJson(subId string, host string) (string, string, err
 
 func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, host string) []json_util.RawMessage {
 	if inbound.Protocol == model.ExternalSubscription {
-		uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
-		if !ok {
+		uris := s.SubService.externalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound))
+		if len(uris) == 0 {
 			return nil
 		}
-		uris = s.SubService.uniqueExternalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound), uris)
 		configs := make([]json_util.RawMessage, 0, len(uris))
 		for index, uri := range uris {
 			candidate, err := service.ParseExternalVLESSURI(uri)

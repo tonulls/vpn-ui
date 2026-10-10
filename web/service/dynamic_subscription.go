@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"gorm.io/gorm"
@@ -32,7 +35,7 @@ const (
 	ExternalSubscriptionMaxForceRotationIntervalMinutes = 10080
 	ExternalSubscriptionProbeTimeout                    = 20 * time.Second
 	ExternalSubscriptionMaxCandidatesPerRun             = 3
-	ExternalSubscriptionCandidateBatchDelay             = 10 * time.Second
+	ExternalSubscriptionCandidateBatchDelay             = time.Minute
 	ExternalSubscriptionSchedulerProbeBudget            = 1
 )
 
@@ -75,9 +78,9 @@ type ExternalSubscriptionSlotInput struct {
 }
 
 type ExternalSubscriptionSlotView struct {
-	ID                           int      `json:"id"`
-	Name                         string   `json:"name"`
-	ShowName                     bool     `json:"showName"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	ShowName bool   `json:"showName"`
 	// SourceURL is returned by the controller only to superadmins; source paths
 	// and queries may contain bearer credentials.
 	SourceURL                    string   `json:"sourceUrl,omitempty"`
@@ -405,8 +408,9 @@ func (s *DynamicSubscriptionService) RestartModule() error {
 	})
 }
 
-// ModuleLogSummary returns a credential-free operational snapshot. There is no
-// module daemon, so historical process logs do not exist.
+// ModuleLogSummary reads the dedicated External Selector journal and appends a
+// credential-free snapshot of current slots. Probe Xray output is written here,
+// never to the shared Xray log.
 func (s *DynamicSubscriptionService) ModuleLogSummary() (string, error) {
 	module, err := s.Module()
 	if err != nil {
@@ -419,7 +423,18 @@ func (s *DynamicSubscriptionService) ModuleLogSummary() (string, error) {
 			state = "работает"
 		}
 	}
-	lines := []string{"External Selector: " + state, "Исторический журнал процесса отсутствует; ниже — текущее состояние слотов."}
+	logPath := filepath.Join(config.GetLogFolder(), "external-selector.log")
+	content, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	lines := []string{"External Selector: " + state}
+	if strings.TrimSpace(string(content)) != "" {
+		lines = append(lines, strings.TrimSpace(string(content)))
+	} else {
+		lines = append(lines, "Журнал пока пуст.")
+	}
+	lines = append(lines, "", "Текущее состояние подмодулей:")
 	for _, slot := range module.Slots {
 		lines = append(lines, fmt.Sprintf("Подмодуль #%d: %s; подходящих узлов %d из %d; последняя загрузка %s; последняя проверка %s",
 			slot.ID, slot.Status, slot.MatchingCount, slot.CandidateCount,
@@ -669,13 +684,10 @@ func (s *DynamicSubscriptionService) RequestNextSlotCandidate(id int) error {
 		parseStoredCandidates(slot.CandidateDataJSON),
 	)
 	selected := slotSelectedCandidates(&slot, candidates)
-	selectedSet := make(map[string]struct{}, len(selected))
-	for _, candidate := range selected {
-		selectedSet[candidate.Fingerprint] = struct{}{}
-	}
+	selectedSet := externalCandidateIdentitySet(selected)
 	hasReplacement := false
 	for _, candidate := range candidates {
-		if _, exists := selectedSet[candidate.Fingerprint]; !exists {
+		if _, exists := selectedSet[externalCandidateIdentity(candidate)]; !exists {
 			hasReplacement = true
 			break
 		}
@@ -695,8 +707,7 @@ func (s *DynamicSubscriptionService) RequestNextSlotCandidate(id int) error {
 	return database.GetDB().Save(&slot).Error
 }
 
-// ActiveURIForSubscription retains the legacy singular accessor. New renderers should
-// use ActiveURIsForSubscription so a configured pool is not silently truncated.
+// ActiveURIForSubscription retains the legacy singular accessor for older callers.
 func (s *DynamicSubscriptionService) ActiveURIForSubscription(slotID int) (string, bool) {
 	uris, ok := s.ActiveURIsForSubscription(slotID)
 	if !ok || len(uris) == 0 {
@@ -705,53 +716,86 @@ func (s *DynamicSubscriptionService) ActiveURIForSubscription(slotID int) (strin
 	return uris[0], true
 }
 
-// ActiveURIsForSubscription is intentionally the only manager API returning
-// third-party URIs. It optionally prefixes each displayed fragment with the slot name
-// when ShowName is enabled, while leaving the stored URI and connection parameters
-// unchanged. Callers must invoke it only after their usual subscription token,
-// membership, enable and quota checks.
+// ActiveURIsForSubscription returns only the configured active pool. Callers must
+// invoke it after their usual subscription token, membership, enable and quota checks.
 func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]string, bool) {
-	if slotID < 1 || !externalSelectorEnabled() {
+	uris, limit, ok := s.subscriptionURICandidates(slotID, false)
+	if !ok || len(uris) == 0 {
 		return nil, false
+	}
+	if len(uris) > limit {
+		uris = uris[:limit]
+	}
+	return uris, len(uris) > 0
+}
+
+// SubscriptionURICandidatesForSubscription returns the active pool followed by
+// previously verified replacement candidates, plus the slot's output limit. Renderers
+// use the extra candidates only to replace duplicates in this subscriber's response;
+// unprobed source-list candidates are never exposed. Call only after authorization.
+func (s *DynamicSubscriptionService) SubscriptionURICandidatesForSubscription(slotID int) ([]string, int, bool) {
+	return s.subscriptionURICandidates(slotID, true)
+}
+
+func (s *DynamicSubscriptionService) subscriptionURICandidates(slotID int, includeReplacements bool) ([]string, int, bool) {
+	if slotID < 1 || !externalSelectorEnabled() {
+		return nil, 0, false
 	}
 	var row model.ExternalSubscriptionSlot
-	if err := database.GetDB().First(&row, slotID).Error; err != nil {
-		return nil, false
-	}
-	if !row.Enabled {
-		return nil, false
+	if err := database.GetDB().First(&row, slotID).Error; err != nil || !row.Enabled {
+		return nil, 0, false
 	}
 	filtered := filterExternalCandidates(
 		&slotCandidateConfig{Mode: row.FilterMode, FlagsJSON: row.CountryFlagsJSON},
 		parseStoredCandidates(row.CandidateDataJSON),
 	)
-	selected := slotSelectedCandidates(&row, filtered)
-	if len(selected) == 0 && row.ActiveURI != "" {
-		selected = []ExternalSubscriptionCandidate{{URI: row.ActiveURI}}
+	active := slotSelectedCandidates(&row, filtered)
+	if len(active) == 0 && row.ActiveURI != "" {
+		active = []ExternalSubscriptionCandidate{{URI: row.ActiveURI}}
 	}
-	// Keep the last verified pool in subscriptions while a source refresh or a
-	// replacement/health check is pending. Status describes the work, not whether
-	// the previously verified keys should disappear from the user's subscription.
-	if len(selected) == 0 {
-		return nil, false
+	limit := row.SubscriptionKeyCount
+	if limit < 1 {
+		limit = 1
 	}
-	if row.SubscriptionKeyCount > 0 && len(selected) > row.SubscriptionKeyCount {
-		selected = selected[:row.SubscriptionKeyCount]
+	if limit > ExternalSubscriptionMaxKeysPerSlot {
+		limit = ExternalSubscriptionMaxKeysPerSlot
 	}
-	switch strings.ToLower(strings.TrimSpace(row.SelectionMode)) {
-	case "a-z":
-		sort.SliceStable(selected, func(i, j int) bool {
-			return indexCandidate(filtered, selected[i].Fingerprint) < indexCandidate(filtered, selected[j].Fingerprint)
-		})
-	case "z-a":
-		sort.SliceStable(selected, func(i, j int) bool {
-			return indexCandidate(filtered, selected[i].Fingerprint) > indexCandidate(filtered, selected[j].Fingerprint)
-		})
-	default: // AUTO, including rows created before this setting existed.
-		rand.Shuffle(len(selected), func(i, j int) { selected[i], selected[j] = selected[j], selected[i] })
+	if len(active) > limit {
+		active = active[:limit]
 	}
-	uris := make([]string, 0, len(selected))
-	for _, candidate := range selected {
+
+	// Keep the last verified pool available while refresh/check work is pending.
+	// ReplacementCandidatesJSON contains only candidates which already passed the
+	// configured HTTPS probe; CandidateDataJSON is deliberately never used as fallback.
+	pool := append([]ExternalSubscriptionCandidate(nil), active...)
+	if includeReplacements {
+		pool = append(pool, slotReplacementCandidates(&row)...)
+	}
+	pool = uniqueExternalCandidates(pool)
+	if len(pool) == 0 {
+		return nil, limit, false
+	}
+
+	activeCount := min(len(uniqueExternalCandidates(active)), len(pool))
+	order := func(candidates []ExternalSubscriptionCandidate) {
+		switch strings.ToLower(strings.TrimSpace(row.SelectionMode)) {
+		case "a-z":
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return indexCandidate(filtered, candidates[i].Fingerprint) < indexCandidate(filtered, candidates[j].Fingerprint)
+			})
+		case "z-a":
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return indexCandidate(filtered, candidates[i].Fingerprint) > indexCandidate(filtered, candidates[j].Fingerprint)
+			})
+		default: // AUTO, including rows created before this setting existed.
+			rand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+		}
+	}
+	order(pool[:activeCount])
+	order(pool[activeCount:])
+
+	uris := make([]string, 0, len(pool))
+	for _, candidate := range pool {
 		if candidate.URI == "" {
 			continue
 		}
@@ -761,7 +805,7 @@ func (s *DynamicSubscriptionService) ActiveURIsForSubscription(slotID int) ([]st
 		}
 		uris = append(uris, uri)
 	}
-	return uris, len(uris) > 0
+	return uris, limit, len(uris) > 0
 }
 
 // prefixExternalSubscriptionURIName adds the slot's label to a VLESS URI fragment.
@@ -923,6 +967,10 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 	rotation := slotRotationCandidates(slot, oldCandidates)
 	filtered := filterExternalCandidates(&slotCandidateConfig{Mode: slot.FilterMode, FlagsJSON: slot.CountryFlagsJSON}, candidates)
 	slot.CandidateDataJSON = string(encoded)
+	// Replacement candidates are tied to the previously fetched source list. Keep
+	// the active pool available during refresh, but rebuild verified reserves from
+	// the newly parsed source before serving them as fallbacks.
+	setSlotReplacementCandidates(slot, nil)
 	slot.CandidateCount = stats.Accepted
 	slot.MatchingCount = len(filtered)
 	slot.CandidateCursor = 0
@@ -941,8 +989,8 @@ func (s *DynamicSubscriptionService) refreshSlot(ctx context.Context, slot *mode
 		slot.LastError = ""
 		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
 	} else {
-		// Refreshing a source changes future candidates, not the already verified
-		// active/replacement pools. Keep serving those pools while checks resume.
+		// Keep the already verified active pool available while checks resume. The
+		// replacement reserve was cleared above and will be rebuilt from this source.
 		slot.Status = "checking"
 		slot.NextCheckAt = now.UnixMilli()
 	}
@@ -1005,13 +1053,10 @@ func (s *DynamicSubscriptionService) checkSlotPersistentPool(
 		active = active[:keyCount]
 	}
 	setSlotSelectedCandidates(slot, active)
-	activeSet := make(map[string]struct{}, len(active))
-	for _, candidate := range active {
-		activeSet[candidate.Fingerprint] = struct{}{}
-	}
+	activeSet := externalCandidateIdentitySet(active)
 	replacements := make([]ExternalSubscriptionCandidate, 0)
 	for _, candidate := range slotReplacementCandidates(slot) {
-		if _, duplicate := activeSet[candidate.Fingerprint]; duplicate {
+		if _, duplicate := activeSet[externalCandidateIdentity(candidate)]; duplicate {
 			continue
 		}
 		replacements = append(replacements, candidate)
@@ -1070,12 +1115,15 @@ func (s *DynamicSubscriptionService) fillInitialPool(
 	probeCandidate func(ExternalSubscriptionCandidate) error,
 	now time.Time,
 ) {
-	active = append(active, replacements...)
+	pool := uniqueExternalCandidates(append(append([]ExternalSubscriptionCandidate(nil), active...), replacements...))
+	active = pool
 	if len(active) > keyCount {
-		active = active[:keyCount]
+		active = pool[:keyCount]
+		setSlotReplacementCandidates(slot, pool[keyCount:])
+	} else {
+		setSlotReplacementCandidates(slot, nil)
 	}
 	setSlotSelectedCandidates(slot, active)
-	setSlotReplacementCandidates(slot, nil)
 	if len(active) >= keyCount {
 		slot.Status = "healthy"
 		slot.LastError = ""
@@ -1085,10 +1133,7 @@ func (s *DynamicSubscriptionService) fillInitialPool(
 		return
 	}
 
-	activeSet := make(map[string]struct{}, len(active))
-	for _, candidate := range active {
-		activeSet[candidate.Fingerprint] = struct{}{}
-	}
+	activeSet := externalCandidateIdentitySet(active)
 	index := slot.CandidateCursor
 	if index < 0 || index >= len(filtered) {
 		index = 0
@@ -1108,7 +1153,8 @@ func (s *DynamicSubscriptionService) fillInitialPool(
 		candidateIndex := index
 		candidate := filtered[index]
 		index++
-		if _, exists := activeSet[candidate.Fingerprint]; exists {
+		identity := externalCandidateIdentity(candidate)
+		if _, exists := activeSet[identity]; exists {
 			continue
 		}
 		attempted++
@@ -1141,7 +1187,7 @@ func (s *DynamicSubscriptionService) fillInitialPool(
 			lastProbeError = probeErr
 		} else {
 			active = append(active, candidate)
-			activeSet[candidate.Fingerprint] = struct{}{}
+			activeSet[identity] = struct{}{}
 			setSlotSelectedCandidates(slot, active)
 			// Each successful initial key is durable and immediately available.
 			if err := database.GetDB().Save(slot).Error; err != nil {
@@ -1193,17 +1239,21 @@ func (s *DynamicSubscriptionService) scanReplacementAndCheckPool(
 	probeCandidate func(ExternalSubscriptionCandidate) error,
 	now time.Time,
 ) {
-	if len(replacements) == 0 {
-		activeSet := make(map[string]struct{}, len(active))
-		for _, candidate := range active {
-			activeSet[candidate.Fingerprint] = struct{}{}
-		}
+	reserveTarget := slot.SubscriptionKeyCount
+	if reserveTarget < 1 {
+		reserveTarget = 1
+	}
+	if reserveTarget > ExternalSubscriptionMaxKeysPerSlot {
+		reserveTarget = ExternalSubscriptionMaxKeysPerSlot
+	}
+	if len(replacements) < reserveTarget {
+		knownSet := externalCandidateIdentitySet(append(append([]ExternalSubscriptionCandidate(nil), active...), replacements...))
 		index := slot.CandidateCursor
 		if index < 0 || index >= len(filtered) {
 			index = 0
 		}
 		attempted := 0
-		for index < len(filtered) && attempted < ExternalSubscriptionMaxCandidatesPerRun {
+		for index < len(filtered) && len(replacements) < reserveTarget && attempted < ExternalSubscriptionMaxCandidatesPerRun {
 			if ctx.Err() != nil {
 				slot.CandidateCursor = index
 				slot.Status = "checking"
@@ -1214,7 +1264,8 @@ func (s *DynamicSubscriptionService) scanReplacementAndCheckPool(
 			candidateIndex := index
 			candidate := filtered[index]
 			index++
-			if _, exists := activeSet[candidate.Fingerprint]; exists {
+			identity := externalCandidateIdentity(candidate)
+			if _, exists := knownSet[identity]; exists {
 				continue
 			}
 			attempted++
@@ -1241,8 +1292,12 @@ func (s *DynamicSubscriptionService) scanReplacementAndCheckPool(
 				return
 			}
 			if probeErr == nil {
-				replacements = []ExternalSubscriptionCandidate{candidate}
+				replacements = append(replacements, candidate)
+				knownSet[identity] = struct{}{}
 				setSlotReplacementCandidates(slot, replacements)
+				if err := database.GetDB().Save(slot).Error; err != nil {
+					return
+				}
 			}
 			slot.CandidateCursor = index
 			if index >= len(filtered) {
@@ -1259,7 +1314,8 @@ func (s *DynamicSubscriptionService) scanReplacementAndCheckPool(
 		}
 	}
 
-	fingerprints := candidateFingerprints(active)
+	checkCandidates := append(append([]ExternalSubscriptionCandidate(nil), active...), replacements...)
+	fingerprints := candidateFingerprints(checkCandidates)
 	setSlotActiveCheckState(slot, fingerprints, nil, 0)
 	slot.Status = "checking"
 	setSlotSelectedCandidates(slot, active)
@@ -1274,14 +1330,16 @@ func (s *DynamicSubscriptionService) runActivePoolCheck(
 	probeCandidate func(ExternalSubscriptionCandidate) error,
 	now time.Time,
 ) {
+	checkCandidates := uniqueExternalCandidates(append(append([]ExternalSubscriptionCandidate(nil), active...), replacements...))
+	expectedFingerprints := candidateFingerprints(checkCandidates)
 	fingerprints, failures := slotActiveCheckState(slot)
-	if len(fingerprints) == 0 {
-		fingerprints = candidateFingerprints(active)
+	if !equalStringSlices(fingerprints, expectedFingerprints) {
+		fingerprints = expectedFingerprints
 		failures = nil
 		setSlotActiveCheckState(slot, fingerprints, failures, 0)
 	}
-	activeByFingerprint := make(map[string]ExternalSubscriptionCandidate, len(active))
-	for _, candidate := range active {
+	activeByFingerprint := make(map[string]ExternalSubscriptionCandidate, len(checkCandidates))
+	for _, candidate := range checkCandidates {
 		activeByFingerprint[candidate.Fingerprint] = candidate
 	}
 	cursor := slot.ActiveCheckCursor
@@ -1339,32 +1397,50 @@ func (s *DynamicSubscriptionService) runActivePoolCheck(
 	for _, fingerprint := range failures {
 		failedSet[fingerprint] = struct{}{}
 	}
-	healthy := make([]ExternalSubscriptionCandidate, 0, len(active))
+	keyCount := slot.SubscriptionKeyCount
+	if keyCount < 1 {
+		keyCount = 1
+	}
+	if keyCount > ExternalSubscriptionMaxKeysPerSlot {
+		keyCount = ExternalSubscriptionMaxKeysPerSlot
+	}
+	healthy := make([]ExternalSubscriptionCandidate, 0, keyCount)
 	for _, candidate := range active {
 		if _, failed := failedSet[candidate.Fingerprint]; !failed {
 			healthy = append(healthy, candidate)
 		}
 	}
+	healthy = uniqueExternalCandidates(healthy)
+	known := externalCandidateIdentitySet(healthy)
+	healthyReserve := make([]ExternalSubscriptionCandidate, 0, keyCount)
 	for _, replacement := range replacements {
-		if len(healthy) >= slot.SubscriptionKeyCount {
-			break
-		}
-		if _, duplicate := failedSet[replacement.Fingerprint]; duplicate {
+		if _, failed := failedSet[replacement.Fingerprint]; failed {
 			continue
 		}
-		healthy = append(healthy, replacement)
+		identity := externalCandidateIdentity(replacement)
+		if _, duplicate := known[identity]; duplicate {
+			continue
+		}
+		known[identity] = struct{}{}
+		if len(healthy) < keyCount {
+			healthy = append(healthy, replacement)
+			continue
+		}
+		if len(healthyReserve) < keyCount {
+			healthyReserve = append(healthyReserve, replacement)
+		}
 	}
 	setSlotSelectedCandidates(slot, healthy)
-	setSlotReplacementCandidates(slot, nil)
+	setSlotReplacementCandidates(slot, healthyReserve)
 	clearSlotActiveCheck(slot)
 	slot.LastCheckedAt = now.UnixMilli()
-	if len(healthy) >= slot.SubscriptionKeyCount {
+	if len(healthy) >= keyCount {
 		slot.Status = "healthy"
 		slot.LastError = ""
 		slot.NextCheckAt = now.Add(time.Duration(slot.CheckIntervalMinutes) * time.Minute).UnixMilli()
 	} else if len(healthy) > 0 {
 		slot.Status = "partial"
-		slot.LastError = fmt.Sprintf("Недоступные ключи удалены; в пуле %d из %d. Поиск замены продолжается.", len(healthy), slot.SubscriptionKeyCount)
+		slot.LastError = fmt.Sprintf("Недоступные ключи удалены; в пуле %d из %d. Поиск замены продолжается.", len(healthy), keyCount)
 		slot.NextCheckAt = now.Add(ExternalSubscriptionCandidateBatchDelay).UnixMilli()
 	} else {
 		slot.Status = "no_healthy_nodes"
@@ -1438,15 +1514,9 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 ) {
 	now := s.clock()
 	setSlotSelectedCandidates(slot, current)
-	currentSet := make(map[string]struct{}, len(current))
-	for _, candidate := range current {
-		currentSet[candidate.Fingerprint] = struct{}{}
-	}
+	currentSet := externalCandidateIdentitySet(current)
 	rotation := slotRotationCandidates(slot, filtered)
-	rotationSet := make(map[string]struct{}, len(rotation))
-	for _, candidate := range rotation {
-		rotationSet[candidate.Fingerprint] = struct{}{}
-	}
+	rotationSet := externalCandidateIdentitySet(rotation)
 	ordered := filtered
 	if len(current) > 0 {
 		pivot := indexCandidate(filtered, current[0].Fingerprint)
@@ -1464,10 +1534,11 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 		candidate := ordered[index]
 		candidateIndex := index
 		index++
-		if _, exists := currentSet[candidate.Fingerprint]; exists {
+		identity := externalCandidateIdentity(candidate)
+		if _, exists := currentSet[identity]; exists {
 			continue
 		}
-		if _, exists := rotationSet[candidate.Fingerprint]; exists {
+		if _, exists := rotationSet[identity]; exists {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -1505,7 +1576,7 @@ func (s *DynamicSubscriptionService) checkSlotFullRotation(
 			continue
 		}
 		rotation = append(rotation, candidate)
-		rotationSet[candidate.Fingerprint] = struct{}{}
+		rotationSet[identity] = struct{}{}
 		if len(rotation) >= keyCount {
 			setSlotSelectedCandidates(slot, rotation[:keyCount])
 			setSlotRotationCandidates(slot, nil)
@@ -1859,6 +1930,23 @@ func setSlotSelectedCandidates(slot *model.ExternalSubscriptionSlot, selected []
 	}
 }
 
+func externalCandidateIdentity(candidate ExternalSubscriptionCandidate) string {
+	if candidate.URI == "" {
+		return ""
+	}
+	return ExternalSubscriptionURIDedupKey(candidate.URI)
+}
+
+func externalCandidateIdentitySet(candidates []ExternalSubscriptionCandidate) map[string]struct{} {
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if identity := externalCandidateIdentity(candidate); identity != "" {
+			seen[identity] = struct{}{}
+		}
+	}
+	return seen
+}
+
 func uniqueExternalCandidates(candidates []ExternalSubscriptionCandidate) []ExternalSubscriptionCandidate {
 	seen := make(map[string]struct{}, len(candidates))
 	unique := make([]ExternalSubscriptionCandidate, 0, len(candidates))
@@ -1866,10 +1954,14 @@ func uniqueExternalCandidates(candidates []ExternalSubscriptionCandidate) []Exte
 		if candidate.Fingerprint == "" || candidate.URI == "" {
 			continue
 		}
-		if _, exists := seen[candidate.Fingerprint]; exists {
+		identity := externalCandidateIdentity(candidate)
+		if identity == "" {
 			continue
 		}
-		seen[candidate.Fingerprint] = struct{}{}
+		if _, exists := seen[identity]; exists {
+			continue
+		}
+		seen[identity] = struct{}{}
 		unique = append(unique, candidate)
 	}
 	return unique
@@ -1925,6 +2017,18 @@ func clearSlotActiveCheck(slot *model.ExternalSubscriptionSlot) {
 	slot.ActiveCheckFingerprintsJSON = "[]"
 	slot.ActiveCheckFailuresJSON = "[]"
 	slot.ActiveCheckCursor = 0
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func uniqueStrings(values []string) []string {

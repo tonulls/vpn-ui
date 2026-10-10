@@ -164,7 +164,7 @@ func currentTwoFactorEnabled(c *gin.Context) bool {
 // templatePerms is the logged-in admin's capability set, shaped for templates.
 // A map keyed by slug so a template reads {{ if .perms.accessInbounds }}.
 func templatePerms(c *gin.Context) map[string]bool {
-	perms := make(map[string]bool, len(model.AllPermissions)+1)
+	perms := make(map[string]bool, len(model.AllPermissions)+2)
 	user := session.GetLoginUser(c)
 	if user == nil {
 		return perms
@@ -172,6 +172,7 @@ func templatePerms(c *gin.Context) map[string]bool {
 	for _, d := range model.AllPermissions {
 		perms[d.Slug] = user.Can(d.Bit)
 	}
+	perms["accessClients"] = canAccessClients(user)
 	perms["superAdmin"] = user.IsSuperAdmin
 	// The overview asks two questions -- "may this page be opened?" and "may it
 	// act?" -- and the two roles answer them from different columns: an admin from

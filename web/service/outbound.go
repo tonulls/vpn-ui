@@ -335,7 +335,7 @@ func (s *OutboundService) TestExternalOutbound(ctx context.Context, outboundJSON
 		return &TestOutboundResult{Success: false, Error: "Could not create temporary probe configuration"}, nil
 	}
 	defer os.Remove(testConfigPath)
-	testProcess := xray.NewTestProcess(testConfig, testConfigPath)
+	testProcess := xray.NewExternalSelectorTestProcess(testConfig, testConfigPath)
 	defer func() {
 		if testProcess.IsRunning() {
 			testProcess.Stop()

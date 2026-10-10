@@ -3114,7 +3114,19 @@ type BulkClientUpdateResult struct {
 	Skipped int `json:"skipped"`
 }
 
-const bulkMsPerDay = int64(86400000)
+const (
+	bulkMsPerDay                = int64(86400000)
+	frozenRemainingExpiryMarker = int64(10_000_000_000_000)
+	frozenDelayedExpiryMarker   = int64(20_000_000_000_000)
+)
+
+func isFrozenRemainingExpiry(expiry int64) bool {
+	return expiry <= -frozenRemainingExpiryMarker && expiry > -frozenDelayedExpiryMarker
+}
+
+func isFrozenDelayedExpiry(expiry int64) bool {
+	return expiry <= -frozenDelayedExpiryMarker
+}
 
 // bulkNumToInt64 coerces a JSON-decoded numeric field (float64 by default) to int64.
 func bulkNumToInt64(v any) int64 {
@@ -3170,6 +3182,9 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 		}
 	}()
 	deletedEmails := map[string]string{}
+	countTrafficByAccount := req.Op == "addTraffic" || req.Op == "subTraffic"
+	trafficAppliedAccounts := map[string]bool{}
+	trafficSkippedAccounts := map[string]bool{}
 
 	for inboundId, emails := range byInbound {
 		var inbound *model.Inbound
@@ -3233,14 +3248,22 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 				// Single filtering point: every op (incl. freeze/unfreeze) honours the
 				// skip toggles here, so all operations are filtered uniformly.
 				if bulkClientSkipped(cm, req) {
-					result.Skipped++
+					if countTrafficByAccount {
+						trafficSkippedAccounts[accountKey(email)] = true
+					} else {
+						result.Skipped++
+					}
 					continue
 				}
 				if applyBulkClientOp(cm, req, now) {
 					cm["updated_at"] = now
 					clientsAny[i] = cm
 					changed = true
-					result.Applied++
+					if countTrafficByAccount {
+						trafficAppliedAccounts[accountKey(email)] = true
+					} else {
+						result.Applied++
+					}
 					// Keep the enforcement table (client_traffics) in sync with the new
 					// limit/expiry/enable. The auto-disable check (disableInvalidClients)
 					// reads client_traffics.total/expiry_time/enable, and those are
@@ -3255,6 +3278,8 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 						err = e
 						return result, touched, err
 					}
+				} else if countTrafficByAccount {
+					trafficSkippedAccounts[accountKey(email)] = true
 				} else {
 					result.Skipped++
 				}
@@ -3307,6 +3332,14 @@ func (s *InboundService) BulkUpdateClients(req BulkClientUpdateRequest) (BulkCli
 			}
 		}
 	}
+	if countTrafficByAccount {
+		result.Applied = len(trafficAppliedAccounts)
+		for email := range trafficSkippedAccounts {
+			if !trafficAppliedAccounts[email] {
+				result.Skipped++
+			}
+		}
+	}
 	return result, touched, nil
 }
 
@@ -3351,25 +3384,17 @@ func bulkClientSkipped(cm map[string]any, req BulkClientUpdateRequest) bool {
 //   - subTraffic floors totalGB at 1 byte so a subtract never flips a limited account
 //     to unlimited (totalGB==0 means unlimited).
 //   - setUnlimited changes any limited quota to 0; repeat runs are a no-op.
+//   - freeze encodes the paused-expiry kind separately from delayed-start, so
+//     unfreeze can resume the right clock without changing its meaning.
 func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64) bool {
 	expiry := bulkNumToInt64(cm["expiryTime"])
 	total := bulkNumToInt64(cm["totalGB"])
 	enable, _ := cm["enable"].(bool)
 
-	// Skip-toggle filtering happens in the caller (bulkClientSkipped). Freeze disables
-	// the account and LOCKS its remaining time: a running (absolute) expiry is stored as
-	// its negative remaining — the panel's "delayed start" form, which does not tick down
-	// or trigger the auto-disable/expire check while the account is off. GB is locked for
-	// free (a disabled account passes no traffic). Unfreeze re-enables and resumes the
-	// clock immediately, converting the locked remaining back to an absolute deadline from
-	// now. A frozen account is thus recognisable as (enable=false AND expiryTime<0).
-	// frozenNoExpiry marks a frozen account that had NO expiry to lock (unlimited
-	// duration). A frozen account must be recognisable as (enable=false AND
-	// expiryTime<0); a no-expiry account has expiryTime==0, so without this sentinel
-	// freezing it would leave expiryTime==0 and it would read as a plain disable, not
-	// frozen (no cross icon / no "Frozen" badge, and it could never be unfrozen). The
-	// magnitude 1(ms) can't collide with a real locked remaining (always a multi-day
-	// duration) or a real delayed-start value, so unfreeze restores it to 0.
+	// Freeze uses reserved negative expiry ranges to distinguish a paused absolute
+	// deadline from a delayed-start duration. Without that distinction, thawing a
+	// delayed-start account accidentally turns it into a deadline from today.
+	// frozenNoExpiry marks a frozen account that had no expiry.
 	const frozenNoExpiry int64 = -1
 	switch req.Op {
 	case "freeze":
@@ -3378,10 +3403,20 @@ func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64
 		}
 		switch {
 		case expiry > 0:
-			cm["expiryTime"] = now - expiry // = -(remaining): a non-ticking delayed value
+			remaining := expiry - now
+			if remaining < 0 {
+				remaining = 0
+			}
+			cm["expiryTime"] = -(frozenRemainingExpiryMarker + remaining)
 		case expiry == 0:
-			cm["expiryTime"] = frozenNoExpiry // no expiry to lock: mark frozen via sentinel
-			// expiry < 0 (a delayed-start account being frozen): keep its value as-is.
+			cm["expiryTime"] = frozenNoExpiry
+		case expiry < 0:
+			// Preserve the original first-use duration in a reserved range so a
+			// later unfreeze restores it as delayed-start, not an absolute date.
+			if isFrozenDelayedExpiry(expiry) {
+				return false
+			}
+			cm["expiryTime"] = -(frozenDelayedExpiryMarker + -expiry)
 		}
 		cm["enable"] = false
 		return true
@@ -3392,8 +3427,15 @@ func applyBulkClientOp(cm map[string]any, req BulkClientUpdateRequest, now int64
 		switch {
 		case expiry == frozenNoExpiry:
 			cm["expiryTime"] = int64(0) // had no expiry -> restore unlimited
+		case isFrozenDelayedExpiry(expiry):
+			cm["expiryTime"] = expiry + frozenDelayedExpiryMarker
+		case isFrozenRemainingExpiry(expiry):
+			remaining := -expiry - frozenRemainingExpiryMarker
+			cm["expiryTime"] = now + remaining
 		case expiry < 0:
-			cm["expiryTime"] = now - expiry // = now + remaining: resume from this moment
+			// Compatibility with accounts frozen by an older build, which stored
+			// remaining time directly as a negative duration.
+			cm["expiryTime"] = now - expiry
 		}
 		cm["enable"] = true
 		return true

@@ -94,6 +94,7 @@ var landingPages = []struct {
 }{
 	{model.PermAccessOverview, "panel/"},
 	{model.PermAccessInbounds, "panel/inbounds"},
+	{0, "panel/clients"}, // Client action grants open the account-centric page.
 	{model.PermManageResellers, "panel/resellers"},
 	{model.PermPanelSettings, "panel/settings"},
 	{model.PermXraySettings, "panel/xray"},
@@ -104,8 +105,8 @@ var landingPages = []struct {
 // or "" when there is none.
 //
 // Empty is a real answer and callers must handle it rather than substituting a
-// default: an admin can legitimately hold only action bits (say createClient) with
-// no page bit at all, and any redirect issued from that state loops.
+// default: an admin can legitimately hold only unrelated action bits (say create
+// inbound) with no page access at all, and any redirect issued from that state loops.
 func landingPath(c *gin.Context) string {
 	user := session.GetLoginUser(c)
 	if user == nil {
@@ -115,6 +116,12 @@ func landingPath(c *gin.Context) string {
 		return c.GetString("base_path") + "panel/clients"
 	}
 	for _, p := range landingPages {
+		if p.perm == 0 {
+			if canAccessClients(user) {
+				return c.GetString("base_path") + p.path
+			}
+			continue
+		}
 		// The overview is asked through overviewAccess rather than Can, so a reseller
 		// whose profile opens it lands there and one whose profile does not never gets
 		// sent to a page that would only bounce them onward.
@@ -129,6 +136,13 @@ func landingPath(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+// canAccessClients lets the client-page actions open their own page without
+// granting the separate inbound-management page. Account reads remain scoped to
+// the caller's accessible inbounds or reseller ownership in AccountService.
+func canAccessClients(user *model.User) bool {
+	return user.CanAccessClients()
 }
 
 // overviewAccess answers "may this caller open the overview", which the two roles
@@ -287,6 +301,24 @@ func wantsHTML(c *gin.Context) bool {
 		return false
 	}
 	return strings.Contains(c.GetHeader("Accept"), "text/html")
+}
+
+// requireClientsAccess allows either inbound readers or admins granted at least
+// one client action to use the account-centric page. The account list itself remains
+// scoped by AccountService, and this does not open the Inbounds administration page.
+func requireClientsAccess() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := session.GetLoginUser(c)
+		if user == nil {
+			deny(c, http.StatusUnauthorized, "pages.login.loginAgain", c.GetString("base_path"))
+			return
+		}
+		if !canAccessClients(user) {
+			deny(c, http.StatusForbidden, "pages.admins.forbidden", landingPath(c))
+			return
+		}
+		c.Next()
+	}
 }
 
 // requireAdminInboundPage keeps the inbound administration page away from resellers.

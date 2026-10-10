@@ -210,6 +210,14 @@ func runWebServer() {
 	// client model. Never blocks startup.
 	accountMigrations := &service.AccountService{}
 	accountMigrations.MigrationAccounts()
+	// A reseller's inbound grants are also the hard boundary for their accounts,
+	// including memberships an admin added before this rule existed. Normalize those
+	// memberships before the panel starts serving subscriptions or daemon configs.
+	if touched, err := accountMigrations.ReconcileResellerMemberships(0); err != nil {
+		logger.Warning("ResellerMemberships - could not reconcile existing reseller accounts: ", err)
+	} else if len(touched) > 0 {
+		logger.Infof("ResellerMemberships - removed out-of-grant account memberships from %d inbound(s)", len(touched))
+	}
 	// Seed the per-inbound usage breakdown from the usage that already exists, which
 	// needs the memberships above to be there. Also on every start and for the same
 	// reason: MigrateDB is reached only by the `migrate` subcommand and the DB-import

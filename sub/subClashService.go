@@ -133,11 +133,10 @@ func splitExternalClashValues(raw string) []string {
 }
 
 func (s *SubClashService) externalVLESSProxies(inbound *model.Inbound, client model.Client) []map[string]any {
-	uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
-	if !ok {
+	uris := s.SubService.externalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound))
+	if len(uris) == 0 {
 		return nil
 	}
-	uris = s.SubService.uniqueExternalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound), uris)
 	proxies := make([]map[string]any, 0, len(uris))
 	usedNames := make(map[string]struct{}, len(uris))
 	for _, uri := range uris {

@@ -2,7 +2,6 @@ package sub
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -93,13 +92,28 @@ func (s *SubService) forResponse() *SubService {
 // uniqueExternalSubscriptionURIs removes repeated credentials between slots that
 // share the same country-filter mode and normalized flag set, regardless of source.
 // The identity ignores the URI fragment (display name), so the same VLESS key with
-// two labels is still one key.
+// two labels is still one key. The limit is the slot's requested count; callers pass
+// active candidates followed by previously verified replacement candidates so a
+// duplicate can be replaced without probing during subscription rendering.
 func (s *SubService) uniqueExternalSubscriptionURIs(slotID int, uris []string) []string {
-	if s.scope == nil || len(uris) == 0 {
+	return s.uniqueExternalSubscriptionURIsUpTo(slotID, uris, len(uris))
+}
+
+func (s *SubService) uniqueExternalSubscriptionURIsUpTo(slotID int, uris []string, limit int) []string {
+	if limit <= 0 || len(uris) == 0 {
+		return nil
+	}
+	if s.scope == nil {
+		if len(uris) > limit {
+			uris = uris[:limit]
+		}
 		return uris
 	}
 	group := (&service.DynamicSubscriptionService{}).ExternalSubscriptionDedupGroup(slotID)
 	if group == "" {
+		if len(uris) > limit {
+			uris = uris[:limit]
+		}
 		return uris
 	}
 	seen := s.scope.externalURIs[group]
@@ -107,27 +121,27 @@ func (s *SubService) uniqueExternalSubscriptionURIs(slotID int, uris []string) [
 		seen = make(map[string]struct{})
 		s.scope.externalURIs[group] = seen
 	}
-	unique := make([]string, 0, len(uris))
+	unique := make([]string, 0, min(limit, len(uris)))
 	for _, uri := range uris {
-		parsed, err := url.Parse(uri)
-		identity := uri
-		if err == nil && parsed != nil {
-			parsed.Scheme = strings.ToLower(parsed.Scheme)
-			parsed.Host = strings.ToLower(parsed.Host)
-			parsed.Fragment = ""
-			parsed.RawFragment = ""
-			parsed.RawQuery = parsed.Query().Encode()
-			identity = parsed.String()
-		}
-		sum := sha256.Sum256([]byte(identity))
-		fingerprint := hex.EncodeToString(sum[:])
+		fingerprint := service.ExternalSubscriptionURIDedupKey(uri)
 		if _, duplicate := seen[fingerprint]; duplicate {
 			continue
 		}
 		seen[fingerprint] = struct{}{}
 		unique = append(unique, uri)
+		if len(unique) >= limit {
+			break
+		}
 	}
 	return unique
+}
+
+func (s *SubService) externalSubscriptionURIs(slotID int) []string {
+	uris, limit, ok := (&service.DynamicSubscriptionService{}).SubscriptionURICandidatesForSubscription(slotID)
+	if !ok {
+		return nil
+	}
+	return s.uniqueExternalSubscriptionURIsUpTo(slotID, uris, limit)
 }
 
 func (s *SubService) resolveDatepicker() string {
@@ -224,9 +238,7 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 				link := ""
 				if inbound.Protocol == model.ExternalSubscription {
 					slotID := service.ExternalSubscriptionSlotID(inbound)
-					if uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(slotID); ok {
-						link = strings.Join(s.uniqueExternalSubscriptionURIs(slotID, uris), "\n")
-					}
+					link = strings.Join(s.externalSubscriptionURIs(slotID), "\n")
 				} else {
 					link = s.getLink(inbound, client.Email)
 				}
@@ -354,8 +366,8 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		// show its quota, with the credentials in the name.
 		return s.genConnectionCard(inbound, email)
 	case model.ExternalSubscription:
-		uris, ok := (&service.DynamicSubscriptionService{}).ActiveURIsForSubscription(service.ExternalSubscriptionSlotID(inbound))
-		if !ok || len(uris) == 0 {
+		uris := s.externalSubscriptionURIs(service.ExternalSubscriptionSlotID(inbound))
+		if len(uris) == 0 {
 			return ""
 		}
 		// Preserve each vetted source URI exactly. They are revealed only inside the

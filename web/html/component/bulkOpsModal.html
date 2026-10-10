@@ -26,6 +26,7 @@
                an admin-only quota override. See
                isBulkOpAllowed; bulkOps.op is snapped back to a rendered option in
                openBulkOps so the select can never point at a hidden one. -->
+          <a-select-option value="delete">{{ i18n "pages.inbounds.opDelete" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('addDays')" value="addDays">{{ i18n "pages.inbounds.opAddDays" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('subDays')" value="subDays">{{ i18n "pages.inbounds.opSubDays" }}</a-select-option>
           <a-select-option value="addTraffic">{{ i18n "pages.inbounds.opAddTraffic" }}</a-select-option>
@@ -40,7 +41,6 @@
                their grant carries. The server refuses these outright for them. -->
           <a-select-option v-if="bulkOpAllowed('addInbounds')" value="addInbounds">{{ i18n "pages.inbounds.opAddInbounds" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('removeInbounds')" value="removeInbounds">{{ i18n "pages.inbounds.opRemoveInbounds" }}</a-select-option>
-          <a-select-option value="delete">{{ i18n "pages.inbounds.opDelete" }}</a-select-option>
           <a-select-option v-if="bulkOpAllowed('transferUsers')" value="transferUsers">{{ i18n "pages.inbounds.opTransferUsers" }}</a-select-option>
         </a-select>
       </a-form-item>

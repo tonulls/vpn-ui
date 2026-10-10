@@ -3,7 +3,6 @@ package controller
 import (
 	"net/http"
 
-	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 	"github.com/mhsanaei/3x-ui/v2/web/session"
 
@@ -45,11 +44,11 @@ func (a *APIController) initRouter(g *gin.RouterGroup, customGeo *service.Custom
 	inbounds := api.Group("/inbounds")
 	a.inboundController = NewInboundController(inbounds)
 
-	// Clients API: the account-centric read model behind the Clients page. Same
-	// claim as the inbounds group because it shows the same accounts from the other
-	// side; the rows are narrowed per caller inside the service.
+	// Clients API: the account-centric read model behind the Clients page. An
+	// inbound-reader or any client-action grant may open it; rows are still scoped
+	// per caller inside the service.
 	clients := api.Group("/clients")
-	clients.Use(requirePerm(model.PermAccessInbounds))
+	clients.Use(requireClientsAccess())
 	NewClientsController(clients)
 
 	// Server API

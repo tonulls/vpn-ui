@@ -14,13 +14,13 @@ import (
 
 const (
 	maxLogBufferSize = 10240                 // Maximum log entries kept in memory
-	logFileName      = "vpn-ui.log"            // Log file name
+	logFileName      = "vpn-ui.log"          // Log file name
 	timeFormat       = "2006/01/02 15:04:05" // Log timestamp format
 )
 
 var (
 	logger  *logging.Logger
-	logFile *os.File
+	logFile *rotatingFile
 
 	// logBuffer maintains recent log entries in memory for web UI retrieval
 	logBuffer []struct {
@@ -76,13 +76,8 @@ func initDefaultBackend() logging.Backend {
 // Creates log directory and truncates log file on startup for fresh logs.
 func initFileBackend() logging.Backend {
 	logDir := config.GetLogFolder()
-	if err := os.MkdirAll(logDir, 0o750); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create log folder %s: %v\n", logDir, err)
-		return nil
-	}
-
 	logPath := filepath.Join(logDir, logFileName)
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o660)
+	file, err := openRotatingFile(logPath, maxLogFileBytes, maxLogBackups)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to open log file %s: %v\n", logPath, err)
 		return nil

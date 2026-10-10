@@ -35,7 +35,7 @@
   .external-subscriptions-page .ext-probe-row .ant-select { flex: 1; min-width: 0; }
   .external-subscriptions-page .ext-probe-card .ext-probe-row:first-child { margin-top: 10px; }
   .external-subscriptions-page .ext-probe-save { margin-top: 23px; text-align: right; }
-  .external-subscriptions-page .ext-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; margin: 0; }
+  .ant-modal .ext-logs-pane { height: min(60vh, 520px); max-height: 520px; overflow: auto; margin-top: .5rem; }
 </style>
 {{ template "page/head_end" .}}
 
@@ -169,23 +169,25 @@
                 </a-tooltip>
               </template>
               <template slot-scope="text, slot">
-                <a-tag :color="statusColor(slot.status)">
-                  <a-icon v-if="slot.status === 'refreshing_source'" type="loading"></a-icon>
-                  [[ statusText(slot.status) ]]
+                <a-tag :color="settings.enabled ? statusColor(slot.status) : 'default'">
+                  <a-icon v-if="settings.enabled && slot.status === 'refreshing_source'" type="loading"></a-icon>
+                  [[ settings.enabled ? statusText(slot.status) : 'Остановлено' ]]
                 </a-tag>
-                <div v-if="slot.status === 'refreshing_source'" class="ext-form-help">
-                  Получаем актуальный список по HTTPS
-                </div>
-                <div v-else class="ext-form-help">Прошли фильтр: [[ slot.matchingCount ]] / [[ slot.candidateCount ]]</div>
-                <div v-if="slot.status === 'checking'" class="ext-form-help">
-                  Проверено: [[ slot.checkedCount ]] / [[ slot.matchingCount ]]; проверка идёт группами
-                </div>
-                <div v-else-if="slot.status === 'no_healthy_nodes'" class="ext-form-help">
-                  Проверены все [[ slot.matchingCount ]] подходящих узлов
-                </div>
-                <div v-if="slot.status !== 'refreshing_source' && slot.rotationPending" class="ext-form-help">
-                  Новый набор: [[ slot.checkedCount ]] / [[ slot.rotationTotal ]]; текущий пока сохранён
-                </div>
+                <template v-if="settings.enabled">
+                  <div v-if="slot.status === 'refreshing_source'" class="ext-form-help">
+                    Получаем актуальный список по HTTPS
+                  </div>
+                  <div v-else class="ext-form-help">Прошли фильтр: [[ slot.matchingCount ]] / [[ slot.candidateCount ]]</div>
+                  <div v-if="slot.status === 'checking'" class="ext-form-help">
+                    Проверено: [[ slot.checkedCount ]] / [[ slot.matchingCount ]]; проверка идёт группами
+                  </div>
+                  <div v-else-if="slot.status === 'no_healthy_nodes'" class="ext-form-help">
+                    Проверены все [[ slot.matchingCount ]] подходящих узлов
+                  </div>
+                  <div v-if="slot.status !== 'refreshing_source' && slot.rotationPending" class="ext-form-help">
+                    Новый набор: [[ slot.checkedCount ]] / [[ slot.rotationTotal ]]; текущий пока сохранён
+                  </div>
+                </template>
                 <div v-if="slot.lastError" class="ext-form-help">[[ slot.lastError ]]</div>
               </template>
             </a-table-column>
@@ -303,13 +305,22 @@
     </div>
   </a-modal>
 
-  <a-modal v-model="logs.visible" title="External Selector — журнал" :footer="null" :width="760">
+  <a-modal v-model="logs.visible" title="External Selector — Logs" :footer="null"
+    :class="themeSwitcher.currentTheme" :width="isMobile ? '95%' : '80%'">
     <div style="text-align: right; margin-bottom: 8px">
-      <a-button size="small" :loading="logs.loading" @click="loadLogs">
-        <a-icon type="reload"></a-icon>Обновить
-      </a-button>
+      <a-space>
+        <a-button size="small" :disabled="!logs.content" @click="downloadLogs">
+          <a-icon type="download"></a-icon>Download
+        </a-button>
+        <a-button size="small" :loading="logs.loading" @click="loadLogs">
+          <a-icon type="reload"></a-icon>Обновить
+        </a-button>
+        <a-button size="small" :type="logs.live ? 'primary' : 'default'" @click="toggleLogsLive">
+          <span v-if="logs.live" class="log-live-dot"></span>Live log
+        </a-button>
+      </a-space>
     </div>
-    <pre class="ext-log">[[ logs.content || 'Состояние пока не записано.' ]]</pre>
+    <div class="core-logs log-container ext-logs-pane" v-html="logsHtml"></div>
   </a-modal>
 </div>
 {{template "page/shell_end" .}}
@@ -350,9 +361,13 @@
       mainSettings: { visible: false, saving: false, displayName: 'External Selector' },
       slots: [],
       edit: { visible: false, saving: false, id: 0, form: {} },
-      logs: { visible: false, loading: false, content: '' },
+      logs: { visible: false, loading: false, content: '', live: false, timer: null },
     },
     computed: {
+      logsHtml() {
+        const text = this.logs.content || 'Журнал пока пуст.';
+        return LogFormatter.render([{ source: 'External Selector', text }]);
+      },
       availableFlags() {
         const all = new Set();
         (this.slots || []).forEach(slot => (slot.availableFlags || []).forEach(flag => all.add(flag)));
@@ -365,6 +380,7 @@
     },
     beforeDestroy() {
       if (this.refreshTimer) clearInterval(this.refreshTimer);
+      this.stopLogsLive();
     },
     methods: {
       flagRows(flags) {
@@ -436,14 +452,47 @@
       },
       async showLogs() {
         this.logs.visible = true;
-        await this.loadLogs();
+        await this.loadLogs(true);
+        await this.$nextTick();
+        const pane = document.querySelector('.ext-logs-pane');
+        if (pane) pane.scrollTop = pane.scrollHeight;
       },
-      async loadLogs() {
+      async loadLogs(scrollToEnd = false) {
+        if (this.logs.loading) return;
         this.logs.loading = true;
-        const msg = await HttpUtil.get('/panel/core/logs/external-selector');
-        this.logs.loading = false;
-        if (msg && msg.success) this.logs.content = msg.obj || '';
-        else if (msg && msg.msg) this.$message.error(msg.msg);
+        try {
+          const msg = await HttpUtil.get('/panel/core/logs/external-selector');
+          if (msg && msg.success) {
+            const pane = document.querySelector('.ext-logs-pane');
+            const previousScrollTop = pane ? pane.scrollTop : 0;
+            this.logs.content = msg.obj || '';
+            await this.$nextTick();
+            const updatedPane = document.querySelector('.ext-logs-pane');
+            if (updatedPane) {
+              updatedPane.scrollTop = scrollToEnd
+                ? updatedPane.scrollHeight
+                : Math.min(previousScrollTop, Math.max(0, updatedPane.scrollHeight - updatedPane.clientHeight));
+            }
+          } else if (msg && msg.msg) this.$message.error(msg.msg);
+        } finally {
+          this.logs.loading = false;
+        }
+      },
+      toggleLogsLive() {
+        this.logs.live = !this.logs.live;
+        if (this.logs.live) {
+          this.logs.timer = setInterval(() => this.loadLogs(), 2000);
+        } else {
+          this.stopLogsLive();
+        }
+      },
+      stopLogsLive() {
+        this.logs.live = false;
+        if (this.logs.timer) clearInterval(this.logs.timer);
+        this.logs.timer = null;
+      },
+      downloadLogs() {
+        if (this.logs.content) FileManager.downloadTextFile(this.logs.content, 'external-selector.log', { type: 'text/plain' });
       },
       openMainSettings() {
         this.mainSettings.displayName = this.settings.displayName || 'External Selector';

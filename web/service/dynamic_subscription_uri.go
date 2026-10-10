@@ -38,6 +38,24 @@ type ExternalSubscriptionParseStats struct {
 	Unsupported int
 }
 
+// ExternalSubscriptionURIDedupKey identifies the credential/configuration represented
+// by a VLESS URI while ignoring its display fragment. The returned value is a hash so
+// callers can compare identities without retaining another credential-bearing string.
+func ExternalSubscriptionURIDedupKey(rawURI string) string {
+	identity := rawURI
+	parsed, err := url.Parse(rawURI)
+	if err == nil && parsed != nil {
+		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		parsed.Host = strings.ToLower(parsed.Host)
+		parsed.Fragment = ""
+		parsed.RawFragment = ""
+		parsed.RawQuery = parsed.Query().Encode()
+		identity = parsed.String()
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
+}
+
 // ParseExternalVLESSURI validates the shape required by the VLESS subscription slot.
 // It retains the original URI byte-for-byte after outer whitespace is trimmed, so
 // emitted links do not lose source-specific parameters or their encoded Unicode name.

@@ -1710,11 +1710,12 @@ html[data-theme-animations='off'] .log-live-dot { animation:none; }
   background:repeating-linear-gradient(90deg,var(--border) 0 5px,transparent 5px 10px);
 }
 
-.bo-lg-rel { font-size:13px; white-space:nowrap; }
+.bo-lg-expiry { min-width:0; max-width:100%; overflow-wrap:anywhere; }
+.bo-lg-rel { font-size:13px; white-space:normal; overflow-wrap:anywhere; line-height:1.35; }
 .bo-lg-rel--warn { color:var(--warn); }
 .bo-lg-rel--error { color:var(--error); }
 .bo-lg-rel--info { color:var(--info); }
-.bo-lg-abs { font-size:11px; color:var(--text-3); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.bo-lg-abs { font-size:11px; color:var(--text-3); white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
 
 .bo-lg-serving { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 .bo-lg-serving .ant-tag { margin:0; }

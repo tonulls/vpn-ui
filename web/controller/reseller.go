@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -250,6 +251,14 @@ func (a *ResellerController) update(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), err)
 		return
 	}
+	// Revoking an inbound grant also removes that reseller's accounts from it;
+	// immediately refresh the touched protocol configs rather than waiting for restart.
+	touched, err := (&service.AccountService{}).ReconcileResellerMemberships(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), err)
+		return
+	}
+	(&InboundController{}).reconcileForInbounds(touched, true)
 	jsonMsg(c, I18nWeb(c, "pages.resellers.edit"), nil)
 }
 
@@ -343,7 +352,11 @@ func (a *ResellerController) recharge(c *gin.Context) {
 		return
 	}
 	if err := a.resellerService.Recharge(session.GetLoginUser(c), id, delta); err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.resellers.recharge"), err)
+		if errors.Is(err, service.ErrDeductExceedsAvailable) {
+			pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.resellers.deductExceedsAvailable"))
+		} else {
+			jsonMsg(c, I18nWeb(c, "pages.resellers.recharge"), err)
+		}
 		return
 	}
 	jsonMsg(c, I18nWeb(c, "pages.resellers.recharge"), nil)

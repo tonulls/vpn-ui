@@ -142,9 +142,10 @@ type AccountRow struct {
 	// Credentials is set only when Memberships is empty. See AccountCredentials.
 	Credentials *AccountCredentials `json:"credentials,omitempty"`
 	// OwnedByReseller is the reseller's user id, or 0 for a non-reseller owner.
-	OwnedByReseller int    `json:"ownedByReseller"`
-	OwnerRole       string `json:"ownerRole,omitempty"`
-	OwnerName       string `json:"ownerName,omitempty"`
+	OwnedByReseller    int    `json:"ownedByReseller"`
+	OwnerRole          string `json:"ownerRole,omitempty"`
+	OwnerName          string `json:"ownerName,omitempty"`
+	ResellerInboundIds []int  `json:"resellerInboundIds,omitempty"`
 }
 
 // AccountListResult is one page of the Clients table.
@@ -271,6 +272,20 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 	if err != nil {
 		return nil, err
 	}
+	resellerInboundIDs := make(map[int][]int)
+	if len(ownerIDsSet) > 0 {
+		ownerIDs := make([]int, 0, len(ownerIDsSet))
+		for id := range ownerIDsSet {
+			ownerIDs = append(ownerIDs, id)
+		}
+		var grants []model.InboundAccess
+		if err := db.Where("user_id IN ?", ownerIDs).Find(&grants).Error; err != nil {
+			return nil, err
+		}
+		for _, grant := range grants {
+			resellerInboundIDs[grant.UserId] = append(resellerInboundIDs[grant.UserId], grant.InboundId)
+		}
+	}
 
 	needle := strings.ToLower(strings.TrimSpace(search))
 	rows := make([]AccountRow, 0, len(accounts))
@@ -312,6 +327,14 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 		if currentName := ownerNames[ownerUserID]; currentName != "" {
 			ownerName = currentName
 		}
+		var ownerGrantIDs []int
+		if ownerRole == "reseller" {
+			for _, inboundID := range resellerInboundIDs[ownerUserID] {
+				if visibleInboundIDs == nil || visibleInboundIDs[inboundID] {
+					ownerGrantIDs = append(ownerGrantIDs, inboundID)
+				}
+			}
+		}
 		if needle != "" && !accountMatches(account, visibleMemberships, ownerName, needle) {
 			continue
 		}
@@ -323,7 +346,7 @@ func (s *AccountService) ListAccounts(user *model.User, page, size int, search, 
 			SpeedLimitDown: account.SpeedLimitDown, SpeedLimitUp: account.SpeedLimitUp,
 			UserLimitOverride: account.UserLimitOverride,
 			Memberships:       visibleMemberships, OwnedByReseller: owner[key],
-			OwnerRole: ownerRole, OwnerName: ownerName,
+			OwnerRole: ownerRole, OwnerName: ownerName, ResellerInboundIds: ownerGrantIDs,
 		}
 		if len(allMemberships) == 0 {
 			// Nothing serves it, so no settings blob carries its credentials and this

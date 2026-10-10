@@ -42,8 +42,8 @@
   // inbound it was handed.
 
   // Every bulk operation the modal can offer, in the order it lists them.
-  const BULK_OPS = ['addDays', 'subDays', 'addTraffic', 'subTraffic', 'setUnlimited',
-    'enable', 'disable', 'freeze', 'unfreeze', 'addInbounds', 'removeInbounds', 'delete', 'transferUsers'];
+  const BULK_OPS = ['delete', 'addDays', 'subDays', 'addTraffic', 'subTraffic', 'setUnlimited',
+    'enable', 'disable', 'freeze', 'unfreeze', 'addInbounds', 'removeInbounds', 'transferUsers'];
 
   // The two that change WHICH INBOUNDS serve an account rather than what the
   // account is allowed. They do not go through the bulk client applier at all:
@@ -205,13 +205,18 @@
         }
         this.bulkOps.transferOwnersLoading = false;
       },
+      adminCanReceiveClients(owner) {
+        const permissions = Array.isArray(owner && owner.permissions) ? owner.permissions : [];
+        return permissions.includes('accessInbounds') ||
+          ['createClient', 'editClient', 'deleteClient', 'bulkOperation'].some(permission => permissions.includes(permission));
+      },
       transferOwnersForRole() {
         if (this.bulkOps.transferRole === 'superadmin') {
           return this.bulkOps.transferAdmins.filter(owner => owner.enable && owner.isSuperAdmin);
         }
         if (this.bulkOps.transferRole === 'admin') {
           return this.bulkOps.transferAdmins.filter(owner => owner.enable && !owner.isSuperAdmin &&
-            Array.isArray(owner.permissions) && owner.permissions.includes('accessInbounds'));
+            this.adminCanReceiveClients(owner));
         }
         if (this.bulkOps.transferRole === 'reseller') {
           return this.bulkOps.transferResellers.filter(owner => owner.enable);
@@ -316,6 +321,13 @@
         });
         return ok ? narrowed : null;
       },
+      transferErrorText(error) {
+        const message = String(error || '');
+        if (message.includes('you cannot create an account with unlimited traffic')) {
+          return '{{ i18n "pages.inbounds.transferUnlimitedTraffic" }}';
+        }
+        return message || '{{ i18n "pages.inbounds.transferRequestFailed" }}';
+      },
       async runBulkTransfer() {
         const b = this.bulkOps;
         const uniqueEmails = new Map();
@@ -357,27 +369,44 @@
         b.confirmLoading = false;
         b.progress.running = false;
 
-        const details = result.items.filter(item => !item.success)
+        const failedItems = result.items.filter(item => !item.success);
+        const errorGroups = new Map();
+        failedItems.forEach(item => {
+          const text = this.transferErrorText(item.error);
+          errorGroups.set(text, (errorGroups.get(text) || 0) + 1);
+        });
+        const details = [...errorGroups.entries()]
           .slice(0, 4)
-          .map(item => item.email + ': ' + (item.error || '{{ i18n "pages.inbounds.transferRequestFailed" }}'))
-          .join(' · ');
+          .map(([text, count]) => '· ' + (count > 1 ? 'Для ' + count + ' аккаунтов: ' : '') + text);
         const complete = result.transferred === result.total && result.failed === 0 && result.skipped === 0;
         const summary = complete
           ? '{{ i18n "pages.inbounds.transferSuccess" }}'
           : result.transferred > 0 || result.skipped > 0
             ? '{{ i18n "pages.inbounds.transferPartial" }}'
             : '{{ i18n "pages.inbounds.transferFailed" }}';
-        const message = summary.replace('%COUNT%', String(result.transferred))
-          .replace('%TOTAL%', String(result.total)) + (details ? ' ' + details : '');
-        if (complete) this.$message.success(message);
-        else if (result.transferred > 0 || result.skipped > 0) this.$message.warning(message);
-        else this.$message.error(message);
+        const summaryText = summary.replace('%COUNT%', String(result.transferred))
+          .replace('%TOTAL%', String(result.total))
+          .replace('%SKIPPED%', String(result.skipped))
+          .replace('%FAILED%', String(result.failed));
+        const messageView = this.$createElement('span', { class: 'account-transfer-message' }, [
+          this.$createElement('span', { class: 'account-transfer-summary' }, summaryText),
+          ...details.map((line, index) => this.$createElement('span', { key: index }, line)),
+        ]);
+        if (complete) this.$message.success(summaryText);
+        else if (result.transferred > 0 || result.skipped > 0) this.$message.warning(messageView, 8);
+        else this.$message.error(messageView, 8);
         b.progress = { running: false, done: 0, total: 0, applied: 0, skipped: 0, etaText: '' };
+        if (result.transferred > 0) {
+          try { localStorage.setItem('vpn-ui-resellers-refresh', String(Date.now())); } catch (_) {}
+        }
 
         const retryEmails = result.items.filter(item => !item.success && !item.skipped)
           .map(item => item.email);
         this.onSelectChange(retryEmails);
         await this.getDBInbounds();
+        if (typeof this.refreshResellerBalance === 'function') {
+          await this.refreshResellerBalance();
+        }
         await this.loadOnlineState();
       },
       async runBulkOps() {
@@ -410,24 +439,42 @@
         targets = await this.bulkConfirmAffordable(base, targets);
         if (!targets || !targets.length) return;
         b.progress = { running: false, done: 0, total: 0, applied: 0, skipped: 0, etaText: '' };
-        // Batch the targets so the modal can show real per-item progress + ETA
-        // (the backend accepts an arbitrary target list, so this is honest progress,
-        // not a fake animation). One request per batch, sequential.
+        // Traffic is account-wide even though the write must visit every inbound.
+        // Keep all memberships for one email in the same request so the server can
+        // report one changed client and reserve its quota exactly once per batch.
+        let units;
+        if (this.bulkIsTrafficOp()) {
+          const grouped = {};
+          targets.forEach(target => {
+            const key = accountKeyOf(target.email);
+            if (!key) return;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(target);
+          });
+          units = Object.values(grouped);
+        } else {
+          units = targets.map(target => [target]);
+        }
+        // Batch by operation unit and keep real progress/ETA. For traffic that unit
+        // is an account; for other existing operations it remains a target.
         const BATCH = 20;
         const batches = [];
-        for (let i = 0; i < targets.length; i += BATCH) batches.push(targets.slice(i, i + BATCH));
+        for (let i = 0; i < units.length; i += BATCH) {
+          const group = units.slice(i, i + BATCH);
+          batches.push({ targets: [].concat.apply([], group), count: group.length });
+        }
         b.confirmLoading = true;
-        b.progress = { running: true, done: 0, total: targets.length, applied: 0, skipped: 0, etaText: '' };
+        b.progress = { running: true, done: 0, total: units.length, applied: 0, skipped: 0, etaText: '' };
         const start = Date.now();
         let ok = true;
         for (let i = 0; i < batches.length; i++) {
-          const payload = Object.assign({}, base, { targets: batches[i] });
+          const payload = Object.assign({}, base, { targets: batches[i].targets });
           const msg = await HttpUtil.post('/panel/api/inbounds/bulkUpdateClients', { data: JSON.stringify(payload) });
           if (!msg.success) { ok = false; break; }
           const r = msg.obj || {};
           b.progress.applied += (r.applied || 0);
           b.progress.skipped += (r.skipped || 0);
-          b.progress.done += batches[i].length;
+          b.progress.done += batches[i].count;
           const elapsed = (Date.now() - start) / 1000;
           const rate = elapsed > 0 ? b.progress.done / elapsed : 0;
           const remaining = b.progress.total - b.progress.done;
@@ -441,7 +488,10 @@
         await this.refreshResellerBalance();
         if (ok) {
           b.visible = false;
-          this.$message.success('{{ i18n "pages.inbounds.bulkDone" }} {{ i18n "pages.inbounds.bulkAffected" }}: ' + b.progress.applied + ' {{ i18n "pages.inbounds.bulkSkipped" }}: ' + b.progress.skipped);
+          const affectedLabel = this.bulkIsTrafficOp()
+            ? '{{ i18n "pages.inbounds.bulkAffectedClients" }}'
+            : '{{ i18n "pages.inbounds.bulkAffected" }}';
+          this.$message.success('{{ i18n "pages.inbounds.bulkDone" }} ' + affectedLabel + ': ' + b.progress.applied + ' {{ i18n "pages.inbounds.bulkSkipped" }}: ' + b.progress.skipped);
           this.clearSelection();
           await this.getDBInbounds();
         }
@@ -529,11 +579,41 @@
           .map(k => { const i = k.indexOf(':'); return { inboundId: Number(k.slice(0, i)), email: k.slice(i + 1) }; });
         const totalUnits = inboundIds.length + clientTargets.length;
         if (!totalUnits) return;
+        const affectedAccounts = new Map();
+        inboundIds.forEach(id => {
+          const inbound = this.dbInbounds.find(item => Number(item.id) === Number(id));
+          (this.getInboundClients(inbound) || []).forEach(client => {
+            const key = accountKeyOf(client.email);
+            if (key && !affectedAccounts.has(key)) affectedAccounts.set(key, client.email);
+          });
+        });
+        clientTargets.forEach(target => {
+          const key = accountKeyOf(target.email);
+          if (key && !affectedAccounts.has(key)) affectedAccounts.set(key, target.email);
+        });
+        // Count the memberships shown in the "Подключения" column for each
+        // unique selected account. Do not count only the union of inbound IDs:
+        // seven accounts each served on three inbounds means 21 connections.
+        let affectedConnectionCount = 0;
+        affectedAccounts.forEach((email, key) => {
+          const accountRow = Array.isArray(this.clients)
+            ? this.clients.find(row => accountKeyOf(row.email) === key)
+            : null;
+          const memberships = accountRow && typeof this.accountInbounds === 'function'
+            ? this.accountInbounds(accountRow)
+            : this.clientInbounds(email);
+          affectedConnectionCount += memberships.length;
+        });
+        // Empty selected inbounds still count as one connection each.
+        if (affectedConnectionCount === 0) affectedConnectionCount = inboundIds.length;
+        const confirmText = inboundIds.length
+          ? '{{ i18n "pages.inbounds.bulkDeleteConfirm" }}'
+          : '{{ i18n "pages.inbounds.bulkDeleteAccountsConfirm" }}';
         const okDel = await new Promise((resolve) => {
           this.$confirm({
             title: '{{ i18n "pages.inbounds.opDelete" }}',
-            content: '{{ i18n "pages.inbounds.bulkDeleteConfirm" }}'
-              .replace('%INBOUNDS%', inboundIds.length).replace('%CLIENTS%', clientTargets.length),
+            content: confirmText
+              .replace('%INBOUNDS%', affectedConnectionCount).replace('%CLIENTS%', affectedAccounts.size),
             okText: '{{ i18n "delete" }}',
             okType: 'danger',
             class: themeSwitcher.currentTheme,

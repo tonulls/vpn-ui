@@ -33,9 +33,11 @@ type ExternalSubscriptionSlot struct {
 	CountryFlagsJSON             string `json:"-" gorm:"column:country_flags_json;type:text;not null;default:'[]'"`
 	Enabled                      bool   `json:"enabled" gorm:"not null;default:1"`
 
-	CandidateDataJSON           string `json:"-" gorm:"column:candidate_data_json;type:text;not null;default:'[]'"`
-	SelectedFingerprintsJSON    string `json:"-" gorm:"column:selected_fingerprints_json;type:text;not null;default:'[]'"`
-	ActiveCandidatesJSON        string `json:"-" gorm:"column:active_candidates_json;type:text;not null;default:'[]'"`
+	CandidateDataJSON        string `json:"-" gorm:"column:candidate_data_json;type:text;not null;default:'[]'"`
+	SelectedFingerprintsJSON string `json:"-" gorm:"column:selected_fingerprints_json;type:text;not null;default:'[]'"`
+	ActiveCandidatesJSON     string `json:"-" gorm:"column:active_candidates_json;type:text;not null;default:'[]'"`
+	// ReplacementCandidatesJSON stores already-probed healthy reserve candidates.
+	// Subscription renderers may use them to backfill per-response duplicates.
 	ReplacementCandidatesJSON   string `json:"-" gorm:"column:replacement_candidates_json;type:text;not null;default:'[]'"`
 	RotationFingerprintsJSON    string `json:"-" gorm:"column:rotation_fingerprints_json;type:text;not null;default:'[]'"`
 	RotationCandidatesJSON      string `json:"-" gorm:"column:rotation_candidates_json;type:text;not null;default:'[]'"`

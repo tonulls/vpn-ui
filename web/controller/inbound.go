@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -55,8 +56,11 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	owns := requireInboundAccess()
 	ownsClient := requireClientAccess()
 	read := requirePerm(model.PermAccessInbounds)
+	// The Clients page needs this scoped read model and liveness, but client action
+	// grants must not open the separate Inbounds administration page.
+	clientRead := requireClientsAccess()
 
-	g.GET("/list", read, a.getInbounds)
+	g.GET("/list", clientRead, a.getInbounds)
 	// The reseller's own balance, for the chip the inbounds page refreshes after
 	// every operation. Gated on the read bit rather than on the role: it answers
 	// "not a reseller" for everyone else, so the page needs no branch before
@@ -118,9 +122,9 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/resetAllClientTraffics/:id", requirePerm(model.PermBulkOperation), owns, a.resetAllClientTraffics)
 	g.POST("/delDepletedClients/:id", requirePerm(model.PermDeleteClient), owns, a.delDepletedClients)
 	g.POST("/import", requirePerm(model.PermCreateInbound), a.importInbound)
-	g.POST("/onlines", read, a.onlines)
-	g.POST("/onlineMemberships", read, a.onlineMemberships)
-	g.POST("/lastOnline", read, a.lastOnline)
+	g.POST("/onlines", clientRead, a.onlines)
+	g.POST("/onlineMemberships", clientRead, a.onlineMemberships)
+	g.POST("/lastOnline", clientRead, a.lastOnline)
 	g.POST("/updateClientTraffic/:email", requirePerm(model.PermEditClient), ownsClient, a.updateClientTraffic)
 	g.POST("/:id/delClientByEmail/:email", requirePerm(model.PermDeleteClient), owns, a.delInboundClientByEmail)
 	g.GET("/:id/ovpn/:proto", read, owns, a.downloadOvpn)
@@ -1031,7 +1035,7 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 		return
 	}
 	if membershipsExplicit && len(membershipIds) == 0 && !a.callerMayLeaveAccountUnserved(c) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), errNoInboundNotYours)
+		noInboundAdminOnly(c)
 		return
 	}
 	if err := a.validateMembershipSet(membershipIds); err != nil {
@@ -1156,7 +1160,7 @@ func (a *InboundController) saveAccountClient(c *gin.Context) {
 	if !a.callerMayLeaveAccountUnserved(c) {
 		// Not only about the empty set: this route's other job is editing an account
 		// that is ALREADY on nothing, which is an account only a super admin can see.
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), errNoInboundNotYours)
+		noInboundAdminOnly(c)
 		return
 	}
 	data := &model.Inbound{}
@@ -1238,7 +1242,7 @@ func (a *InboundController) saveAccountClient(c *gin.Context) {
 // and removes the user from the running core.
 func (a *InboundController) delAccountClient(c *gin.Context) {
 	if !a.callerMayLeaveAccountUnserved(c) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), errNoInboundNotYours)
+		noInboundAdminOnly(c)
 		return
 	}
 	email := c.Param("email")
@@ -1440,20 +1444,27 @@ func (a *InboundController) updateInboundClient(c *gin.Context) {
 	// credentials and its usage row all survive it. See callerMayLeaveAccountUnserved
 	// for why not everyone may make one.
 	if membershipsExplicit && len(membershipIds) == 0 && !a.callerMayLeaveAccountUnserved(c) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), errNoInboundNotYours)
+		noInboundAdminOnly(c)
 		return
 	}
 	if err := a.validateMembershipSet(membershipIds); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	// Prices the edit and moves the balance by the delta. This also carries the
-	// ownership assertion for a reseller, which the grant check above cannot make:
-	// the inbound is shared, so holding it says nothing about who created THIS
-	// account. Inactive for an admin.
+	// Prices the edit against the reseller owner when this is their account, even
+	// for admin-initiated edits; house-owned accounts remain uncharged.
 	ticket, err := resellerService.PrepareClientUpdate(session.GetLoginUser(c), inbound, clientId)
 	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		var shortfall *service.BalanceShortfallError
+		if errors.As(err, &shortfall) {
+			message := strings.NewReplacer(
+				"%OWNER%", shortfall.OwnerName,
+				"%SHORT%", shortfall.Shortfall,
+			).Replace(I18nWeb(c, "pages.resellers.quotaInsufficient"))
+			pureJsonMsg(c, http.StatusOK, false, message)
+		} else {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		}
 		return
 	}
 
@@ -1627,14 +1638,21 @@ func (a *InboundController) bulkUpdateClients(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.notFound"), errNotOwned)
 		return
 	}
-	// Two jobs, and the scoping is the one that cannot be skipped: the targets are
-	// named by the BODY, and the check above only proves the caller reaches those
-	// inbounds, which a reseller shares with the admin who assigned them. PrepareBulk
-	// drops every target they do not own, then prices what is left and reserves it.
-	// Inactive for an admin, whose batch is neither scoped nor charged.
+	// PrepareBulk scopes reseller callers to their own accounts and reserves quota
+	// increases for reseller-owned accounts even when an admin initiated the batch.
 	ticket, err := resellerService.PrepareBulk(session.GetLoginUser(c), &req)
 	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		var shortfall *service.BalanceShortfallError
+		if errors.As(err, &shortfall) {
+			message := strings.NewReplacer(
+				"%OWNER%", shortfall.OwnerName,
+				"%SHORT%", shortfall.Shortfall,
+			).Replace(I18nWeb(c, "pages.resellers.bulkAdminInsufficient"))
+			logger.Warning("bulk traffic operation refused for insufficient reseller balance: ", err)
+			pureJsonMsg(c, http.StatusOK, false, message)
+		} else {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		}
 		return
 	}
 	// What each target has consumed, read while the rows that say so still exist:
@@ -1875,7 +1893,7 @@ func (a *InboundController) bulkClientMembership(c *gin.Context) {
 			continue
 		}
 		if len(wanted) == 0 && !a.callerMayLeaveAccountUnserved(c) {
-			skip(fmt.Sprintf("%s: %v", email, errNoInboundNotYours))
+			skip(I18nWeb(c, "pages.inbounds.noInboundAdminOnly"))
 			continue
 		}
 		if err := a.validateMembershipSet(wanted); err != nil {
@@ -3373,12 +3391,11 @@ func (a *InboundController) callerOwnsInbounds(c *gin.Context, inboundIds []int)
 	return err == nil && owns
 }
 
-// errNoInboundNotYours refuses to leave an account on no inbound at all, for a
-// caller who would then never see it again.
-var errNoInboundNotYours = fmt.Errorf(
-	"only a super admin can leave an account on no inbound: an account with no membership " +
-		"sits outside every inbound grant, so it would disappear from your own Clients list " +
-		"with no way to reach it again")
+// noInboundAdminOnly returns one short, localized explanation when a non-super-admin
+// tries to leave an account without any inbound membership.
+func noInboundAdminOnly(c *gin.Context) {
+	pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.inbounds.noInboundAdminOnly"))
+}
 
 // callerMayLeaveAccountUnserved answers whether this caller may leave an account
 // with no inbound at all.

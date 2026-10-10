@@ -7,11 +7,13 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/logretention"
 	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
@@ -42,6 +44,7 @@ type CheckClientIpJob struct {
 }
 
 var job *CheckClientIpJob
+var accessPersistentLogMu sync.Mutex
 
 // ipStaleAfterSeconds is how long an address stays listed for a client after the access
 // log stops mentioning it.
@@ -75,15 +78,31 @@ func (j *CheckClientIpJob) Run() {
 		j.processLogFile()
 	}
 
-	// Hourly only. The scrape no longer truncates the log to force a re-read (there is no
-	// ban to re-trigger), so this is purely the access log's own rotation into the
-	// persistent copy, which is what it was for whenever nothing was over its limit.
+	// Keep the active Xray access file bounded after its entries have been inspected.
+	// Oversized tails are preserved in numbered archives before copy-truncation.
+	if accessLogPath, err := xray.GetAccessLogPath(); err == nil && accessLogPath != "" && accessLogPath != "none" && previewLogPathAllowed(accessLogPath) {
+		if info, statErr := os.Stat(accessLogPath); statErr == nil {
+			if info.Size() > logretention.MaxFileBytes {
+				if _, rotateErr := logretention.RotateIfTooLarge(accessLogPath, logretention.MaxFileBytes, 5); rotateErr != nil {
+					logger.Warning("Failed to cap Xray access log:", accessLogPath, "-", rotateErr)
+				}
+			}
+			if err := logretention.TrimNumberedBackups(accessLogPath, 5, logretention.MaxFileBytes); err != nil {
+				logger.Warning("Failed to cap Xray access log backups:", accessLogPath, "-", err)
+			}
+		}
+	}
+
+	// Hourly, transfer the inspected raw access entries to the persistent 3-day history.
 	if time.Now().Unix()-j.lastClear > 3600 {
 		j.clearAccessLog()
 	}
 }
 
 func (j *CheckClientIpJob) clearAccessLog() {
+	accessPersistentLogMu.Lock()
+	defer accessPersistentLogMu.Unlock()
+
 	logAccessP, err := os.OpenFile(xray.GetAccessPersistentLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	j.checkError(err)
 	defer logAccessP.Close()

@@ -36,9 +36,9 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 	// blindly back to this route, which is what used to make gating it impossible.
 	g.GET("/", requireOverviewAccess(), a.index)
 	g.GET("/inbounds", requireAdminInboundPage(), a.inbounds)
-	// The account-centric view of the same data the Inbounds page shows, so it
-	// takes the same claim.
-	g.GET("/clients", requirePerm(model.PermAccessInbounds), a.clients)
+	// Client action grants open the account-centric page without exposing inbound
+	// administration; account rows remain scoped to accessible inbounds.
+	g.GET("/clients", requireClientsAccess(), a.clients)
 	g.GET("/settings", requirePerm(model.PermPanelSettings), a.settings)
 	g.GET("/xray", requirePerm(model.PermXraySettings), a.xraySettings)
 	g.GET("/core", requirePerm(model.PermCoreSettings), a.coreSettings)

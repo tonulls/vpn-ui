@@ -489,6 +489,8 @@ func (s *Server) startTask() {
 
 	// check client ips from log file every 10 sec
 	s.cron.AddJob("@every 10s", job.NewCheckClientIpJob())
+	// Bound external-daemon logs without requiring process restarts.
+	s.cron.AddJob("@every 10s", job.NewLogRetentionJob())
 
 	// check client ips from log file every day
 	s.cron.AddJob("@daily", job.NewClearLogsJob())
