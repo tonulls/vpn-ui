@@ -1,4 +1,4 @@
-[English](/README.md) | [فارسی](/docs/README_FA.md) | [العربية](/docs/README_AR.md) | [中文](/docs/README_ZH.md) | [Español](/docs/README_ES.md) | [Русский](/docs/README_RU.md) | [Türkçe](/docs/README_TR.md)
+[English](/docs/README_EN.md) | [فارسی](/docs/README_FA.md) | [العربية](/docs/README_AR.md) | [中文](/docs/README_ZH.md) | [Español](/docs/README_ES.md) | [Русский](/README.md) | [Türkçe](/docs/README_TR.md)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Sir-MmD/vpn-ui/refs/heads/main/media/logo.png" alt="VPN-UI Logo" width="260">
@@ -70,7 +70,7 @@
 ## نصب پنل
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/main/deploy.sh | sudo bash
+curl -Ls https://raw.githubusercontent.com/tonulls/vpn-ui/refs/heads/tonulls/deploy.sh | sudo bash
 ```
 
 ## حذف پنل
@@ -199,7 +199,7 @@ flowchart TB
 ## کامپایل از سورس
 
 ```bash
-git clone https://github.com/tonulls/vpn-ui.git && cd vpn-ui
+git clone --branch tonulls https://github.com/tonulls/vpn-ui.git && cd vpn-ui
 ./build.sh
 ```
 
